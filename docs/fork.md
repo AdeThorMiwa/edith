@@ -1,6 +1,6 @@
 # Working in this fork
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** new file (branches, upstream sync routine, fork rules)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** new file (branches, upstream sync routine, Rust version, fork rules, speech defaults, build notes)
 
 This checkout is `AdeThorMiwa/filmcraft`, a fork of [`storytold/filmcraft`](https://github.com/storytold/filmcraft). The fork adds a creator layer on top of the editor (assistant, sourcing, planning, analysis, voices, look; see [upcoming-features.md](upcoming-features.md)) and keeps merging upstream's work. This page is how the two stay compatible. [AGENTS.md](../AGENTS.md) and [contributing.md](contributing.md) still apply in full.
 
@@ -35,16 +35,42 @@ cargo xtask ci                      # the gate; fix whatever the merge broke her
 - **`--ff-only` refuses** only if a commit landed on `main` by mistake. Move it to `studio` first (`git switch studio && git cherry-pick <sha>`), then make `main` match upstream again.
 - **A red gate after a clean merge** is upstream's or an interaction with our code. Run the failing test on `main` first; if it fails there too, it is upstream's.
 
+## Rust version
+
+Use current stable (1.99.0 on 2026-10-12; the repo needs 1.95 or newer). Upstream's GitHub checks do not run the Rust gate (their `lint / lint` check is the packaging lint), so `cargo xtask ci` runs only on contributors' machines, and the lint set moves with each Rust release. On 1.96 the gate fails on three recent upstream lines (`nonminimal_bool`, which Clippy 1.97 moved out of its default lints). Run `rustup update stable` before blaming a red gate on a change.
+
 ## Fork rules
 
 The short version of [section 4.6 of the roadmap](upcoming-features.md#46-fork-hygiene).
 
 - New code goes in new crates and new files.
 - Touch an upstream-owned file in at most one line per feature, and only at these hook points: `LAYERS` and `SAME_LAYER` in `xtask/src/main.rs`, `PanelKind` in `crates/ui-egui/src/dock.rs`, command registration in `crates/engine/src/commands.rs`, one extension point on `Project`, the default features in `apps/filmcraft/Cargo.toml` and `apps/filmcraft-cli/Cargo.toml`, and one pointer line in `CLAUDE.md`.
+- Exception: a never-crash or lint fix that the fork's defaults surface in feature-gated upstream code. Upstream's own gate never compiles Whisper or Kokoro code (both are off by default there), so it can hide violations of its own rules. Keep the fix minimal, add a test, list it in the table below, and offer it upstream so it drops out of the fork after a sync.
 - Do not refactor `crates/automation` (upstream's MCP server). The assistant mirrors its tool names and shapes in the engine layer instead.
 - Do not bump `SCHEMA_VERSION` per feature. It was 13 on 2026-10-11 and 15 on 2026-10-12 (`MIGRATIONS.len() + 1` in `crates/format/src/lib.rs`), so a v16 of ours and a v16 of theirs would collide. Custom project data goes in one `extensions` map (decision D1 in the roadmap).
 - Command namespaces for fork commands: `assistant.*`, `net.*`, `secrets.*`, `connections.*`, `provenance.*`, `hub.*`, `planner.*`, `analysis.*`, `coach.*`, `reference.*`, `soundplan.*`, `proposal.*`, `voicelab.*`, `youtube.*`. Narration additions extend `tts.*`.
 - Commits: one task id each (`F01.1: …`), only green states (`cargo xtask ci`), each ending with the `Co-Authored-By` trailer.
+
+## Speech and natural voices (on by default)
+
+`cargo run --release -p filmcraft` builds with Whisper speech-to-text and the natural voices (Kokoro-82M). The code is in the build; the model files are not. They download when asked:
+
+| What | Command | Size | Lands in |
+|---|---|---|---|
+| Whisper `whisper-base` (the default; `whisper-tiny` and `whisper-small` are listed too) | `transcript.downloadModel` | about 293 MB | `<data dir>/models` |
+| Natural voices (Kokoro-82M, 9 US English voices) | `tts.downloadVoices` | 336 MB | `<data dir>/models` |
+
+`<data dir>` is `~/Library/Application Support/FilmCraft` on macOS (`FILMCRAFT_DATA_DIR` overrides it). Models never go into the repo or a project file.
+
+- `transcript.models` and `tts.voices` report whether this build has each feature (`available`) and whether the files are on disk (`installed`).
+- Upstream's lean build is `--no-default-features`.
+- Tests never download. Tests that need weights run only when `FILMCRAFT_MODELS_DIR` / `FILMCRAFT_KOKORO_DIR` point at them, and skip otherwise.
+- Candle makes the first build longer (the app took 3 min 31 s on an Apple-silicon Mac on 2026-10-12, with 378 upstream commits to compile as well). Later builds reuse it.
+- The web app and `cargo xtask wasm` are unaffected: the wasm check selects only L0 to L4 and web crates, which do not see the app's defaults.
+
+## Building the app and the CLI
+
+Alternating `cargo build -p filmcraft` and `cargo build -p filmcraft-cli` rebuilds the engine and about a dozen other crates each time (the CLI after the app took 2 min 51 s). The defaults are not the cause: 29 shared crates (`log`, `indexmap`, `chrono`, …) resolve different features for the two binaries, and Cargo keys the build on that. Build the one you need and run its binary from `target/release/`, rather than switching back and forth.
 
 ## Upstream-owned files this fork changes
 
@@ -52,4 +78,6 @@ Keep this table current. It is the whole list of places a merge can conflict.
 
 | File | Change | Task |
 |---|---|---|
-| none yet | | |
+| `apps/filmcraft/Cargo.toml` | `default = ["whisper", "neural-voices"]` (one line, with a trailing comment) | F01.1 |
+| `apps/filmcraft-cli/Cargo.toml` | the same `default`, plus a `neural-voices` feature that forwards to the engine (3 lines), so MCP and CLI clients can transcribe and narrate | F01.1 |
+| `crates/speech/src/whisper/tokenizer.rs` | `expect()` replaced by `filter_map`, plus a test of the byte table: a lint fix the new defaults surface (see the exception under Fork rules) | F01.1 |
