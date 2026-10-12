@@ -39,7 +39,8 @@ fn unicode_to_byte() -> HashMap<char, u8> {
             n += 1;
         }
     }
-    bs.iter().zip(&cs).map(|(&b, &c)| (char::from_u32(c).expect("valid"), b as u8)).collect()
+    // Every `c` is at most U+01FF, so `from_u32` never fails and no byte is dropped (the test pins 256 entries).
+    bs.iter().zip(&cs).filter_map(|(&b, &c)| Some((char::from_u32(c)?, b as u8))).collect()
 }
 
 impl Tokenizer {
@@ -163,4 +164,23 @@ pub fn group_words(tok: &Tokenizer, ids: &[u32]) -> Vec<(String, std::ops::Range
         groups.push((pre, start..ids.len()));
     }
     groups.into_iter().map(|(b, r)| (String::from_utf8_lossy(&b).trim().to_string(), r)).filter(|(t, _)| !t.is_empty()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_table_has_one_character_per_byte() {
+        let t = unicode_to_byte();
+        assert_eq!(t.len(), 256);
+        let mut seen = [false; 256];
+        for &b in t.values() {
+            seen[b as usize] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "every byte value has a stand-in character");
+        // GPT-2: printable ASCII maps to itself, a space is U+0120 ("Ġ").
+        assert_eq!(t.get(&'!'), Some(&b'!'));
+        assert_eq!(t.get(&'\u{120}'), Some(&b' '));
+    }
 }
