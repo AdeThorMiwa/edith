@@ -1,6 +1,6 @@
 # Upcoming features
 
-> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-12 · **Change:** new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
+> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-13 · **Change:** F01 done (speech on by default, `upstream` remote, fork rules in fork.md, `CLAUDE.md` pointer); earlier: new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
 
 The plan for what this fork adds on top of FilmCraft, in the order we intend to build it. It is the working agreement between the **architect** (product design and architecture decisions) and the **builder** (agents, one feature at a time). Upstream's own plan stays in [roadmap.md](roadmap.md) and [gaps.md](gaps.md); this file does not replace it.
 
@@ -151,8 +151,8 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 
 ### 4.6 Fork hygiene
 
-- `origin` is `AdeThorMiwa/filmcraft`. There is no `upstream` remote yet; F01.2 adds `storytold/filmcraft` and documents the sync routine.
-- Custom code goes in new crates and new files. The small upstream-owned hook points are: `LAYERS` and `SAME_LAYER` in `xtask/src/main.rs`, `PanelKind` in `crates/ui-egui/src/dock.rs`, command registration in `crates/engine/src/commands.rs`, one extension point on `Project`, and the default features in `apps/filmcraft/Cargo.toml`.
+- `origin` is `AdeThorMiwa/filmcraft` and `upstream` is `storytold/filmcraft`. `main` mirrors upstream and never takes our commits; all work lands on `studio`. The sync routine, the Rust version to use and the list of upstream-owned files we changed are in [fork.md](fork.md).
+- Custom code goes in new crates and new files. The small upstream-owned hook points are: `LAYERS` and `SAME_LAYER` in `xtask/src/main.rs`, `PanelKind` in `crates/ui-egui/src/dock.rs`, command registration in `crates/engine/src/commands.rs`, one extension point on `Project`, and the default features in `apps/filmcraft/Cargo.toml` and `apps/filmcraft-cli/Cargo.toml`.
 - Do not refactor `crates/automation` (upstream's MCP server). The assistant mirrors its tool names and shapes in the engine layer instead.
 - Avoid bumping `SCHEMA_VERSION` per feature. Upstream bumps it too: it was 13 when this file was written and is 15 in 0.7.2 (`MIGRATIONS.len() + 1` in `crates/format/src/lib.rs`), so two different v16s would collide (D1).
 - Command namespaces: `assistant.*`, `net.*`, `secrets.*`, `connections.*`, `provenance.*`, `hub.*`, `planner.*`, `analysis.*`, `coach.*`, `reference.*`, `soundplan.*`, `proposal.*`, `voicelab.*`, `youtube.*`; narration additions extend `tts.*`.
@@ -172,20 +172,22 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 
 ### Phase 0: groundwork
 
-### F01 Fork baseline · Must · S · ⬜
+### F01 Fork baseline · Must · S · ✅
 
 **Needs:** none · **Unlocks:** everything.
 
 **What it does.** The fork builds with speech-to-text and natural voices on by default, and has the conventions the rest of this file relies on.
 
 **How it works.**
-- F01.1 Default features `whisper` and `neural-voices` on `apps/filmcraft` (the CLI only has `whisper`). Models are downloaded on request through the existing `transcript.downloadModel` and `tts.downloadVoices`; a first-run prompt is optional.
-- F01.2 Add the `upstream` remote (`storytold/filmcraft`) and write the sync routine down: fetch, merge, `cargo xtask ci`.
-- F01.3 Put the conventions of §4.6 where agents read them. If the architect agrees (D6), point `CLAUDE.md` at this file.
+- F01.1 Default features `whisper` and `neural-voices` on `apps/filmcraft` and `apps/filmcraft-cli` (so MCP and CLI clients can transcribe and narrate too). Models are downloaded on request through the existing `transcript.downloadModel` and `tts.downloadVoices`; a first-run prompt is still optional and not built. Turning the features on made the gate compile Whisper code that upstream never lints, which surfaced one `expect()` in `crates/speech/src/whisper/tokenizer.rs`; it is fixed there, with a test (the exception in [fork.md](fork.md)).
+- F01.2 The `upstream` remote (`storytold/filmcraft`), the `studio` branch (`main` stays a mirror) and the sync routine are in [fork.md](fork.md): fetch, fast-forward `main`, merge into `studio`, `cargo xtask ci`.
+- F01.3 `CLAUDE.md` now starts with one line pointing at fork.md and this file (D6, decided yes).
 
 **Done when.** A fresh clone runs `cargo run --release -p filmcraft` with Transcribe and natural voices available after the model download; `cargo xtask ci` is green; the sync routine is documented.
 
-**Notes.** Defaults add candle to every build, so compiles get longer. The web app is a separate crate and is unaffected.
+**Checked 2026-10-13.** `cargo xtask ci` green on Rust 1.99.0 (3,265 tests passed, 0 failed, 44 ignored). With the headless CLI, `whisper-base` (293 MB) and the natural voices (336 MB) downloaded; the voice `kokoro-heart` said "The lighthouse keeper had not slept in three days, and the sea was getting louder." (5.05 s); Whisper heard it back with 2 word errors of 15 ("sea was" came out as "seawaws") in 1.8 s. The app was checked on a build without the models: features on, `transcript.downloadModel` and `tts.downloadVoices` enabled, natural voices reported available.
+
+**Notes.** Defaults add candle to every build, so compiles get longer: a cold full `cargo xtask ci` took 106 minutes on the author's MacBook, and the app alone builds in about 3.5 minutes warm. Use current stable (checked on 1.99.0; see [fork.md](fork.md)). Building the CLI after the app still recompiles most of the engine, so build the one you need. `whisper-base` is modest on run-together speech; `whisper-small` (967 MB) is the next step up if accuracy matters. The web app is a separate crate and is unaffected.
 
 ### F02 Network, secrets and OAuth foundation · Must · M · ⬜
 
@@ -619,7 +621,7 @@ Each has a recommendation, so work can start before you answer; a decision here 
 | D3 | Default free model for the assistant: Gemini free tier, OpenRouter free models, or local | Decide by testing the mentor prompts on each before F03.2 ships. |
 | D4 | Format Pack file format and location | TOML for hand-editing plus a JSON Schema; a folder in the data directory; an explicit version field. |
 | D5 | Keychain crate (license, maintenance, macOS behavior) | A spike at the start of F02. |
-| D6 | Point `CLAUDE.md` at this file (one line in an upstream-owned file) | Yes, so every agent session starts from it. |
+| D6 | Point `CLAUDE.md` at this file (one line in an upstream-owned file) | Yes, so every agent session starts from it. **Decided 2026-10-12: yes (done in F01.3).** |
 | D7 | Crate naming | Keep the `filmcraft-` prefix for workspace consistency. |
 | D8 | Default profile for new assistant threads | Read-only for a first thread; Propose once edit tools exist. |
 | D9 | Reference analysis stance and UI wording | Files you supply only; no downloaders; say so in the UI. |

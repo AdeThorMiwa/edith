@@ -1,5 +1,7 @@
 # FilmCraft — instructions for agents
 
+> **This checkout is a fork.** Read [`docs/fork.md`](docs/fork.md) (branches, sync routine, fork rules) and take the next feature from [`docs/upcoming-features.md`](docs/upcoming-features.md); [`AGENTS.md`](AGENTS.md) still overrides everything.
+
 FilmCraft is a clean-room, open-source, pure-Rust non-linear video editor targeting Adobe Premiere Pro parity (and beyond). Native on macOS, Windows, Linux; web via WASM. Sibling of `../photocraft` (Photoshop), `../pdfcraft` (Acrobat) and `../vectorcraft` (Illustrator; formerly DrawCraft), with the same conventions.
 
 ## Start every session here
