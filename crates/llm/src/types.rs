@@ -242,6 +242,11 @@ pub struct Price {
 }
 
 impl Price {
+    /// Costs nothing to use (both prices are zero).
+    pub fn is_free(&self) -> bool {
+        self.input_per_mtok == 0.0 && self.output_per_mtok == 0.0
+    }
+
     /// Estimated cost of `usage` in US dollars. Cache writes are counted at the input price.
     pub fn estimate(&self, usage: &Usage) -> f64 {
         let m = 1_000_000.0;

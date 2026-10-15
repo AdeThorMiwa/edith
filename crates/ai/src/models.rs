@@ -32,7 +32,7 @@ pub fn badges(m: &ModelInfo) -> Vec<String> {
         out.push(format!("{} context", tokens_label(c.context_tokens)));
     }
     if let Some(p) = &m.price {
-        out.push(price_label(p));
+        out.push(if p.is_free() { "free".to_string() } else { price_label(p) });
     }
     out
 }
@@ -77,6 +77,9 @@ mod tests {
         // a model lacking things is still shown, with fewer badges
         let plain = badges(&model("old", false, None));
         assert!(!plain.contains(&"thinking".to_string()) && plain.contains(&"tools".to_string()) && plain.len() == 4);
+        // a model that costs nothing says so instead of "$0.00"
+        let free = Price { input_per_mtok: 0.0, output_per_mtok: 0.0, cache_read_per_mtok: None, source: "t".into() };
+        assert_eq!(badges(&model("f", false, Some(free))).last().map(String::as_str), Some("free"));
     }
 
     #[test]

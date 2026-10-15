@@ -9,6 +9,8 @@
 //! - [`ChatModel`]: the trait every provider implements.
 //! - [`anthropic`]: the Anthropic Messages API. The wire format, the stream assembler and the model
 //!   list parser are pure code; the HTTPS client is behind feature `net`.
+//! - [`openai`]: the OpenAI-style chat completions API (OpenRouter, OpenAI, Ollama, LM Studio), built
+//!   the same way.
 //! - [`scripted`]: a model that replays recorded streams.
 //!
 //! **Opaque parts.** Some vendors need blocks echoed back unchanged (Anthropic's thinking blocks).
@@ -22,6 +24,7 @@
 
 pub mod anthropic;
 mod error;
+pub mod openai;
 pub mod scripted;
 pub mod types;
 

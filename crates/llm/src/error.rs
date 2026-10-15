@@ -65,6 +65,7 @@ pub(crate) fn error_for(status: u16, kind: &str, message: &str) -> LlmError {
         ("rate_limit_error", _) | (_, 429) => LlmError::RateLimited,
         ("authentication_error" | "permission_error", _) | (_, 401 | 403) => LlmError::Auth(format!("the provider refused the key: {message}")),
         ("invalid_request_error", _) | (_, 400) => LlmError::BadRequest(message),
+        (_, 402) => LlmError::Api { status, message: format!("the account is out of credits: {message}") },
         _ => LlmError::Api { status, message },
     }
 }
@@ -74,7 +75,8 @@ pub(crate) fn error_for(status: u16, kind: &str, message: &str) -> LlmError {
 pub(crate) fn error_from_http(status: u16, body: &[u8]) -> LlmError {
     let v: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
     let e = v.get("error").unwrap_or(&serde_json::Value::Null);
-    let kind = e.get("type").and_then(serde_json::Value::as_str).unwrap_or("");
+    // Anthropic puts a word in `type`; OpenAI-style servers use `code` (a number or a word) or `type`.
+    let kind = e.get("type").and_then(serde_json::Value::as_str).or_else(|| e.get("code").and_then(serde_json::Value::as_str)).unwrap_or("");
     let message = e.get("message").and_then(serde_json::Value::as_str).unwrap_or("");
     error_for(status, kind, message)
 }
@@ -103,6 +105,14 @@ mod tests {
         let body = br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
         assert!(matches!(error_from_http(401, body), LlmError::Auth(_)));
         assert!(matches!(error_from_http(502, b"<html>bad gateway</html>"), LlmError::Api { status: 502, .. }));
+        // OpenAI-style bodies: a numeric `code`, or a word, and no `type`
+        let credits = error_from_http(402, br#"{"error":{"code":402,"message":"Insufficient credits"}}"#);
+        assert!(
+            matches!(&credits, LlmError::Api { status: 402, message } if message.contains("out of credits") && message.contains("Insufficient")),
+            "{credits:?}"
+        );
+        assert!(matches!(error_from_http(401, br#"{"error":{"code":401,"message":"No auth credentials found"}}"#), LlmError::Auth(_)));
+        assert_eq!(error_from_http(429, br#"{"error":{"code":"rate_limit_exceeded","message":"slow"}}"#), LlmError::RateLimited);
         assert!(matches!(error_from_http(429, b""), LlmError::RateLimited));
     }
 
