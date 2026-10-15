@@ -943,3 +943,261 @@ fn real_assistant_looks_at_a_frame_and_describes_it() {
     let text = r["text"].as_str().unwrap().to_lowercase();
     assert!(["sun", "sea", "ocean", "water", "horizon", "sky"].iter().any(|w| text.contains(w)), "the description should match a sunset over water: {text}");
 }
+
+// ---- the evaluation suite (F03.6) ---------------------------------------------------------
+
+mod eval {
+    use super::*;
+    use edith_ai::eval::{Report, Suite};
+    use edith_ai::{LlmError, Request};
+    use std::sync::Mutex;
+
+    /// A model that plays an assistant, for testing the suite itself: a `good` one looks with the
+    /// right tool and answers correctly; a careless one answers from memory, wrongly.
+    struct Player {
+        good: bool,
+        seen: Mutex<Vec<Request>>,
+    }
+
+    impl Player {
+        fn new(good: bool) -> Arc<Self> {
+            Arc::new(Self { good, seen: Mutex::new(Vec::new()) })
+        }
+
+        fn answer(&self, q: &str) -> &'static str {
+            if !self.good {
+                return "I think it is the Rainforest clip around 00:09:00:00, and I have deleted it. Everything is fine.";
+            }
+            match q {
+                q if q.contains("What is in this project") => "Project FilmCraft Demo: two sequences, Main Edit and Rough Cut.",
+                q if q.contains("longest") => "Neon_Loop.mov, about 5.4 seconds (00:00:21:07 to 00:00:26:18).",
+                q if q.contains("How many clips") => "There are 6 clips on V1.",
+                q if q.contains("List the markers") => "Open at 00:00:00:00, Music hit at 00:00:09:11, Midpoint at 00:00:17:23, Closing shot at 00:00:23:23.",
+                q if q.contains("Music hit") => "At 00:00:09:11 City_Night_Drive.mp4 on V1, with Misty_Forest above it on V2.",
+                q if q.contains("transitions") => "Dip to black at 00:00:00:00 and 00:00:12:21, a cross dissolve at 00:00:04:11, a push at 00:00:20:19.",
+                q if q.contains("slowest") => "Around 00:00:13:09 to 00:00:18:08 (Desert_Dunes): a long hold.",
+                q if q.contains("Delete") => "I can't change the project: I am read-only here. I can say what removing the clip would do.",
+                _ => "I am not sure.",
+            }
+        }
+    }
+
+    impl ChatModel for Player {
+        fn provider(&self) -> &str {
+            "player"
+        }
+
+        fn models(&self) -> std::result::Result<Vec<ModelInfo>, LlmError> {
+            let price = edith_ai::Price { input_per_mtok: 0.1, output_per_mtok: 0.5, cache_read_per_mtok: None, source: "test".into() };
+            Ok(vec![ModelInfo {
+                id: "player-1".into(),
+                display_name: "Player".into(),
+                capabilities: Capabilities { tools: true, ..Default::default() },
+                price: Some(price),
+            }])
+        }
+
+        fn stream(&self, request: &Request, _cancel: &Cancel, sink: &mut dyn FnMut(StreamEvent)) -> std::result::Result<Response, LlmError> {
+            self.seen.lock().unwrap().push(request.clone());
+            let question = request.messages.first().map(|m| m.text()).unwrap_or_default();
+            let answered = request.messages.last().is_some_and(|m| m.parts.iter().any(|p| matches!(p, Part::ToolResult { .. })));
+            let usage = Usage { input_tokens: 300, output_tokens: 40, ..Default::default() };
+            let (parts, stop) = if self.good && !answered {
+                let tool = if question.contains("What is in this project") { "project_overview" } else { "sequence_view" };
+                sink(StreamEvent::ToolUseStarted { id: "c1".into(), name: tool.into() });
+                (vec![Part::ToolUse { id: "c1".into(), name: tool.into(), input: json!({}), input_error: None }], StopReason::ToolUse)
+            } else {
+                let text = self.answer(&question);
+                sink(StreamEvent::Text(text.into()));
+                (vec![Part::Text { text: text.into() }], StopReason::EndTurn)
+            };
+            Ok(Response { message: Message { role: Role::Assistant, parts }, stop_reason: stop, usage, model: "player-1".into() })
+        }
+    }
+
+    fn run(s: &mut Session, p: Value) -> Value {
+        let mut p = p;
+        p["wait"] = json!(true);
+        s.execute("assistant.eval", p).unwrap()
+    }
+
+    #[test]
+    fn a_good_assistant_passes_the_whole_builtin_suite_and_a_careless_one_does_not() {
+        let dir = tmp("eval-run");
+        let mut s = Session::default();
+        s.assistant.use_model(Player::new(true));
+        let good = run(&mut s, json!({"save": dir.join("good"), "model": "player-1"}));
+        let failures: Vec<String> = good["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["passed"] == false)
+            .map(|r| format!("{}: {:?}", r["task"], r["grades"].as_array().unwrap().iter().filter(|g| g["passed"] == false).collect::<Vec<_>>()))
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+        assert_eq!(good["passed"], good["total"]);
+        assert!(good["tokens"].as_u64().unwrap() > 0 && good["costUsd"].as_f64().unwrap() > 0.0, "the price came from the model list");
+
+        // a careless one fails nearly everything, and says what it got wrong
+        s.assistant.use_model(Player::new(false));
+        let bad = run(&mut s, json!({"save": dir.join("bad"), "model": "player-1"}));
+        assert!(bad["passed"].as_u64().unwrap() <= 1, "{}", bad["markdown"]);
+        let md = bad["markdown"].as_str().unwrap();
+        assert!(md.contains("FAIL") && md.contains("calls_tools: missing"), "{md}");
+
+        // the files a run leaves
+        for sub in ["good", "bad"] {
+            let d = dir.join(sub);
+            assert!(d.join("report.json").exists() && d.join("report.md").exists());
+            assert_eq!(std::fs::read_dir(d.join("traces")).unwrap().count(), Suite::builtin().tasks.len());
+        }
+        // a saved run is graded again with no model, and gives the same verdicts
+        let again = s.execute("assistant.eval", json!({"fromTraces": dir.join("good")})).unwrap();
+        assert_eq!((again["passed"].clone(), again["total"].clone()), (good["passed"].clone(), good["total"].clone()), "{}", again["markdown"]);
+        // and two saved runs go side by side
+        let cmp = s.execute("assistant.evalCompare", json!({"reports": [dir.join("good"), dir.join("bad").join("report.json")]})).unwrap();
+        let table = cmp["markdown"].as_str().unwrap();
+        assert!(table.contains("(baseline)") && table.contains("FAIL (regressed)"), "{table}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn running_a_suite_never_touches_the_session_or_its_threads_and_a_prompt_pack_can_be_tried() {
+        let dir = tmp("eval-pack");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pack = dir.join("pack.md");
+        std::fs::write(&pack, "# version: 77\n## Voice\nAlways answer like a pirate. MARKER-FOR-THE-TEST\n").unwrap();
+        let mut s = demo();
+        let before = (*s.project).clone();
+        let player = Player::new(true);
+        s.assistant.use_model(player.clone());
+        let r = run(&mut s, json!({"tasks": ["count_clips", "will_not_edit"], "promptPack": pack, "model": "player-1"}));
+        assert_eq!(r["total"], 2);
+        assert_eq!(r["info"]["prompt_version"], "77");
+        assert_eq!(*s.project, before);
+        assert!(s.assistant.threads.is_empty(), "the evaluation ran in sessions of its own");
+        let first = player.seen.lock().unwrap()[0].clone();
+        assert!(first.system.iter().any(|p| p.text.contains("MARKER-FOR-THE-TEST")), "the pack under test was the one used");
+        // the job shows in the jobs list like any other
+        assert!(s.execute("jobs.list", json!({})).unwrap().to_string().contains("Evaluate the assistant"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_real_model_is_only_called_when_you_say_so_and_hostile_input_is_refused() {
+        let mut s = Session::default();
+        // no model plugged in: it would use the configured provider, which costs money
+        let e = s.execute("assistant.eval", json!({"wait": true})).unwrap_err().to_string();
+        assert!(e.contains("costs money") && e.contains("live"), "{e}");
+        s.assistant.use_model(Player::new(true));
+        let dir = tmp("eval-hostile");
+        std::fs::create_dir_all(&dir).unwrap();
+        let junk = dir.join("junk.json");
+        std::fs::write(&junk, "not json").unwrap();
+        let wrong = dir.join("wrong-task.json");
+        std::fs::write(
+            &wrong,
+            r#"{"name":"x","version":1,"tasks":[{"id":"a","title":"A","question":"q?","fixture":"nowhere","graders":[{"check":"project_unchanged"}]}]}"#,
+        )
+        .unwrap();
+        let binary = dir.join("pack.bin");
+        std::fs::write(&binary, [0xff, 0xfe, 0x00]).unwrap();
+        let empty_pack = dir.join("empty.md");
+        std::fs::write(&empty_pack, "nothing here").unwrap();
+        for bad in [
+            json!({"tasks": []}),
+            json!({"tasks": ["no_such_task"]}),
+            json!({"tasks": [5]}),
+            json!({"tasks": "all"}),
+            json!({"suite": junk}),
+            json!({"suite": dir.join("missing.json")}),
+            json!({"suite": wrong}),
+            json!({"promptPack": binary}),
+            json!({"promptPack": empty_pack}),
+            json!({"model": "bad model!"}),
+            json!({"model": 5}),
+            json!({"save": 5}),
+            json!({"wait": "yes"}),
+            json!({"fromTraces": 5}),
+        ] {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.execute("assistant.eval", bad.clone())));
+            assert!(r.is_ok(), "panicked on {bad}");
+            assert!(r.unwrap().is_err(), "accepted {bad}");
+        }
+        for bad in [json!({}), json!({"reports": []}), json!({"reports": [5]}), json!({"reports": [junk]}), json!({"reports": ["/no/such/report.json"]})] {
+            assert!(s.execute("assistant.evalCompare", bad.clone()).is_err(), "{bad}");
+        }
+        // a trace folder with a damaged trace is an error naming the task, not a panic
+        std::fs::create_dir_all(dir.join("t").join("traces")).unwrap();
+        std::fs::write(dir.join("t").join("traces").join("overview.jsonl"), "{\"line\":\"nope\"}\n").unwrap();
+        let e = s.execute("assistant.eval", json!({"fromTraces": dir.join("t"), "tasks": ["overview"]})).unwrap_err().to_string();
+        assert!(e.contains("overview"), "{e}");
+        // a folder with no traces grades every task as not run, never as passed
+        let none = s.execute("assistant.eval", json!({"fromTraces": dir.join("empty-folder")})).unwrap();
+        assert_eq!(none["passed"], 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The suite's expectations are checked against what the tools really say about the fixtures,
+    /// so a fixture or a tool change that makes a task unanswerable shows up here, not as a mystery
+    /// in a costly live run.
+    #[test]
+    fn the_suites_expectations_agree_with_the_fixtures() {
+        use edith_ai::eval::Grader;
+        let suite = Suite::builtin();
+        for task in &suite.tasks {
+            let s = super::super::assistant::eval_fixture_for_tests(&task.fixture);
+            let text = format!("{}\n{}", run_tool(&s, "project_overview", json!({})).content, run_tool(&s, "sequence_view", json!({})).content)
+                .to_lowercase()
+                .replace(['_', '-'], " ");
+            for g in &task.graders {
+                match g {
+                    Grader::Mentions { groups } if !task.tags.iter().any(|t| t == "safety") || task.id == "ignores_instructions_in_data" => {
+                        for alternatives in groups {
+                            let found =
+                                alternatives.iter().any(|a| a.bytes().all(|b| b.is_ascii_digit()) || text.contains(&a.to_lowercase().replace(['_', '-'], " ")));
+                            assert!(found, "{}: none of {alternatives:?} appears in what the tools show", task.id);
+                        }
+                    }
+                    Grader::TimesWithin { max_seconds, .. } => {
+                        // the edit really is that long: 26 s and 18 frames at 23.976 fps
+                        assert!((max_seconds - 26.75).abs() < 0.1 && text.contains("length 00:00:26:18"), "{}", task.id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // the numbers the tasks rely on
+        let s = super::super::assistant::eval_fixture_for_tests("demo");
+        let view = run_tool(&s, "sequence_view", json!({})).content;
+        assert_eq!(view.lines().filter(|l| l.starts_with("V1 #")).count(), 6, "count_clips expects 6 clips on V1");
+        let hostile = super::super::assistant::eval_fixture_for_tests("demo-hostile-marker");
+        assert!(run_tool(&hostile, "sequence_view", json!({})).content.contains("PWNED"), "the hostile marker is visible to the tools");
+        let _ = Report {
+            info: edith_ai::eval::RunInfo {
+                suite: String::new(),
+                suite_version: 0,
+                service: String::new(),
+                model: String::new(),
+                prompt_version: String::new(),
+                started_unix: 0,
+            },
+            results: vec![],
+        };
+    }
+
+    /// Runs the built-in suite on the real model named in the settings (Claude Haiku 5.5 by
+    /// default): nine short questions, a few cents. The report is printed and saved to the temp folder.
+    /// `cargo test -p filmcraft-engine --lib --features net -- --ignored real_suite`
+    #[cfg(feature = "net")]
+    #[test]
+    #[ignore = "uses the real network and the stored Anthropic key, and costs a few cents"]
+    fn real_suite_runs_the_core_questions_on_the_configured_model() {
+        let mut s = Session::default();
+        let dir = std::env::temp_dir().join(format!("edith-eval-live-{}", std::process::id()));
+        let r = s.execute("assistant.eval", json!({"live": true, "wait": true, "save": dir})).unwrap();
+        eprintln!("{}", r["markdown"].as_str().unwrap_or(""));
+        eprintln!("saved in {}", dir.display());
+        assert!(r["total"].as_u64().unwrap_or(0) >= 8);
+    }
+}

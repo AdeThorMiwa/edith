@@ -22,6 +22,14 @@
 //! The assistant is read-only: its tools only look at the project (`assistant_tools`). Nothing here
 //! stores or returns a provider key; the provider reads it from the keychain per request.
 
+pub mod eval;
+
+/// A fixture session, for tests that check the suite against what the tools say.
+#[cfg(test)]
+pub(crate) fn eval_fixture_for_tests(name: &str) -> Session {
+    eval::fixture_for_tests(name)
+}
+
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -138,6 +146,8 @@ pub struct AssistantHub {
     /// A note about saved conversations that could not be restored.
     pub restore_note: Option<String>,
     model_override: Option<Arc<dyn ChatModel>>,
+    /// A prompt pack to use instead of the built-in one (the evaluation suite compares packs).
+    pack_override: Option<edith_ai::PromptPack>,
     models: Arc<Mutex<ModelCache>>,
 }
 
@@ -193,6 +203,7 @@ impl Default for AssistantHub {
             settings_note: None,
             restore_note: None,
             model_override: None,
+            pack_override: None,
             models: Arc::new(Mutex::new(ModelCache::default())),
         }
     }
@@ -214,6 +225,16 @@ impl AssistantHub {
     /// Uses `model` instead of the provider named in the settings. For tests and tools.
     pub fn use_model(&mut self, model: Arc<dyn ChatModel>) {
         self.model_override = Some(model);
+    }
+
+    /// Uses `pack` instead of the built-in prompt pack. For the evaluation suite and tools.
+    pub fn use_prompt_pack(&mut self, pack: edith_ai::PromptPack) {
+        self.pack_override = Some(pack);
+    }
+
+    /// The prompt pack in use.
+    pub fn pack(&self) -> edith_ai::PromptPack {
+        self.pack_override.clone().unwrap_or_else(edith_ai::PromptPack::builtin)
     }
 
     fn slot(&self, id: u64) -> Option<&ThreadSlot> {
@@ -528,7 +549,7 @@ fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
     let id = s.assistant.next_id;
     s.assistant.next_id += 1;
     let meta = TraceMeta {
-        prompt_version: edith_ai::PromptPack::builtin().version,
+        prompt_version: s.assistant.pack().version,
         model: s.assistant.settings.model.clone(),
         profile: Profile::ReadOnly,
         started_unix: crate::autosave::unix_now().max(0) as u64,
@@ -634,7 +655,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     let can_see = s.model_info().is_none_or(|i| i.capabilities.images);
     let ctx = context_blocks(s, p, cmd, can_see)?;
     // A slash command is expanded now, before any thread exists, so a mistyped one leaves nothing behind.
-    let ask = match edith_ai::PromptPack::builtin().expand(text) {
+    let ask = match s.assistant.pack().expand(text) {
         Ok(Some(expanded)) => expanded,
         Ok(None) => text.to_string(),
         Err(e) => return Err(bad(cmd, e)),
@@ -656,7 +677,9 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         specs: defs.iter().filter(|d| can_see || d.spec.name != "frame_view").map(|d| (d.spec.clone(), d.read_only)).collect(),
         tx: Mutex::new(s.assistant.tool_tx.clone()),
     });
-    let assistant = Arc::new(Assistant::new(model, env, &settings, info.as_ref(), profile));
+    let mut assistant = Assistant::new(model, env, &settings, info.as_ref(), profile);
+    assistant.pack = s.assistant.pack();
+    let assistant = Arc::new(assistant);
 
     let job =
         Job { id: s.jobs.iter().map(|j| j.id).max().unwrap_or(0) + 1, label: "Assistant".into(), progress: Default::default(), result: Default::default() };
@@ -786,8 +809,8 @@ fn trace(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"thread": id, "jsonl": st.trace.to_jsonl()}))
 }
 
-fn slash_commands(_s: &mut Session, _p: &Value) -> Result<Value> {
-    let pack = edith_ai::PromptPack::builtin();
+fn slash_commands(s: &mut Session, _p: &Value) -> Result<Value> {
+    let pack = s.assistant.pack();
     Ok(
         json!({"commands": pack.commands.iter().map(|c| json!({"name": c.name, "description": c.description, "takesText": c.template.contains("{args}")})).collect::<Vec<_>>(), "promptVersion": pack.version}),
     )
@@ -817,4 +840,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("assistant.trace", "Assistant Trace", r#"{"thread":id}"#, trace),
         spec("assistant.commands", "Assistant Slash Commands", "{}", slash_commands),
     ]
+    .into_iter()
+    .chain(eval::commands())
+    .collect()
 }

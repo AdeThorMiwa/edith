@@ -17,7 +17,11 @@ model and a fake editor, and can be improved without touching any provider.
   prefix stays cached. Context (selection, transcript) goes in the user message, never the system
   prompt.
 - `Trace`: a JSON-lines record of a run. `Trace::replay_model()` reproduces the recorded thread with
-  no network; this is the base of the evaluation suite (F03.6).
+  no network; this is the base of the evaluation suite.
+- `eval` (F03.6): the evaluation suite. `Suite::builtin()` is the shipped `core` suite (`suites/core.json`);
+  `grade(task, trace, context)` checks a run with code graders and needs no model; `Report` renders
+  to markdown and `compare` shows two or more runs side by side. The engine runs it
+  (`assistant.eval`); a prompt, tool-description or loop change ships with its report.
 
 Rules the loop keeps, each with a test: the thread only grows (reasoning blocks come back exactly as
 sent); every tool call is answered even when a turn ends early (refusal, cut-off, Stop, step limit,

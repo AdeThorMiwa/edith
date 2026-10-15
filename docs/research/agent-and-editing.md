@@ -26,6 +26,10 @@ The Edith agent is designed from published research, not from habit. This file i
 | "What Does Context Compression Cost an Agent?" (arXiv 2608.16370); "A Survey of Context Engineering for LLMs" (arXiv 2507.13334); "Memory for Autonomous LLM Agents" (arXiv 2603.07670); Anthropic, "Effective context engineering for AI agents" | What long sessions lose when compacted, and how to manage context and memory. | F03.1 loop, history rules |
 | CentaurEval (arXiv 2512.04111) | Measures the human's contribution to a human-agent team. | F03.6, the "human drives" rule |
 
+## Applied so far
+
+- **F03.6 (2026-10-16): the first evaluation suite.** It follows what the work above agrees on where it can today: it grades the *steps* (which tools were called, whether the times cited exist, whether the project was left alone) as well as the answer; it includes a task where an instruction is planted in project data. It does not yet judge craft or test interruptions and feedback: those need human-rated examples and the proposal flow (F10, F14). Timeline-Bench's 73% craft-only failures is the reason the suite is built so that craft graders can be added next to the code graders.
+
 ## Method
 
 Each stage is designed from what is known here and then built; it does not wait for more reading. As a stage proceeds, its open design questions are listed, the relevant leads are read, and what changed is written down here with the sources and a confidence. Better research later improves the agent; it never holds a stage up. Evaluation follows what the work above agrees on: grade the steps an agent took as well as its result; include mid-task interruptions and feedback; keep code checks separate from human-calibrated judgments of craft.

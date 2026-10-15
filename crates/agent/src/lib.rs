@@ -11,6 +11,8 @@
 //! - [`Environment`]: the tools the agent may call. The engine implements it.
 //! - [`PromptPack`]: the versioned prompt text.
 //! - [`Trace`]: a JSON-lines record of a run that replays with no network ([`Trace::replay_model`]).
+//! - [`eval`]: the evaluation suite: tasks, code graders that read only a trace, and reports that
+//!   compare models and prompt versions.
 //!
 //! Rules the loop keeps, each with a test: the conversation only grows (thinking blocks stay as the
 //! model sent them); every tool call gets an answer, even when a turn ends early, so the thread is
@@ -22,6 +24,7 @@
 mod agent;
 mod context;
 mod environment;
+pub mod eval;
 mod prompt;
 mod trace;
 
