@@ -12,6 +12,8 @@ enum Turn {
     /// A ready-made reply and the events to announce for it.
     Reply(Vec<StreamEvent>, Response),
     Fail(LlmError),
+    /// Some events arrive, then the stream fails.
+    Partial(Vec<StreamEvent>, LlmError),
 }
 
 /// Plays back the turns it was given, one per request, and remembers every request it received.
@@ -48,6 +50,12 @@ impl ScriptedModel {
         self
     }
 
+    /// The next request delivers `events` and then fails with `error`, as a dropped connection does.
+    pub fn push_partial(&self, events: Vec<StreamEvent>, error: LlmError) -> &Self {
+        self.turns.lock().unwrap_or_else(PoisonError::into_inner).push_back(Turn::Partial(events, error));
+        self
+    }
+
     /// Every request received so far, oldest first.
     pub fn requests(&self) -> Vec<Request> {
         self.seen.lock().unwrap_or_else(PoisonError::into_inner).clone()
@@ -77,6 +85,12 @@ impl ChatModel for ScriptedModel {
         match turn {
             None => Err(LlmError::Unavailable("the scripted model has no more turns".to_string())),
             Some(Turn::Fail(e)) => Err(e),
+            Some(Turn::Partial(events, e)) => {
+                for ev in events {
+                    sink(ev);
+                }
+                Err(e)
+            }
             Some(Turn::Reply(events, response)) => {
                 for e in events {
                     sink(e);
@@ -162,5 +176,14 @@ mod tests {
             }
         });
         assert_eq!(r.unwrap_err(), LlmError::Cancelled);
+    }
+
+    #[test]
+    fn a_partial_turn_delivers_its_events_then_fails() {
+        let m = ScriptedModel::new();
+        m.push_partial(vec![StreamEvent::Text("half".into())], LlmError::Overloaded);
+        let mut seen = Vec::new();
+        let r = m.stream(&Request::new("m"), &cancel(), &mut |e| seen.push(e));
+        assert_eq!((r.unwrap_err(), seen), (LlmError::Overloaded, vec![StreamEvent::Text("half".into())]));
     }
 }

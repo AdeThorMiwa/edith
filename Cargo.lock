@@ -1431,6 +1431,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "edith-agent"
+version = "0.7.2"
+dependencies = [
+ "edith-llm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "edith-llm"
 version = "0.7.2"
 dependencies = [

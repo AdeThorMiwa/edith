@@ -1,0 +1,16 @@
+[package]
+name = "edith-agent"
+description = "The Edith agent: the loop, prompt packs, context assembly, tool host interface, budgets, safety profile, run traces and deterministic replay. Talks to a model only through edith-llm and to the editor only through an Environment. Knows nothing about vendors or projects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+edith-llm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

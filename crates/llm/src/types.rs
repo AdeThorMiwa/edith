@@ -187,7 +187,7 @@ pub enum StreamEvent {
     Usage(Usage),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Response {
     pub message: Message,
     pub stop_reason: StopReason,
