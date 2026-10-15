@@ -9,8 +9,12 @@
 //! 4. [`post_for_json`] trades the code (plus the PKCE verifier) for a key or token.
 //!
 //! The receiver accepts one valid redirect and then stops listening, answers only `GET /callback`
-//! on the loopback host name it was bound to (a web page cannot reach it by DNS rebinding), caps
-//! the request at 4 KiB, never echoes the code, and gives up after a timeout or on cancel.
+//! on the loopback host names it was bound to (a web page cannot reach it by DNS rebinding), caps
+//! the request at 4 KiB, never echoes the code, and gives up after a timeout or on cancel. It
+//! listens on `127.0.0.1` and, when the machine has it, `::1` (a browser that resolves
+//! `localhost` to IPv6 first still arrives). A provider that refuses the sign-in may send the
+//! person back without the `state` (OpenRouter does); that ends the wait with "declined", and can
+//! never produce a code.
 
 use crate::http::{Client, Request};
 use crate::{NetError, redact};
@@ -19,7 +23,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -102,7 +106,8 @@ impl AuthCode {
 
 /// A one-shot receiver on `127.0.0.1` at a random port.
 pub struct Loopback {
-    listener: TcpListener,
+    /// `127.0.0.1` first, then `::1` when it could be bound on the same port.
+    listeners: Vec<TcpListener>,
     port: u16,
 }
 
@@ -111,7 +116,14 @@ impl Loopback {
         let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).map_err(|_| oauth_err("could not open a local port for the sign-in"))?;
         listener.set_nonblocking(true).map_err(|_| oauth_err("could not open a local port for the sign-in"))?;
         let port = listener.local_addr().map_err(|_| oauth_err("could not open a local port for the sign-in"))?.port();
-        Ok(Self { listener, port })
+        let mut listeners = vec![listener];
+        // The same port on IPv6, if the machine has it; without it only IPv4 is used.
+        if let Ok(v6) = TcpListener::bind(SocketAddr::from((Ipv6Addr::LOCALHOST, port)))
+            && v6.set_nonblocking(true).is_ok()
+        {
+            listeners.push(v6);
+        }
+        Ok(Self { listeners, port })
     }
 
     pub fn port(&self) -> u16 {
@@ -119,27 +131,36 @@ impl Loopback {
     }
 
     pub fn redirect_uri(&self) -> String {
-        format!("http://127.0.0.1:{}/callback", self.port)
+        self.redirect_uri_for("127.0.0.1")
+    }
+
+    /// The redirect address using `host`, which must be `127.0.0.1` or `localhost` (anything else
+    /// becomes `127.0.0.1`). OpenRouter documents `localhost`.
+    pub fn redirect_uri_for(&self, host: &str) -> String {
+        let host = if host == "localhost" { "localhost" } else { "127.0.0.1" };
+        format!("http://{host}:{}/callback", self.port)
     }
 
     /// Waits for the redirect and returns its code. Stops at `timeout`, on `cancel`, or after
     /// 20 unusable requests. Consumes the receiver: the port is closed when this returns.
     pub fn wait(self, expected_state: &str, timeout: Duration, cancel: Option<&Arc<AtomicBool>>) -> Result<AuthCode, NetError> {
+        self.wait_until(expected_state, timeout, &|| cancel.is_some_and(|c| c.load(Ordering::SeqCst)))
+    }
+
+    /// Like [`Loopback::wait`], with any cancel check (a job's cancel flag, for instance).
+    pub fn wait_until(self, expected_state: &str, timeout: Duration, cancelled: &dyn Fn() -> bool) -> Result<AuthCode, NetError> {
         let deadline = Instant::now() + timeout;
         let mut bad = 0u32;
         loop {
-            if cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+            if cancelled() {
                 return Err(NetError::Cancelled);
             }
             if Instant::now() >= deadline {
                 return Err(oauth_err("timed out waiting for you to finish signing in"));
             }
-            let stream = match self.listener.accept() {
-                Ok((s, _)) => s,
-                Err(_) => {
-                    std::thread::sleep(Duration::from_millis(25));
-                    continue;
-                }
+            let Some(stream) = self.listeners.iter().find_map(|l| l.accept().ok().map(|(s, _)| s)) else {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
             };
             match self.serve(stream, expected_state) {
                 Verdict::Code(code) => return Ok(code),
@@ -180,7 +201,8 @@ impl Loopback {
         }
         let host_ok = req.headers.iter().any(|h| {
             h.name.eq_ignore_ascii_case("host")
-                && std::str::from_utf8(h.value).is_ok_and(|v| v == format!("127.0.0.1:{}", self.port) || v == format!("localhost:{}", self.port))
+                && std::str::from_utf8(h.value)
+                    .is_ok_and(|v| v == format!("127.0.0.1:{}", self.port) || v == format!("localhost:{}", self.port) || v == format!("[::1]:{}", self.port))
         });
         if !host_ok {
             return reply(&mut stream, 400, "Unexpected host.");
@@ -205,12 +227,14 @@ impl Loopback {
             }
         }
         let state_ok = state.as_deref().is_some_and(|s| bool::from(s.as_bytes().ct_eq(expected_state.as_bytes())));
-        if !state_ok {
-            return reply(&mut stream, 400, &format!("This sign-in link does not belong to this session. Start again from {}.", crate::brand::NAME));
-        }
-        if let Some(e) = error {
+        // A refusal may come back with no `state` at all; it carries no code, so accepting it can
+        // only end the wait. A wrong `state` is still turned away.
+        if let Some(e) = error.filter(|_| state_ok || state.is_none()) {
             let _ = reply(&mut stream, 200, &format!("Sign-in was cancelled. You can close this tab and return to {}.", crate::brand::NAME));
             return Verdict::Denied(redact::message(&e.chars().take(80).collect::<String>()));
+        }
+        if !state_ok {
+            return reply(&mut stream, 400, &format!("This sign-in link does not belong to this session. Start again from {}.", crate::brand::NAME));
         }
         match code {
             Some(c) if !c.is_empty() && c.len() <= MAX_CODE && !c.chars().any(char::is_control) => {
@@ -258,26 +282,41 @@ pub struct Flow {
     pub pkce: Pkce,
     state: String,
     loopback: Loopback,
+    host: &'static str,
 }
 
 impl Flow {
-    /// `build` makes the provider's sign-in address, usually with [`build_url`].
+    /// `build` makes the provider's sign-in address, usually with [`build_url`]. The redirect
+    /// uses `127.0.0.1`.
     pub fn start(build: impl FnOnce(&FlowParams<'_>) -> Result<String, NetError>) -> Result<Self, NetError> {
+        Self::start_on("127.0.0.1", build)
+    }
+
+    /// Like [`Flow::start`], with the redirect on `localhost` or `127.0.0.1` (`host`), for
+    /// providers that document one of them.
+    pub fn start_on(host: &str, build: impl FnOnce(&FlowParams<'_>) -> Result<String, NetError>) -> Result<Self, NetError> {
         let loopback = Loopback::bind()?;
         let pkce = Pkce::generate()?;
         let state = random_token(24)?;
-        let redirect = loopback.redirect_uri();
+        let host: &'static str = if host == "localhost" { "localhost" } else { "127.0.0.1" };
+        let redirect = loopback.redirect_uri_for(host);
         let authorize_url = build(&FlowParams { redirect_uri: &redirect, state: &state, code_challenge: &pkce.challenge })?;
-        Ok(Self { authorize_url, pkce, state, loopback })
+        Ok(Self { authorize_url, pkce, state, loopback, host })
     }
 
     pub fn redirect_uri(&self) -> String {
-        self.loopback.redirect_uri()
+        self.loopback.redirect_uri_for(self.host)
     }
 
     /// Waits for the redirect; returns the code and the PKCE pair for the token request.
     pub fn wait(self, timeout: Duration, cancel: Option<&Arc<AtomicBool>>) -> Result<(AuthCode, Pkce), NetError> {
         let code = self.loopback.wait(&self.state, timeout, cancel)?;
+        Ok((code, self.pkce))
+    }
+
+    /// Like [`Flow::wait`], with any cancel check (a job's cancel flag, for instance).
+    pub fn wait_until(self, timeout: Duration, cancelled: &dyn Fn() -> bool) -> Result<(AuthCode, Pkce), NetError> {
+        let code = self.loopback.wait_until(&self.state, timeout, cancelled)?;
         Ok((code, self.pkce))
     }
 }
@@ -379,6 +418,64 @@ mod tests {
         assert!(page.contains("cancelled"));
         let e = h.join().unwrap().err().unwrap();
         assert!(matches!(&e, NetError::OAuth(m) if m.contains("access_denied")), "{e:?}");
+    }
+
+    #[test]
+    fn a_refusal_without_state_ends_the_wait_but_a_wrong_state_does_not() {
+        let (port, h) = waiting("S", Duration::from_secs(5));
+        // someone else's link with the wrong state is turned away and the wait goes on
+        assert!(get(port, "/callback?error=access_denied&state=WRONG").starts_with("HTTP/1.1 400"));
+        // a provider that sends the person back with no state at all, on a refusal
+        let page = get(port, "/callback?error=access_denied");
+        assert!(page.starts_with("HTTP/1.1 200") && page.contains("cancelled"), "{page}");
+        let e = h.join().unwrap().err().unwrap();
+        assert!(matches!(&e, NetError::OAuth(m) if m.contains("access_denied")), "{e:?}");
+        // and a bare callback with nothing in it is still just unusable
+        let (port, h) = waiting("S", Duration::from_millis(400));
+        assert!(get(port, "/callback").starts_with("HTTP/1.1 400"));
+        assert!(matches!(h.join().unwrap().err().unwrap(), NetError::OAuth(m) if m.contains("timed out")));
+    }
+
+    #[test]
+    fn a_refusal_can_never_produce_a_code() {
+        let (port, h) = waiting("S", Duration::from_secs(5));
+        let _ = get(port, "/callback?error=denied&code=EVIL");
+        let e = h.join().unwrap().err().unwrap();
+        assert!(matches!(&e, NetError::OAuth(m) if m.contains("denied")), "a code next to an error is not a code: {e:?}");
+    }
+
+    #[test]
+    fn the_receiver_answers_on_localhost_and_on_ipv6_when_the_machine_has_it() {
+        let (port, h) = waiting("S", Duration::from_secs(5));
+        let page = raw(port, &format!("GET /callback?code=viaName&state=S HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n"));
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        assert_eq!(h.join().unwrap().unwrap().as_str(), "viaName");
+
+        let lb = Loopback::bind().unwrap();
+        let port = lb.port();
+        assert_eq!(lb.redirect_uri_for("localhost"), format!("http://localhost:{port}/callback"));
+        assert_eq!(lb.redirect_uri_for("evil.example"), format!("http://127.0.0.1:{port}/callback"), "only the two loopback names are advertised");
+        let has_v6 = lb.listeners.len() == 2;
+        let h = std::thread::spawn(move || lb.wait("S", Duration::from_secs(5), None));
+        if has_v6 {
+            let mut c = TcpStream::connect(("::1", port)).unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let _ = c.write_all(format!("GET /callback?code=v6&state=S HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes());
+            let mut out = String::new();
+            let _ = c.read_to_string(&mut out);
+            assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        } else {
+            let _ = get(port, "/callback?code=v6&state=S");
+        }
+        assert_eq!(h.join().unwrap().unwrap().as_str(), "v6");
+    }
+
+    #[test]
+    fn a_job_can_stop_the_wait_with_its_own_cancel_check() {
+        let lb = Loopback::bind().unwrap();
+        let polls = std::sync::atomic::AtomicU32::new(0);
+        let e = lb.wait_until("S", Duration::from_secs(10), &|| polls.fetch_add(1, Ordering::SeqCst) >= 3).err().unwrap();
+        assert_eq!(e, NetError::Cancelled);
     }
 
     #[test]

@@ -15,6 +15,8 @@ default = []
 net = ["edith-llm/net"]
 # Read provider keys from the OS keychain.
 keychain = ["net", "edith-llm/keychain"]
+# Sign in to a provider through its own page (OpenRouter) instead of pasting a key.
+signin = ["net", "edith-net/oauth"]
 
 [dependencies]
 edith-llm = { workspace = true }
@@ -23,3 +25,7 @@ edith-net = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+zeroize = "1"
+
+[dev-dependencies]
+edith-net = { workspace = true, features = ["testserver"] }

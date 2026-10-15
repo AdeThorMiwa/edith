@@ -9,6 +9,7 @@
 //! - [`models`]: capability badges and price text for the picker, and choosing the model to use.
 //! - [`Assistant`]: a model, the editor's tools and the settings, ready to run turns.
 //! - [`usage_summary`]: the thread's cost meter text.
+//! - [`connect`] (feature `signin`): signing in to OpenRouter through its own page.
 //! - [`model_for`] (feature `net`): the provider for a service, with its key from the keychain.
 //!
 //! Nothing here is vendor-specific beyond choosing which provider to build; the agent and the
@@ -31,6 +32,8 @@ pub use edith_llm as llm;
 pub use edith_llm::*;
 pub use edith_net::brand;
 
+#[cfg(feature = "signin")]
+pub mod connect;
 #[cfg(feature = "net")]
 mod provider;
 #[cfg(feature = "net")]

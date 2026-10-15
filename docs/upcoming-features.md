@@ -261,7 +261,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 - F03.3 Provider abstraction, the OpenAI-compatible client, and the Connect buttons: OpenRouter sign-in (A), other API keys (B), local servers (C). Built in five commits:
   - F03.3a ✅ the wire format, stream reader and model-list parser (`edith-llm::openai`, pure code, recorded streams).
   - F03.3b ✅ the HTTPS client (`OpenAiCompatible`), the endpoint table (`edith-ai::endpoints`), the provider picker in the Assistant header, and a remembered model per provider. OpenRouter, OpenAI, Ollama and LM Studio can be chosen now; keys come from the Connections panel (paste), local servers need none. On a provider with many models nothing is chosen for you.
-  - F03.3c the sign-in building blocks (`localhost` redirect, denial without `state`, cancel check).
+  - F03.3c ✅ the sign-in building blocks: a `localhost` redirect that also listens on `::1`, a refusal without `state` ends the wait (and can never yield a code), any cancel check plugs in (`wait_until`), and `edith-ai::connect::OpenRouter` (address + key exchange, feature `signin`). Not yet checked against the real OpenRouter page: whether it returns `state` on approval as documented. The first live Connect will show it; if not, only the receiver's `state` rule needs a decision.
   - F03.3d `connections.connect|disconnect` and the Connect buttons.
   - F03.3e local-server detection and capability badges.
 - F03.4 Gemini (free tier) and any OpenAI-compatible endpoint.
