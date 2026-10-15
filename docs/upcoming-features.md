@@ -189,7 +189,7 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 
 **Notes.** Defaults add candle to every build, so compiles get longer: a cold full `cargo xtask ci` took 106 minutes on the author's MacBook, and the app alone builds in about 3.5 minutes warm. Use current stable (checked on 1.99.0; see [fork.md](fork.md)). Building the CLI after the app still recompiles most of the engine, so build the one you need. `whisper-base` is modest on run-together speech; `whisper-small` (967 MB) is the next step up if accuracy matters. The web app is a separate crate and is unaffected.
 
-### F02 Network, secrets and OAuth foundation · Must · M · ⬜
+### F02 Network, secrets and OAuth foundation · Must · M · 🟡
 
 **Needs:** F01 · **Unlocks:** F03, F05, F25.
 

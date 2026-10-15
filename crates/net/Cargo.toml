@@ -1,0 +1,17 @@
+[package]
+name = "filmcraft-net"
+description = "FilmCraft network foundation: one HTTP client with an Offline switch and a redacted request log, an OS-keychain secret store, and OAuth building blocks (PKCE, loopback redirect receiver)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
