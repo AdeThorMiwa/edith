@@ -78,6 +78,15 @@ pub const SERVICES: &[Service] = &[
         note: "Runs models locally; nothing leaves this computer.",
     },
     Service {
+        id: "lmstudio",
+        label: "LM Studio (on this computer)",
+        kind: Kind::Local,
+        secret: None,
+        key_url: None,
+        free: true,
+        note: "Runs models locally; start its server from the Developer tab. Nothing leaves this computer.",
+    },
+    Service {
         id: "pexels",
         label: "Pexels",
         kind: Kind::ApiKey,

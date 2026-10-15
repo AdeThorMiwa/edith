@@ -3600,7 +3600,6 @@
 	Ask Edith about your edit…	向 Edith 询问你的剪辑…
 	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	询问关于你的剪辑的问题。我可以查看项目、素材片段、标记和转录文本，但不能更改任何内容。
 	Assistant	助手
-	Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.	Edith 需要一个可对话的模型。在“连接”中添加你的 Anthropic 密钥，此面板就会启用。
 	Effort	推理强度
 	Looked at	查看了
 	Model default	模型默认值
@@ -3627,3 +3626,7 @@
 	This model cannot look at pictures.	此模型无法查看图片。
 	What is said within 20 seconds of the playhead.	播放头前后 20 秒内的语音内容。
 	with a picture	附带图片
+	Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up.	Edith 需要一个可对话的模型。在“连接”中连接一个服务（或选择 Ollama 或 LM Studio 使用本机上的模型），此面板就会启用。
+	Choose a model	选择模型
+	Choose a model from the list above to start.	请先从上方列表中选择一个模型。
+	not connected	未连接

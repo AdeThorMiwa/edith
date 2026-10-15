@@ -121,6 +121,8 @@ struct ModelCache {
     updating: bool,
     fetched: bool,
     error: Option<String>,
+    /// Bumped when the provider changes, so a list still being fetched for the old one is dropped.
+    generation: u64,
 }
 
 /// Everything the assistant keeps on a session. Not part of the project and not undoable.
@@ -284,8 +286,9 @@ impl Session {
         }
         #[cfg(feature = "net")]
         {
-            let client = Arc::new(edith_net::http::Client::new(edith_net::http::ClientConfig::default(), edith_net::shared().clone()));
-            edith_ai::model_for(&self.assistant.settings.service, client).map_err(|e| EngineError::Other(e.to_string()))
+            let service = &self.assistant.settings.service;
+            let client = Arc::new(edith_net::http::Client::new(edith_ai::client_config_for(service), edith_net::shared().clone()));
+            edith_ai::model_for(service, client).map_err(|e| EngineError::Other(e.to_string()))
         }
         #[cfg(not(feature = "net"))]
         Err(EngineError::Other("the assistant is not available in this build (built without the `net` feature)".into()))
@@ -317,12 +320,29 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
     let price = info.as_ref().and_then(|i| i.price.clone());
     let available = s.assistant.model_override.is_some() || cfg!(feature = "net");
     let threads: Vec<Value> = s.assistant.threads.iter().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect();
-    let connected = crate::net_commands::connected(&s.assistant.settings.service);
+    let service = s.assistant.settings.service.clone();
+    let local = edith_ai::endpoints::is_local(&service);
+    let connected = if local { None } else { crate::net_commands::connected(&service) };
+    // Every provider the assistant can use, with whether it is ready (a key is stored, or it runs
+    // on this computer). Nothing is hidden because it is not connected yet.
+    let providers: Vec<Value> = edith_ai::endpoints::CHAT_SERVICES
+        .iter()
+        .map(|id| {
+            let label = edith_net::services::find(id).map_or(*id, |sv| sv.label);
+            let local = edith_ai::endpoints::is_local(id);
+            let connected = if local { None } else { crate::net_commands::connected(id) };
+            json!({"id": id, "label": label, "local": local, "connected": connected, "ready": local || connected == Some(true)})
+        })
+        .collect();
     Ok(json!({
         "available": available,
         "connected": connected,
-        // Ready to answer: a provider is plugged in (tests, tools) or a key is stored for the service.
-        "ready": available && (s.assistant.model_override.is_some() || connected == Some(true)),
+        "providers": providers,
+        // The person must pick a model before asking (none is chosen for them on this provider).
+        "needsModel": s.assistant.settings.model.is_empty(),
+        // Ready to answer: a provider is plugged in (tests, tools), a key is stored for the
+        // service, or it is a model server on this computer.
+        "ready": available && (s.assistant.model_override.is_some() || local || connected == Some(true)),
         "settings": settings_json(&s.assistant.settings),
         "settingsNote": s.assistant.settings_note,
         "restoreNote": s.assistant.restore_note,
@@ -364,8 +384,14 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
             .filter(|t| !t.is_empty() && t.len() <= 100 && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-')));
         t.map(str::to_string).ok_or_else(|| bad(cmd, format!("`{what}` must be 1 to 100 letters, digits or . _ : / -")))
     };
+    let mut service_changed = false;
     if let Some(v) = p.get("service") {
-        next.service = word(v, "service")?;
+        let service = word(v, "service")?;
+        if !edith_ai::endpoints::is_chat_service(&service) {
+            return Err(bad(cmd, format!("`service` must be one of {}", edith_ai::endpoints::CHAT_SERVICES.join(", "))));
+        }
+        service_changed = service != next.service;
+        next.switch_service(&service);
     }
     if let Some(v) = p.get("model") {
         next.model = word(v, "model")?;
@@ -398,6 +424,15 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         };
     }
     s.assistant.settings = next.sanitized();
+    if service_changed {
+        // The old provider's models mean nothing to the new one.
+        let mut c = lock(&s.assistant.models);
+        c.generation = c.generation.wrapping_add(1);
+        c.models.clear();
+        c.updating = false;
+        c.fetched = false;
+        c.error = None;
+    }
     let save_error = s.assistant.dir.as_deref().and_then(|d| s.assistant.settings.save(d).err());
     Ok(json!({"settings": settings_json(&s.assistant.settings), "saved": s.assistant.dir.is_some() && save_error.is_none(), "saveError": save_error}))
 }
@@ -411,6 +446,7 @@ fn start_model_fetch(s: &mut Session) {
         c.updating = true;
     }
     let cache = s.assistant.models.clone();
+    let generation = lock(&cache).generation;
     match s.assistant_provider() {
         Err(e) => {
             let mut c = lock(&cache);
@@ -425,6 +461,9 @@ fn start_model_fetch(s: &mut Session) {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| model.models()))
                         .unwrap_or_else(|_| Err(edith_ai::LlmError::Unavailable("the model list failed internally".into())));
                     let mut c = lock(&cache);
+                    if c.generation != generation {
+                        return;
+                    }
                     c.updating = false;
                     c.fetched = true;
                     match result {
@@ -459,7 +498,10 @@ fn models(s: &mut Session, p: &Value) -> Result<Value> {
         start_model_fetch(s);
     }
     let c = lock(&s.assistant.models);
-    let chosen = resolve_model(&c.models, &s.assistant.settings.model).map(|m| m.id.clone());
+    let service = &s.assistant.settings.service;
+    let chosen =
+        resolve_model(&c.models, &s.assistant.settings.model, edith_ai::endpoints::usual_models(service), !edith_ai::endpoints::must_choose_model(service))
+            .map(|m| m.id.clone());
     Ok(
         json!({"models": c.models.iter().map(model_json).collect::<Vec<_>>(), "updating": c.updating, "error": c.error, "selected": s.assistant.settings.model, "resolved": chosen}),
     )
@@ -571,6 +613,9 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`wait` must be true or false")),
     };
+    if s.assistant.model_override.is_none() && s.assistant.settings.model.is_empty() {
+        return Err(bad(cmd, "no model is chosen yet; pick one from the model list (`assistant.models`, then `assistant.settings` with `model`)"));
+    }
     // A model that cannot see pictures is neither offered the frame tool nor sent a frame.
     let can_see = s.model_info().is_none_or(|i| i.capabilities.images);
     let ctx = context_blocks(s, p, cmd, can_see)?;

@@ -24,11 +24,15 @@
 
 pub mod anthropic;
 mod error;
+#[cfg(feature = "net")]
+mod key_source;
 pub mod openai;
 pub mod scripted;
 pub mod types;
 
 pub use error::LlmError;
+#[cfg(feature = "net")]
+pub use key_source::KeySource;
 pub use types::*;
 
 use std::sync::Arc;

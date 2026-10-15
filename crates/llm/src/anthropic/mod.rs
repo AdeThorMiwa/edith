@@ -19,7 +19,9 @@ pub use wire::build_body;
 pub(crate) use stream::fixtures as stream_fixtures;
 
 #[cfg(feature = "net")]
-pub use client::{Anthropic, KeySource};
+pub use crate::key_source::KeySource;
+#[cfg(feature = "net")]
+pub use client::Anthropic;
 
 /// Tags this provider's opaque parts.
 pub const PROVIDER: &str = "anthropic";

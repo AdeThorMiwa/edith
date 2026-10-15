@@ -94,6 +94,10 @@ impl Driver {
         self.elements(id).iter().any(|e| e["id"] == json!(id))
     }
 
+    fn enabled(&mut self, id: &str) -> bool {
+        self.elements(id).iter().find(|e| e["id"] == json!(id)).is_some_and(|e| e["enabled"] != json!(false))
+    }
+
     fn label(&mut self, id: &str) -> String {
         self.elements(id).iter().find(|e| e["id"] == json!(id)).and_then(|e| e["label"].as_str().map(str::to_string)).unwrap_or_default()
     }
@@ -314,6 +318,40 @@ fn the_default_model_is_chosen_in_the_panel_and_saved_as_a_setting() {
     d.click("assistant.model.claude-sonnet-5-5");
     d.wait("the setting to change", |d| d.exec("assistant.settings", json!({}))["settings"]["model"] == "claude-sonnet-5-5");
     assert!(d.label("assistant.model").contains("Sonnet"), "{}", d.label("assistant.model"));
+}
+
+#[test]
+fn the_provider_is_chosen_in_the_panel_with_its_own_model_list_and_nothing_picked_for_the_person() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let info = |id: &str| ModelInfo { id: id.into(), display_name: id.into(), capabilities: Capabilities { tools: true, ..Default::default() }, price: None };
+    d.app().session.assistant.use_model(Arc::new(ScriptedModel::new().with_models(vec![info("meta/free-model:free"), info("other/model")])));
+    d.open_assistant();
+    // every provider is listed, connected or not
+    d.wait("the provider list", |d| {
+        d.click("assistant.provider");
+        d.has("assistant.provider.openrouter") && d.has("assistant.provider.lmstudio")
+    });
+    assert!(d.label("assistant.provider.openai").contains("not connected"), "{}", d.label("assistant.provider.openai"));
+    assert!(!d.label("assistant.provider.ollama").contains("not connected"), "a local server needs no key");
+    d.click("assistant.provider.openrouter");
+    d.wait("the provider to change", |d| d.exec("assistant.settings", json!({}))["settings"]["service"] == "openrouter");
+    // no model is chosen for the person: the picker asks, and sending is not offered
+    assert_eq!(d.exec("assistant.settings", json!({}))["settings"]["model"], "");
+    d.wait("the model list", |d| {
+        d.click("assistant.model");
+        d.has("assistant.model.meta/free-model:free")
+    });
+    assert!(d.label("assistant.model").contains("Choose a model"), "{}", d.label("assistant.model"));
+    d.type_into_input("hello");
+    assert!(!d.enabled("assistant.send"), "no model, no send");
+    d.wait("the model list again", |d| {
+        d.click("assistant.model");
+        d.has("assistant.model.meta/free-model:free")
+    });
+    d.click("assistant.model.meta/free-model:free");
+    d.wait("the model to be chosen", |d| d.exec("assistant.settings", json!({}))["settings"]["model"] == "meta/free-model:free");
+    d.wait("send to be offered", |d| d.enabled("assistant.send"));
 }
 
 #[test]

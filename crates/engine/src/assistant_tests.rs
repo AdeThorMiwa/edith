@@ -416,6 +416,49 @@ fn the_model_list_is_fetched_in_the_background_with_badges() {
     assert_eq!(s.execute("assistant.models", json!({})).unwrap()["resolved"], "claude-haiku-5-5", "a missing preferred model falls back to a usual one");
 }
 
+#[test]
+fn switching_provider_swaps_the_model_list_remembers_each_choice_and_picks_nothing_for_the_person() {
+    let mut s = Session::default();
+    // every provider is listed, connected or not
+    let st = s.execute("assistant.status", json!({})).unwrap();
+    let ids: Vec<&str> = st["providers"].as_array().unwrap().iter().filter_map(|p| p["id"].as_str()).collect();
+    assert_eq!(ids, ["anthropic", "openrouter", "openai", "ollama", "lmstudio"]);
+    let local: Vec<(&str, bool)> = st["providers"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap(), p["ready"].as_bool().unwrap())).collect();
+    assert!(local.contains(&("ollama", true)) && local.contains(&("lmstudio", true)), "a local server needs no key: {local:?}");
+    assert_eq!(st["needsModel"], false);
+
+    // an unknown provider is refused and changes nothing
+    assert!(s.execute("assistant.settings", json!({"service": "martian-ai"})).is_err());
+    assert_eq!(s.execute("assistant.settings", json!({})).unwrap()["settings"]["service"], "anthropic");
+
+    // switching starts with no model: nothing is chosen for the person, and sending says so
+    let r = s.execute("assistant.settings", json!({"service": "openrouter"})).unwrap();
+    assert_eq!((r["settings"]["service"].clone(), r["settings"]["model"].clone()), (json!("openrouter"), json!("")));
+    assert_eq!(s.execute("assistant.status", json!({})).unwrap()["needsModel"], true);
+    let e = s.execute("assistant.send", json!({"text": "hi"})).unwrap_err().to_string();
+    assert!(e.contains("no model is chosen"), "{e}");
+    assert!(s.assistant.threads.is_empty());
+
+    // the list belongs to the provider: it is fetched afresh, and no model is resolved for the person
+    let info = |id: &str| ModelInfo { id: id.into(), display_name: id.into(), capabilities: Capabilities::default(), price: None };
+    s.assistant.use_model(Arc::new(ScriptedModel::new().with_models(vec![info("meta/free-model:free"), info("anthropic/claude-haiku-5-5")])));
+    load_models(&mut s);
+    let v = s.execute("assistant.models", json!({})).unwrap();
+    assert_eq!((v["models"].as_array().unwrap().len(), v["resolved"].clone()), (2, Value::Null));
+    s.execute("assistant.settings", json!({"model": "meta/free-model:free"})).unwrap();
+    assert_eq!(s.execute("assistant.models", json!({})).unwrap()["resolved"], "meta/free-model:free");
+
+    // switching away clears the old list at once; switching back restores each provider's choice
+    s.execute("assistant.settings", json!({"service": "anthropic"})).unwrap();
+    let v = s.execute("assistant.models", json!({})).unwrap();
+    assert_eq!(v["selected"], "claude-haiku-5-5");
+    s.execute("assistant.settings", json!({"service": "openrouter"})).unwrap();
+    assert_eq!(s.execute("assistant.settings", json!({})).unwrap()["settings"]["model"], "meta/free-model:free");
+    // both fields in one call: the provider changes first, then the model is set
+    let r = s.execute("assistant.settings", json!({"service": "anthropic", "model": "claude-sonnet-5-5"})).unwrap();
+    assert_eq!((r["settings"]["service"].clone(), r["settings"]["model"].clone()), (json!("anthropic"), json!("claude-sonnet-5-5")));
+}
+
 #[cfg(not(feature = "net"))]
 #[test]
 fn without_a_provider_the_assistant_says_so_plainly() {

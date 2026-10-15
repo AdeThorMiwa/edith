@@ -37,11 +37,16 @@ pub fn badges(m: &ModelInfo) -> Vec<String> {
     out
 }
 
-/// The model to use: `preferred` if the provider offers it, else the first of the usual choices it
-/// does offer (cheap to capable), else its first model. `None` only when there are no models.
-pub fn resolve_model<'a>(models: &'a [ModelInfo], preferred: &str) -> Option<&'a ModelInfo> {
-    const USUAL: [&str; 3] = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
-    models.iter().find(|m| m.id == preferred).or_else(|| USUAL.iter().find_map(|id| models.iter().find(|m| m.id == *id))).or_else(|| models.first())
+/// The model to use: `preferred` if the provider offers it, else the first of `usual` (cheap to
+/// capable) that it does offer, else, only when `fall_back_to_first`, its first model. `None` when
+/// nothing qualifies: the person has to choose (nothing is picked for them where that could cost
+/// money or be a poor fit).
+pub fn resolve_model<'a>(models: &'a [ModelInfo], preferred: &str, usual: &[&str], fall_back_to_first: bool) -> Option<&'a ModelInfo> {
+    models
+        .iter()
+        .find(|m| m.id == preferred)
+        .or_else(|| usual.iter().find_map(|id| models.iter().find(|m| m.id == *id)))
+        .or_else(|| if fall_back_to_first { models.first() } else { None })
 }
 
 #[cfg(test)]
@@ -91,12 +96,16 @@ mod tests {
     }
 
     #[test]
-    fn the_preferred_model_wins_then_the_usual_ones_then_anything() {
+    fn the_preferred_model_wins_then_the_usual_ones_then_maybe_anything() {
+        const USUAL: [&str; 3] = ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"];
         let list = vec![model("claude-opus-5-5", true, None), model("claude-sonnet-5-5", true, None), model("other", true, None)];
-        assert_eq!(resolve_model(&list, "other").map(|m| m.id.as_str()), Some("other"));
-        assert_eq!(resolve_model(&list, "gone").map(|m| m.id.as_str()), Some("claude-sonnet-5-5"), "haiku is missing, so the next usual one");
+        let pick = |preferred: &str, usual: &[&str], first: bool| resolve_model(&list, preferred, usual, first).map(|m| m.id.as_str());
+        assert_eq!(pick("other", &USUAL, true), Some("other"));
+        assert_eq!(pick("gone", &USUAL, true), Some("claude-sonnet-5-5"), "haiku is missing, so the next usual one");
         let odd = vec![model("zzz", true, None)];
-        assert_eq!(resolve_model(&odd, "gone").map(|m| m.id.as_str()), Some("zzz"));
-        assert!(resolve_model(&[], "x").is_none());
+        assert_eq!(resolve_model(&odd, "gone", &USUAL, true).map(|m| m.id.as_str()), Some("zzz"));
+        assert!(resolve_model(&odd, "gone", &USUAL, false).is_none(), "where the person must choose, nothing is chosen for them");
+        assert!(resolve_model(&odd, "", &[], false).is_none());
+        assert!(resolve_model(&[], "x", &USUAL, true).is_none());
     }
 }

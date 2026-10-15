@@ -3624,7 +3624,6 @@
 	Ask Edith about your edit…	Edith に編集について質問…
 	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	編集について質問してください。プロジェクト、クリップ、マーカー、文字起こしを見ることはできますが、何も変更はできません。
 	Assistant	アシスタント
-	Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.	Edith には話しかけるモデルが必要です。接続に Anthropic のキーを追加すると、このパネルが使えるようになります。
 	Effort	推論の強度
 	Looked at	確認:
 	Model default	モデルの既定
@@ -3651,3 +3650,7 @@
 	This model cannot look at pictures.	このモデルは画像を見られません。
 	What is said within 20 seconds of the playhead.	再生ヘッドの前後20秒以内の発話内容。
 	with a picture	画像付き
+	Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up.	Edith には話しかけるモデルが必要です。接続でサービスをつなぐ（またはこのコンピューター上のモデルとして Ollama か LM Studio を選ぶ）と、このパネルが使えるようになります。
+	Choose a model	モデルを選択
+	Choose a model from the list above to start.	始めるには、上の一覧からモデルを選んでください。
+	not connected	未接続

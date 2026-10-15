@@ -4,6 +4,7 @@
 
 use super::{API_VERSION, StreamAssembler, build_body, parse_models};
 use crate::error::error_from_http;
+use crate::key_source::KeySource;
 use crate::{Cancel, ChatModel, LlmError, ModelInfo, Request, Response, StreamEvent};
 use edith_net::NetError;
 use edith_net::http::{Client, Request as NetRequest};
@@ -11,27 +12,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use zeroize::Zeroizing;
-
-/// Where the key comes from, asked once per request, and how to drop any copy kept of it. The
-/// client never stores the key itself; a source may keep one in wipe-on-drop memory so a
-/// conversation costs one keychain prompt instead of one per request.
-#[derive(Clone)]
-pub struct KeySource {
-    get: Arc<dyn Fn() -> Result<Zeroizing<String>, LlmError> + Send + Sync>,
-    forget: Arc<dyn Fn() + Send + Sync>,
-}
-
-impl KeySource {
-    pub fn new(get: impl Fn() -> Result<Zeroizing<String>, LlmError> + Send + Sync + 'static) -> Self {
-        Self { get: Arc::new(get), forget: Arc::new(|| {}) }
-    }
-
-    /// Called when the provider rejects the key, so a replaced key is read afresh next time.
-    pub fn with_forget(mut self, forget: impl Fn() + Send + Sync + 'static) -> Self {
-        self.forget = Arc::new(forget);
-        self
-    }
-}
 
 pub struct Anthropic {
     client: Arc<Client>,

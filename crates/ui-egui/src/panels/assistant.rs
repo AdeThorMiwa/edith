@@ -89,6 +89,11 @@ impl Chat {
     fn ready(&self) -> bool {
         self.status.as_ref().and_then(|s| s.get("ready")).and_then(Value::as_bool).unwrap_or(false)
     }
+
+    /// The provider has many models and none is chosen yet: nothing is picked for the person.
+    fn needs_model(&self) -> bool {
+        self.status.as_ref().and_then(|s| s.get("needsModel")).and_then(Value::as_bool).unwrap_or(false)
+    }
 }
 
 type Shared = Arc<Mutex<Chat>>;
@@ -251,13 +256,33 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
 
     // ---- header: model, thread, new, delete, settings (wraps in a narrow panel) ----
     ui.horizontal_wrapped(|ui| {
+        let providers: Vec<Value> = chat.status.as_ref().and_then(|s| s["providers"].as_array()).cloned().unwrap_or_default();
+        let current_service = chat.setting("service").as_str().unwrap_or("").to_string();
+        let service_name = |p: &Value| p["label"].as_str().unwrap_or("").split(" (").next().unwrap_or("").to_string();
+        let shown = providers.iter().find(|p| p["id"] == current_service.as_str()).map_or(current_service.clone(), service_name);
+        let pcombo = egui::ComboBox::from_id_salt("assistant-provider").selected_text(short(&shown, 14)).width(100.0).show_ui(ui, |ui| {
+            for p in &providers {
+                let id = p["id"].as_str().unwrap_or("").to_string();
+                let mut label = service_name(p);
+                if p["ready"] != true {
+                    label = format!("{label} · {}", tl!("not connected"));
+                }
+                let r = ui.selectable_label(id == current_service, &label);
+                elems.push((format!("assistant.provider.{id}"), r.clone(), label));
+                if r.clicked() {
+                    actions.push(Action::Settings(json!({"service": id})));
+                }
+            }
+        });
+        elems.push(("assistant.provider".into(), pcombo.response, format!("Provider {shown}")));
         let name = models
             .as_ref()
             .and_then(|m| m["models"].as_array())
             .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
             .and_then(|m| m["name"].as_str())
             .map_or(current_model.clone(), str::to_string);
-        let combo = egui::ComboBox::from_id_salt("assistant-model").selected_text(short(&name, 22)).width(140.0).show_ui(ui, |ui| {
+        let shown_model = if current_model.is_empty() { tl!("Choose a model").to_string() } else { short(&name, 22) };
+        let combo = egui::ComboBox::from_id_salt("assistant-model").selected_text(shown_model.clone()).width(140.0).show_ui(ui, |ui| {
             let list = models.as_ref().and_then(|m| m["models"].as_array()).cloned().unwrap_or_default();
             if list.is_empty() {
                 ui.label(RichText::new(tl!("No models loaded yet")).color(t.text_faint));
@@ -272,7 +297,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             }
         });
-        elems.push(("assistant.model".into(), combo.response, format!("Model {name}")));
+        elems.push(("assistant.model".into(), combo.response, format!("Model {shown_model}")));
 
         let title = chat.thread.and_then(|id| threads.iter().find(|t| t.0 == id)).map_or(tl!("New thread").to_string(), |t| t.1.clone());
         let tcombo = egui::ComboBox::from_id_salt("assistant-thread").selected_text(short(&title, 18)).width(110.0).show_ui(ui, |ui| {
@@ -365,10 +390,19 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     ui.add_space(4.0);
 
+    if ready && chat.needs_model() {
+        ui.label(RichText::new(tl!("Choose a model from the list above to start.")).size(11.0).color(WARN));
+    }
+
     // ---- not connected ----
     if !ready {
         egui::Frame::new().fill(t.field_bg).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-            ui.label(RichText::new(tl!("Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.")).color(WARN));
+            ui.label(
+                RichText::new(tl!(
+                    "Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up."
+                ))
+                .color(WARN),
+            );
             let r = ui.button(tl!("Open Connections"));
             elems.push(("assistant.connect".into(), r.clone(), "Open Connections".into()));
             if r.clicked() {
@@ -547,7 +581,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     actions.push(Action::Stop);
                 }
             } else {
-                let can = ready && !chat.input.trim().is_empty();
+                let can = ready && !chat.needs_model() && !chat.input.trim().is_empty();
                 let r = ui.add_enabled(can, egui::Button::new(tl!("Send")));
                 elems.push(("assistant.send".into(), r.clone(), "Send".into()));
                 if r.clicked() || (enter && can) {
@@ -604,6 +638,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 chat.polled_at = f64::NEG_INFINITY;
             }
             Action::Settings(p) => {
+                if p.get("service").is_some() {
+                    // The models belong to the provider: forget the old list so the new one is fetched.
+                    chat.models = None;
+                }
                 match app.session.execute("assistant.settings", p) {
                     Ok(_) => chat.error = None,
                     Err(e) => chat.error = Some(e.to_string()),

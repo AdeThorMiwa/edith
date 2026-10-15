@@ -4,6 +4,7 @@
 
 use edith_llm::Effort;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const SETTINGS_FILE: &str = "edith-ai-settings.json";
@@ -13,8 +14,11 @@ pub const SETTINGS_FILE: &str = "edith-ai-settings.json";
 pub struct AiSettings {
     /// Which provider to use (`anthropic`; others arrive with their connect buttons).
     pub service: String,
-    /// The model for new threads. A setting, not a constant: change it any time.
+    /// The model for new threads. A setting, not a constant: change it any time. Empty means none
+    /// is chosen yet (a provider with many models never gets one picked for the person).
     pub model: String,
+    /// The model last used with each provider, so switching providers and back restores it.
+    pub model_by_service: BTreeMap<String, String>,
     /// Reasoning effort, where the model supports it (`None`: the model's own default).
     pub effort: Option<Effort>,
     /// Ask the model for a short summary of its reasoning and show it.
@@ -31,6 +35,7 @@ impl Default for AiSettings {
         Self {
             service: "anthropic".into(),
             model: "claude-haiku-5-5".into(),
+            model_by_service: BTreeMap::new(),
             effort: None,
             show_thinking: true,
             max_steps: 12,
@@ -51,8 +56,12 @@ impl AiSettings {
         if !word_ok(&self.service) {
             self.service = d.service;
         }
-        if !word_ok(&self.model) {
-            self.model = d.model;
+        if !self.model.is_empty() && !word_ok(&self.model) {
+            self.model = crate::endpoints::default_model(&self.service).to_string();
+        }
+        self.model_by_service.retain(|k, v| word_ok(k) && word_ok(v));
+        while self.model_by_service.len() > 16 {
+            self.model_by_service.pop_last();
         }
         self.max_steps = self.max_steps.clamp(1, 40);
         self.max_output_tokens = self.max_output_tokens.clamp(256, 64_000);
@@ -62,6 +71,19 @@ impl AiSettings {
             None => None,
         };
         self
+    }
+
+    /// Changes the provider, remembering the model used with the old one and restoring the one
+    /// used with the new one (or that provider's starting model, which may be none).
+    pub fn switch_service(&mut self, service: &str) {
+        if self.service == service {
+            return;
+        }
+        if !self.model.is_empty() {
+            self.model_by_service.insert(self.service.clone(), self.model.clone());
+        }
+        self.service = service.to_string();
+        self.model = self.model_by_service.get(service).cloned().unwrap_or_else(|| crate::endpoints::default_model(service).to_string());
     }
 
     /// Reads the settings from `dir`. A missing file is the defaults; a damaged one is the defaults
@@ -108,6 +130,25 @@ mod tests {
         let s = AiSettings::default();
         assert_eq!((s.service.as_str(), s.model.as_str()), ("anthropic", "claude-haiku-5-5"));
         assert_eq!(s.max_cost_usd, Some(1.0));
+        assert_eq!(s.clone().sanitized(), s);
+    }
+
+    #[test]
+    fn switching_provider_remembers_each_providers_model() {
+        let mut s = AiSettings::default();
+        s.switch_service("openrouter");
+        assert_eq!((s.service.as_str(), s.model.as_str()), ("openrouter", ""), "nothing is chosen for the person");
+        s.model = "meta/free-model:free".into();
+        s.switch_service("anthropic");
+        assert_eq!(s.model, "claude-haiku-5-5", "the Claude choice is restored");
+        s.model = "claude-sonnet-5-5".into();
+        s.switch_service("openrouter");
+        assert_eq!(s.model, "meta/free-model:free");
+        s.switch_service("anthropic");
+        assert_eq!(s.model, "claude-sonnet-5-5");
+        let before = s.clone();
+        s.switch_service("anthropic");
+        assert_eq!(s, before, "switching to the same provider changes nothing");
         assert_eq!(s.clone().sanitized(), s);
     }
 
@@ -167,6 +208,11 @@ mod tests {
         assert_eq!(AiSettings { max_cost_usd: Some(-3.0), ..Default::default() }.sanitized().max_cost_usd, Some(1.0));
         assert_eq!(AiSettings { max_cost_usd: Some(1e300), ..Default::default() }.sanitized().max_cost_usd, Some(10_000.0));
         assert_eq!(AiSettings { max_steps: 9999, ..Default::default() }.sanitized().max_steps, 40);
+        // a bad model name falls back to the provider's own starting model, which may be none
+        let odd = AiSettings { service: "openrouter".into(), model: "bad model!".into(), ..Default::default() }.sanitized();
+        assert_eq!(odd.model, "");
+        let many = (0..40).map(|i| (format!("s{i}"), "m".to_string())).chain([("bad key!".to_string(), "m".to_string())]).collect();
+        assert_eq!(AiSettings { model_by_service: many, ..Default::default() }.sanitized().model_by_service.len(), 16);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

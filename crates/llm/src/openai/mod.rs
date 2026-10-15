@@ -7,9 +7,16 @@
 //! small ways (the name of the token limit, how reasoning effort is asked for, which headers
 //! identify the app); a [`Flavor`] holds exactly those differences.
 
+#[cfg(feature = "net")]
+mod client;
 mod models;
 mod stream;
 mod wire;
+
+#[cfg(feature = "net")]
+pub use client::OpenAiCompatible;
+#[cfg(test)]
+pub(crate) use stream::fixtures as stream_fixtures;
 
 pub use models::parse_models;
 pub use stream::StreamAssembler;

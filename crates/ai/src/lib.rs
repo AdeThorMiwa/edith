@@ -5,6 +5,7 @@
 //!
 //! - [`AiSettings`]: the user's choices (service, default model, effort, budgets), kept in a
 //!   fork-owned file in the data directory, never in upstream's preferences.
+//! - [`endpoints`]: where each chat provider lives, and which one needs a key or runs locally.
 //! - [`models`]: capability badges and price text for the picker, and choosing the model to use.
 //! - [`Assistant`]: a model, the editor's tools and the settings, ready to run turns.
 //! - [`usage_summary`]: the thread's cost meter text.
@@ -16,6 +17,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 mod assistant;
+pub mod endpoints;
 pub mod models;
 mod settings;
 
@@ -32,4 +34,4 @@ pub use edith_net::brand;
 #[cfg(feature = "net")]
 mod provider;
 #[cfg(feature = "net")]
-pub use provider::{AiError, model_for};
+pub use provider::{AiError, client_config_for, model_for};
