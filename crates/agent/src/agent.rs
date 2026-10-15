@@ -197,9 +197,23 @@ impl Agent<'_> {
     /// Runs one turn: adds the person's message (with its context blocks) to the thread, then loops
     /// until the model is done or a limit is reached. Never panics; every outcome is a [`Finish`].
     pub fn run_turn(&self, thread: &mut Thread, context: &[ContextBlock], text: &str, cancel: &Cancel, sink: &mut dyn FnMut(AgentEvent)) -> TurnReport {
+        self.run_turn_as(thread, context, text, text, cancel, sink)
+    }
+
+    /// [`Agent::run_turn`] where the model is asked `text` but the conversation shows `shown`: a
+    /// slash command appears as the person typed it while the model gets its expansion.
+    pub fn run_turn_as(
+        &self,
+        thread: &mut Thread,
+        context: &[ContextBlock],
+        text: &str,
+        shown: &str,
+        cancel: &Cancel,
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> TurnReport {
         let c = &self.config;
         thread.messages.push(user_message(context, text, c.max_context_block_chars));
-        sink(AgentEvent::UserMessage { text: text.to_string() });
+        sink(AgentEvent::UserMessage { text: shown.to_string() });
         // The gate: tools that would change the project are neither offered nor run in a read-only thread.
         let all = self.env.tools();
         let offered: Vec<&(ToolSpec, bool)> = all.iter().filter(|(_, read_only)| c.profile.allows(*read_only)).collect();

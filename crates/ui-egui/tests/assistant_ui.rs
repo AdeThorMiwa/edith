@@ -336,3 +336,21 @@ fn the_chips_decide_what_is_sent_along_with_the_question() {
     let last = model.requests().pop().unwrap().messages.last().unwrap().text();
     assert!(last.contains("second") && !last.contains("[selection]") && !last.contains("[playhead]"), "{last}");
 }
+
+#[test]
+fn typing_a_slash_offers_the_commands_and_choosing_one_asks_for_it() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let model = scripted(vec![text_reply("The pacing is steady.")]);
+    d.app().session.assistant.use_model(model.clone());
+    d.open_assistant();
+    d.type_into_input("/pa");
+    d.wait("the command to be offered", |d| d.has("assistant.slash.pacing"));
+    assert!(!d.has("assistant.slash.glossary"), "only commands that match what was typed");
+    d.type_into_input("c");
+    d.click("assistant.slash.pacing");
+    d.ok("ui.key", json!({"key": "Enter"}));
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("steady")));
+    assert_eq!(d.entries()[0].1, "/pacing", "the conversation shows what was typed");
+    assert!(model.requests()[0].messages[0].text().contains("Review the pacing of the whole edit"));
+}

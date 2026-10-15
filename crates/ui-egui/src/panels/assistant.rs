@@ -46,6 +46,8 @@ struct Chat {
     chip_playhead: bool,
     error: Option<String>,
     polled_at: f64,
+    /// The slash commands (`/pacing`, …) as the engine lists them.
+    commands: Vec<Value>,
     /// The latest thread was picked once at the start; after that "no thread" means "a new one".
     picked_initial: bool,
 }
@@ -66,6 +68,7 @@ impl Chat {
             chip_playhead: true,
             error: None,
             polled_at: f64::NEG_INFINITY,
+            commands: Vec::new(),
             picked_initial: false,
         }
     }
@@ -92,6 +95,7 @@ enum Action {
     SelectThread(u64),
     Settings(Value),
     OpenConnections,
+    SetInput(String),
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -106,6 +110,11 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
             }
             chat.status = Some(v);
         }
+    }
+    if chat.commands.is_empty()
+        && let Ok(v) = app.session.execute("assistant.commands", json!({}))
+    {
+        chat.commands = v["commands"].as_array().cloned().unwrap_or_default();
     }
     let updating = chat.models.as_ref().and_then(|m| m.get("updating")).and_then(Value::as_bool).unwrap_or(false);
     if chat.ready() && (chat.models.is_none() || (updating && now - chat.models_at >= 0.5)) {
@@ -419,6 +428,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
     });
 
+    // ---- slash commands, while the message is just "/something" ----
+    let typing_slash = chat.input.starts_with('/') && !chat.input.contains(char::is_whitespace);
+    if typing_slash && ready {
+        let prefix = chat.input[1..].to_ascii_lowercase();
+        ui.horizontal_wrapped(|ui| {
+            for c in chat.commands.iter().filter(|c| c["name"].as_str().is_some_and(|n| n.starts_with(&prefix))) {
+                let name = c["name"].as_str().unwrap_or("");
+                let r = ui.button(format!("/{name}")).on_hover_text(c["description"].as_str().unwrap_or(""));
+                elems.push((format!("assistant.slash.{name}"), r.clone(), format!("/{name}")));
+                if r.clicked() {
+                    actions.push(Action::SetInput(format!("/{name} ")));
+                }
+            }
+        });
+    }
+
     // ---- input ----
     let input_id = egui::Id::new("assistant-input-field");
     let focused = ui.memory(|m| m.has_focus(input_id));
@@ -454,6 +479,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     for (id, r, label) in &elems {
         app.auto.add_response(id, r, label);
     }
+    let ctx = ui.ctx().clone();
     for a in actions {
         let mut chat = lock(&shared);
         match a {
@@ -496,6 +522,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 chat.status_at = f64::NEG_INFINITY;
             }
             Action::OpenConnections => app.show_panel(PanelKind::Connections),
+            Action::SetInput(text) => {
+                chat.input = text;
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new("assistant-input-field")));
+            }
         }
     }
 }

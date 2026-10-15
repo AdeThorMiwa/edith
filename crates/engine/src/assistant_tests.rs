@@ -450,7 +450,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "1");
+    assert_eq!(trace.meta.prompt_version, "2");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));
@@ -541,4 +541,40 @@ fn real_assistant_answers_about_the_demo_project_using_its_tools() {
     assert!(!calls.is_empty(), "the model never used a tool");
     let text = r["text"].as_str().unwrap().to_lowercase();
     assert!(text.contains("ocean") && text.contains("26"), "the answer should name the first clip and the length: {text}");
+}
+
+#[test]
+fn slash_commands_are_listed_and_the_model_gets_the_expansion_while_the_person_sees_what_they_typed() {
+    let mut s = demo();
+    let list = s.execute("assistant.commands", json!({})).unwrap();
+    let names: Vec<&str> = list["commands"].as_array().unwrap().iter().filter_map(|c| c["name"].as_str()).collect();
+    assert_eq!(names, ["explain-cut", "pacing", "summarize", "glossary"]);
+    assert_eq!(list["commands"][3]["takesText"], true);
+    assert_eq!(list["commands"][1]["takesText"], false);
+    let model = scripted(vec![text_reply("The pacing is steady."), text_reply("A J-cut is...")]);
+    s.assistant.use_model(model.clone());
+    let r = s.execute("assistant.send", json!({"text": "/pacing", "wait": true})).unwrap();
+    assert!(model.requests()[0].messages[0].text().contains("Review the pacing of the whole edit"), "the model is asked the expansion");
+    let events = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap()["events"].clone();
+    assert_eq!(events[0], json!({"type": "user_message", "text": "/pacing"}), "the conversation shows what was typed");
+    // a command with text
+    s.execute("assistant.send", json!({"text": "/glossary J-cut", "thread": r["thread"], "wait": true})).unwrap();
+    assert!(model.requests()[1].messages.last().unwrap().text().contains("\"J-cut\""));
+}
+
+#[test]
+fn a_bad_slash_command_is_refused_and_leaves_no_thread_but_a_path_is_just_text() {
+    let mut s = demo();
+    let model = scripted(vec![text_reply("ok")]);
+    s.assistant.use_model(model.clone());
+    for bad in ["/nope", "/glossary", "/pacingx"] {
+        let e = s.execute("assistant.send", json!({"text": bad})).unwrap_err().to_string();
+        assert!(e.contains("/pacing") || e.contains("for example"), "{bad}: {e}");
+    }
+    assert!(s.assistant.threads.is_empty(), "refused commands leave no thread behind");
+    assert!(model.requests().is_empty());
+    // a message that merely starts with a slash is an ordinary message
+    let r = s.execute("assistant.send", json!({"text": "/Users/me/clip.mp4 will not play, why?", "wait": true})).unwrap();
+    assert_eq!(r["finish"]["kind"], "done");
+    assert!(model.requests()[0].messages[0].text().contains("/Users/me/clip.mp4"));
 }

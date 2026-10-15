@@ -17,6 +17,7 @@
 //! | `assistant.thread` | a thread's state and the events since an index (the stream the panel draws) |
 //! | `assistant.cancel` | Stop the running turn |
 //! | `assistant.trace` | a thread's run as JSON lines (replayable, for evaluation and bug reports) |
+//! | `assistant.commands` | the slash commands (`/pacing`, `/glossary term`, …); `assistant.send` expands them |
 //!
 //! The assistant is read-only: its tools only look at the project (`assistant_tools`). Nothing here
 //! stores or returns a provider key; the provider reads it from the keychain per request.
@@ -506,6 +507,12 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`wait` must be true or false")),
     };
     let ctx = context_blocks(p, cmd)?;
+    // A slash command is expanded now, before any thread exists, so a mistyped one leaves nothing behind.
+    let ask = match edith_ai::PromptPack::builtin().expand(text) {
+        Ok(Some(expanded)) => expanded,
+        Ok(None) => text.to_string(),
+        Err(e) => return Err(bad(cmd, e)),
+    };
     let id = match p.get("thread").filter(|v| !v.is_null()) {
         Some(_) => thread_arg(s, p, cmd)?,
         None => new_slot(s, &text.chars().take(60).collect::<String>())?,
@@ -530,7 +537,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         st.finish = None;
         shared.cancel.store(false, Ordering::SeqCst);
     }
-    let (worker_shared, progress, result, user_text) = (shared.clone(), job.progress.clone(), job.result.clone(), text.to_string());
+    let (worker_shared, progress, result, user_text, shown_text) = (shared.clone(), job.progress.clone(), job.result.clone(), ask, text.to_string());
     let run = crate::export_tools::guard_job(job.progress.clone(), job.result.clone(), move || {
         // However this body ends (even in a panic), the thread stops being "running".
         struct Done(Arc<ThreadShared>);
@@ -553,7 +560,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
             let fresh = Trace::new(st.trace.meta.clone());
             (st.thread.clone(), std::mem::replace(&mut st.trace, fresh))
         };
-        let report = assistant.run_turn(&mut thread, &ctx, &user_text, &worker_shared.cancel, &mut |ev| push_event(&worker_shared, ev));
+        let report = assistant.run_turn_as(&mut thread, &ctx, &user_text, &shown_text, &worker_shared.cancel, &mut |ev| push_event(&worker_shared, ev));
         {
             let mut st = lock(&worker_shared.state);
             let this_turn = std::mem::replace(&mut st.trace, earlier);
@@ -641,6 +648,13 @@ fn trace(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"thread": id, "jsonl": st.trace.to_jsonl()}))
 }
 
+fn slash_commands(_s: &mut Session, _p: &Value) -> Result<Value> {
+    let pack = edith_ai::PromptPack::builtin();
+    Ok(
+        json!({"commands": pack.commands.iter().map(|c| json!({"name": c.name, "description": c.description, "takesText": c.template.contains("{args}")})).collect::<Vec<_>>(), "promptVersion": pack.version}),
+    )
+}
+
 fn spec(id: &'static str, label: &'static str, params: &'static str, run: fn(&mut Session, &Value) -> Result<Value>) -> CommandSpec {
     CommandSpec { id, label, menu: &[], shortcut: None, params, enabled: always, run, journal: false }
 }
@@ -663,5 +677,6 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("assistant.thread", "Assistant Thread", r#"{"thread":id,"since":u64?}"#, thread_view),
         spec("assistant.cancel", "Stop the Assistant", r#"{"thread":id}"#, cancel),
         spec("assistant.trace", "Assistant Trace", r#"{"thread":id}"#, trace),
+        spec("assistant.commands", "Assistant Slash Commands", "{}", slash_commands),
     ]
 }

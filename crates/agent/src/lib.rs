@@ -28,7 +28,7 @@ mod trace;
 pub use agent::{Agent, AgentConfig, AgentEvent, Finish, Thread, TurnReport};
 pub use context::{ContextBlock, clip_text, user_message};
 pub use environment::{Environment, Profile, ToolOutput};
-pub use prompt::PromptPack;
+pub use prompt::{Command, PromptPack};
 pub use trace::{Trace, TraceMeta};
 
 #[cfg(test)]

@@ -52,7 +52,21 @@ impl Assistant {
 
     /// Runs one turn on `thread`. See [`Agent::run_turn`].
     pub fn run_turn(&self, thread: &mut Thread, context: &[ContextBlock], text: &str, cancel: &Cancel, sink: &mut dyn FnMut(AgentEvent)) -> TurnReport {
-        Agent { model: &*self.model, env: &*self.env, pack: self.pack.clone(), config: self.config.clone() }.run_turn(thread, context, text, cancel, sink)
+        self.run_turn_as(thread, context, text, text, cancel, sink)
+    }
+
+    /// Runs one turn asking the model `text` while the conversation shows `shown` (slash commands).
+    pub fn run_turn_as(
+        &self,
+        thread: &mut Thread,
+        context: &[ContextBlock],
+        text: &str,
+        shown: &str,
+        cancel: &Cancel,
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> TurnReport {
+        Agent { model: &*self.model, env: &*self.env, pack: self.pack.clone(), config: self.config.clone() }
+            .run_turn_as(thread, context, text, shown, cancel, sink)
     }
 }
 
