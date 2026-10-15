@@ -3661,3 +3661,6 @@
 	Could not start the sign-in: {why}	No se pudo iniciar la sesión: {why}
 	Disconnected {name}.	{name} desconectado.
 	Connected to {name}.	Conectado a {name}.
+	Check	Comprobar
+	Checking…	Comprobando…
+	Running · models: {count}	En marcha · modelos: {count}

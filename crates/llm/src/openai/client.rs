@@ -2,7 +2,7 @@
 //! request log, timeouts and the size caps all apply). It reads the key from a source on every
 //! request and never keeps it; a local server needs no key at all.
 
-use super::{Flavor, StreamAssembler, build_body, parse_models};
+use super::{Flavor, NativeList, StreamAssembler, build_body, parse_lmstudio_models, parse_models, parse_ollama_show};
 use crate::error::error_from_http;
 use crate::key_source::KeySource;
 use crate::{Cancel, ChatModel, LlmError, ModelInfo, Request, Response, StreamEvent};
@@ -48,6 +48,64 @@ impl OpenAiCompatible {
                 store.forget_cached(name);
             }
         })
+    }
+
+    /// The server without the `/v1` the OpenAI-style routes live under (where the native ones are).
+    fn origin(&self) -> &str {
+        self.base_url.strip_suffix("/v1").unwrap_or(&self.base_url)
+    }
+
+    /// Adds what a local server knows about its models. Anything that cannot be learned is left
+    /// unknown, and a server that does not answer ends the effort quietly: the plain list stands.
+    fn enrich(&self, list: Vec<ModelInfo>) -> Vec<ModelInfo> {
+        const LOOK: Duration = Duration::from_secs(5);
+        match self.flavor.native {
+            NativeList::None => list,
+            NativeList::Ollama => {
+                let mut out = Vec::with_capacity(list.len());
+                let mut reachable = true;
+                for (i, mut m) in list.into_iter().enumerate() {
+                    if reachable && i < 60 {
+                        let body = serde_json::json!({"model": m.id}).to_string().into_bytes();
+                        let mut req = NetRequest::post(&format!("{}/api/show", self.origin()), body).header("content-type", "application/json");
+                        req.timeout = Some(LOOK);
+                        match self.client.send(&req) {
+                            Ok(r) if r.ok() => {
+                                if let Some(local) = parse_ollama_show(&r.body) {
+                                    if !local.chat {
+                                        continue;
+                                    }
+                                    m.capabilities = local.capabilities;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(_) => reachable = false,
+                        }
+                    }
+                    out.push(m);
+                }
+                out
+            }
+            NativeList::LmStudio => {
+                let mut req = NetRequest::get(&format!("{}/api/v0/models", self.origin()));
+                req.timeout = Some(LOOK);
+                let Ok(r) = self.client.send(&req) else { return list };
+                if !r.ok() {
+                    return list;
+                }
+                let known = parse_lmstudio_models(&r.body);
+                list.into_iter()
+                    .filter_map(|mut m| match known.iter().find(|(id, _)| *id == m.id) {
+                        Some((_, local)) if !local.chat => None,
+                        Some((_, local)) => {
+                            m.capabilities = local.capabilities.clone();
+                            Some(m)
+                        }
+                        None => Some(m),
+                    })
+                    .collect()
+            }
+        }
     }
 
     /// How long one reply may take in total.
@@ -128,7 +186,7 @@ impl ChatModel for OpenAiCompatible {
         if !resp.ok() {
             return Err(self.after_error(Self::scrub(error_from_http(resp.status, &resp.body), &key)));
         }
-        parse_models(&resp.body).map_err(|e| Self::scrub(e, &key))
+        parse_models(&resp.body).map(|list| self.enrich(list)).map_err(|e| Self::scrub(e, &key))
     }
 
     fn stream(&self, request: &Request, cancel: &Cancel, sink: &mut dyn FnMut(StreamEvent)) -> Result<Response, LlmError> {
@@ -357,6 +415,62 @@ mod tests {
         assert!(seen.starts_with("GET /models"), "{seen}");
         let s = serve(|_, _| response(401, &[], br#"{"error":{"code":401,"message":"no"}}"#));
         assert!(matches!(model(&s.url).models(), Err(LlmError::Auth(_))));
+    }
+
+    #[test]
+    fn ollama_models_get_their_badges_and_embedding_models_are_left_out() {
+        let s = serve(|_, req| {
+            let body = if req.starts_with("GET /v1/models") {
+                r#"{"object":"list","data":[{"id":"llama3.2:3b"},{"id":"nomic-embed-text"},{"id":"qwen3:8b"}]}"#
+            } else if req.contains("\"llama3.2:3b\"") {
+                r#"{"capabilities":["completion","tools","vision"],"model_info":{"llama.context_length":131072}}"#
+            } else if req.contains("nomic-embed-text") {
+                r#"{"capabilities":["embedding"]}"#
+            } else {
+                r#"{"capabilities":["completion","thinking"]}"#
+            };
+            response(200, &[("content-type", "application/json")], body.as_bytes())
+        });
+        let m = OpenAiCompatible::new(net(), Flavor::OLLAMA, &format!("{}/v1", s.url), None);
+        let list = m.models().unwrap();
+        let ids: Vec<_> = list.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["llama3.2:3b", "qwen3:8b"]);
+        assert!(list[0].capabilities.tools && list[0].capabilities.images && list[0].capabilities.context_tokens == 131_072);
+        assert!(list[1].capabilities.thinking && !list[1].capabilities.tools);
+        let seen = s.requests.lock().unwrap();
+        assert!(seen.iter().any(|r| r.starts_with("POST /api/show")), "{seen:?}");
+        assert!(seen.iter().all(|r| !r.to_ascii_lowercase().contains("authorization")), "a local server gets no key");
+    }
+
+    #[test]
+    fn a_local_server_that_cannot_say_leaves_the_plain_list() {
+        // Ollama answering /api/show with an error: the models stay, with nothing claimed
+        let s = serve(
+            |_, req| {
+                if req.starts_with("GET /v1/models") { response(200, &[], br#"{"data":[{"id":"a"},{"id":"b"}]}"#) } else { response(500, &[], b"{}") }
+            },
+        );
+        let list = OpenAiCompatible::new(net(), Flavor::OLLAMA, &format!("{}/v1", s.url), None).models().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].capabilities, crate::Capabilities::default());
+        // LM Studio: vision and embedding models are told apart from /api/v0/models
+        let s = serve(|_, req| {
+            if req.starts_with("GET /v1/models") {
+                response(200, &[], br#"{"data":[{"id":"vl"},{"id":"txt"},{"id":"emb"},{"id":"new-one"}]}"#)
+            } else {
+                response(
+                    200,
+                    &[],
+                    br#"{"data":[{"id":"vl","type":"vlm","max_context_length":32768},{"id":"txt","type":"llm","max_context_length":8192},{"id":"emb","type":"embeddings"}]}"#,
+                )
+            }
+        });
+        let list = OpenAiCompatible::new(net(), Flavor::LMSTUDIO, &format!("{}/v1", s.url), None).models().unwrap();
+        assert_eq!(list.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["vl", "txt", "new-one"]);
+        assert!(list[0].capabilities.images && list[1].capabilities.context_tokens == 8192 && list[2].capabilities == crate::Capabilities::default());
+        // a server with no native list at all (the list endpoint itself is all there is)
+        let s = serve(|_, _| response(200, &[], br#"{"data":[{"id":"a"}]}"#));
+        assert_eq!(OpenAiCompatible::new(net(), Flavor::LMSTUDIO, &format!("{}/v1", s.url), None).models().unwrap().len(), 1);
     }
 
     /// Talks to OpenRouter with the key stored in the keychain: lists models, then asks a free one

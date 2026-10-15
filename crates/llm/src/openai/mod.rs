@@ -18,7 +18,7 @@ pub use client::OpenAiCompatible;
 #[cfg(test)]
 pub(crate) use stream::fixtures as stream_fixtures;
 
-pub use models::parse_models;
+pub use models::{LocalModel, parse_lmstudio_models, parse_models, parse_ollama_show};
 pub use stream::StreamAssembler;
 pub use wire::build_body;
 
@@ -33,6 +33,16 @@ pub enum EffortStyle {
     ReasoningEffort,
 }
 
+/// A server's own model list, richer than the OpenAI-style one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeList {
+    None,
+    /// Ollama: `POST /api/show` for each model says what it can do.
+    Ollama,
+    /// LM Studio: `GET /api/v0/models` says which are vision models and how long a context they take.
+    LmStudio,
+}
+
 /// The small differences between servers that speak this API.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Flavor {
@@ -41,13 +51,16 @@ pub struct Flavor {
     /// The request field that limits the reply (`max_tokens`, or `max_completion_tokens` for OpenAI).
     pub max_tokens_field: &'static str,
     pub effort: EffortStyle,
+    pub native: NativeList,
 }
 
 impl Flavor {
-    pub const OPENROUTER: Flavor = Flavor { provider: "openrouter", max_tokens_field: "max_tokens", effort: EffortStyle::ReasoningObject };
-    pub const OPENAI: Flavor = Flavor { provider: "openai", max_tokens_field: "max_completion_tokens", effort: EffortStyle::ReasoningEffort };
-    pub const OLLAMA: Flavor = Flavor { provider: "ollama", max_tokens_field: "max_tokens", effort: EffortStyle::None };
-    pub const LMSTUDIO: Flavor = Flavor { provider: "lmstudio", max_tokens_field: "max_tokens", effort: EffortStyle::None };
+    pub const OPENROUTER: Flavor =
+        Flavor { provider: "openrouter", max_tokens_field: "max_tokens", effort: EffortStyle::ReasoningObject, native: NativeList::None };
+    pub const OPENAI: Flavor =
+        Flavor { provider: "openai", max_tokens_field: "max_completion_tokens", effort: EffortStyle::ReasoningEffort, native: NativeList::None };
+    pub const OLLAMA: Flavor = Flavor { provider: "ollama", max_tokens_field: "max_tokens", effort: EffortStyle::None, native: NativeList::Ollama };
+    pub const LMSTUDIO: Flavor = Flavor { provider: "lmstudio", max_tokens_field: "max_tokens", effort: EffortStyle::None, native: NativeList::LmStudio };
 
     /// The flavor for a service id, if it speaks this API.
     pub fn for_service(id: &str) -> Option<Flavor> {

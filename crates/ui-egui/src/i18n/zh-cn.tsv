@@ -3639,3 +3639,6 @@
 	Could not start the sign-in: {why}	无法开始登录：{why}
 	Disconnected {name}.	已断开 {name}。
 	Connected to {name}.	已连接到 {name}。
+	Check	检查
+	Checking…	正在检查…
+	Running · models: {count}	运行中 · 模型数：{count}

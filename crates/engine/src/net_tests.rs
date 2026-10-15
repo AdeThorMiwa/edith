@@ -364,3 +364,74 @@ mod sign_in {
         assert_eq!(attempt("openrouter"), None);
     }
 }
+
+// ---- looking for a local model server (F03.3e) ---------------------------------------------
+
+#[cfg(feature = "net")]
+mod local_servers {
+    use super::*;
+    use crate::net_commands::probe::{Probe, state, use_test_base};
+    use edith_net::testserver::{response, serve};
+
+    #[test]
+    fn a_running_server_is_found_with_its_models_and_a_missing_one_says_so() {
+        let _g = guard();
+        let mut s = Session::default();
+        let up = serve(|_, _| response(200, &[("content-type", "application/json")], br#"{"data":[{"id":"llama3.2:3b"},{"id":"qwen3:8b"}]}"#));
+        use_test_base("ollama", Some(&format!("{}/v1", up.url)));
+        let r = s.execute("connections.probe", json!({"service": "ollama", "wait": true})).unwrap();
+        assert_eq!(r["probe"], json!({"state": "up", "models": 2}));
+        assert_eq!(state("ollama"), Some(Probe::Up { models: 2 }));
+        let listed = s.execute("connections.list", json!({})).unwrap();
+        let row = listed["services"].as_array().unwrap().iter().find(|x| x["id"] == "ollama").unwrap().clone();
+        assert_eq!(row["probe"]["state"], "up");
+        assert!(up.requests.lock().unwrap().iter().all(|q| !q.to_ascii_lowercase().contains("authorization")));
+        assert!(edith_net::shared().entries(None).iter().any(|e| e.url.contains("/v1/models")), "the check is in the request log like any other");
+
+        // nothing listening there
+        let closed = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        use_test_base("lmstudio", Some(&format!("http://127.0.0.1:{closed}/v1")));
+        let r = s.execute("connections.probe", json!({"service": "lmstudio", "wait": true})).unwrap();
+        assert_eq!(r["probe"]["state"], "down");
+        assert!(r["probe"]["message"].as_str().unwrap().contains("not running"), "{r}");
+        // a server that answers with nonsense is down too, with a plain message
+        let odd = serve(|_, _| response(200, &[], b"<html>hello</html>"));
+        use_test_base("lmstudio", Some(&format!("{}/v1", odd.url)));
+        assert_eq!(s.execute("connections.probe", json!({"service": "lmstudio", "wait": true})).unwrap()["probe"]["state"], "down");
+        use_test_base("ollama", None);
+        use_test_base("lmstudio", None);
+    }
+
+    #[test]
+    fn only_local_servers_can_be_checked_and_offline_mode_blocks_it() {
+        let _g = guard();
+        let mut s = Session::default();
+        for bad in [
+            json!({}),
+            json!({"service": 5}),
+            json!({"service": "openrouter"}),
+            json!({"service": "anthropic"}),
+            json!({"service": "nope"}),
+            json!({"service": "ollama", "wait": "yes"}),
+        ] {
+            assert!(s.execute("connections.probe", bad.clone()).is_err(), "{bad}");
+        }
+        s.execute("net.setOffline", json!({"offline": true})).unwrap();
+        let e = s.execute("connections.probe", json!({"service": "ollama"})).unwrap_err().to_string();
+        assert!(e.contains("Offline"), "{e}");
+    }
+
+    #[test]
+    fn an_unreachable_local_server_is_described_as_not_started_not_as_a_network_failure() {
+        use crate::assistant::friendly;
+        use edith_net::NetError;
+        let down = edith_ai::LlmError::Net(NetError::Transport("connection refused".into()));
+        let say = friendly(&down, Some("Ollama (on this computer)"));
+        assert!(say.contains("Is it running") && say.contains("Ollama"), "{say}");
+        assert!(!friendly(&down, None).contains("Is it running"), "a remote provider keeps its plain error");
+        assert!(!friendly(&edith_ai::LlmError::Auth("no".into()), Some("Ollama")).contains("Is it running"));
+    }
+}

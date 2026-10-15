@@ -48,6 +48,12 @@ fn set(service: &str, attempt: Option<Attempt>) {
     CHANGES.fetch_add(1, Ordering::SeqCst);
 }
 
+/// Tells panels that something changed (a check finished).
+#[cfg(feature = "net")]
+pub(super) fn bump() {
+    CHANGES.fetch_add(1, Ordering::SeqCst);
+}
+
 /// Where this service's sign-in is, if one has started and not been cleared.
 pub fn attempt(service: &str) -> Option<Attempt> {
     ATTEMPTS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(s, _)| s == service).map(|(_, a)| a.clone())

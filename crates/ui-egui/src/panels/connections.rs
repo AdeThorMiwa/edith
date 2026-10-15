@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, RichText, Sense, vec2};
 use filmcraft_engine::net_commands::connect::{self, Attempt};
+use filmcraft_engine::net_commands::probe::{self, Probe};
 use filmcraft_engine::net_commands::{self as net, Kind, Outcome, Service};
 use filmcraft_engine::panels::Level;
 use serde_json::json;
@@ -45,6 +46,7 @@ enum Action {
     Save(&'static Service, String),
     Remove(&'static Service),
     Connect(&'static Service),
+    Probe(&'static Service),
     CancelConnect(u64),
     Reopen(String),
     Disconnect(&'static Service),
@@ -134,6 +136,32 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             });
             ui.label(RichText::new(service.note).size(11.0).color(t.text_faint));
+            if service.kind == Kind::Local {
+                // A model server on this computer: nothing to store, only a button to look for it.
+                let found = probe::state(service.id);
+                ui.horizontal(|ui| {
+                    let r = ui.add_enabled(found != Some(Probe::Checking), egui::Button::new(tl!("Check")));
+                    elems.push((format!("connections.{}.check", service.id), r.clone(), format!("Check for {}", service.label)));
+                    if r.clicked() {
+                        actions.push(Action::Probe(service));
+                    }
+                    match &found {
+                        Some(Probe::Checking) => {
+                            ui.label(RichText::new(tl!("Checking…")).size(11.0).color(t.text_dim));
+                        }
+                        Some(Probe::Up { models }) => {
+                            ui.label(
+                                RichText::new(tlf!("Running · models: {count}", count = models)).size(11.0).color(egui::Color32::from_rgb(0x4c, 0xaf, 0x6a)),
+                            );
+                        }
+                        Some(Probe::Down(why)) => {
+                            ui.label(RichText::new(why).size(11.0).color(WARN));
+                        }
+                        None => {}
+                    }
+                });
+                continue;
+            }
             let (Some(_), true) = (service.secret, secrets) else { continue };
             let attempt = connect::attempt(service.id);
             if service.kind == Kind::SignIn {
@@ -272,6 +300,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     app.ui.status = tlf!("Could not start the sign-in: {why}", why = e);
                 }
             },
+            Action::Probe(service) => {
+                if let Err(e) = app.session.execute("connections.probe", json!({"service": service.id})) {
+                    app.ui.status = e.to_string();
+                }
+            }
             Action::CancelConnect(job) => {
                 let _ = app.session.execute("jobs.cancel", json!({"job": job}));
             }
@@ -302,7 +335,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
     }
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("connections-waiting"), waiting.clone()));
-    ui.ctx().request_repaint_after(std::time::Duration::from_millis(if waiting.is_empty() { 2000 } else { 400 }));
+    let checking = cache.statuses.iter().any(|(sv, _)| probe::state(sv.id) == Some(Probe::Checking));
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(if waiting.is_empty() && !checking { 2000 } else { 400 }));
 }
 
 /// The Offline switch at the right of the status bar: dim "Online", or an amber "Offline" while

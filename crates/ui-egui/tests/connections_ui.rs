@@ -342,3 +342,38 @@ mod sign_in {
         use_test_provider(None);
     }
 }
+
+// ---- looking for local model servers (F03.3e) ----------------------------------------------
+
+#[test]
+fn check_looks_for_a_local_server_once_and_reports_what_it_found() {
+    use edith_net::testserver::{response, serve};
+    use filmcraft_engine::net_commands::probe::use_test_base;
+    let _g = guard();
+    let server = serve(|_, _| response(200, &[("content-type", "application/json")], br#"{"data":[{"id":"llama3.2:3b"}]}"#));
+    use_test_base("ollama", Some(&format!("{}/v1", server.url)));
+    let mut d = Driver::new();
+    d.open_connections();
+    assert!(d.has("connections.ollama.check") && d.has("connections.lmstudio.check"));
+    assert!(!d.has("connections.openrouter.check") && !d.has("connections.anthropic.check"), "only local servers are checked");
+    assert_eq!(server.hits(), 0, "nothing is looked for until the person asks");
+    // the local servers are at the bottom of the list: scroll the panel until they are on screen
+    d.ok("ui.scroll", json!({"id": "connections.offline", "dy": -700.0}));
+    d.frames(4);
+    d.click("connections.ollama.check");
+    let started = std::time::Instant::now();
+    loop {
+        d.frames(2);
+        let rows = d.exec("connections.list", json!({}));
+        let ollama = rows["services"].as_array().unwrap().iter().find(|s| s["id"] == "ollama").unwrap().clone();
+        if ollama["probe"]["state"] == "up" {
+            assert_eq!(ollama["probe"]["models"], 1);
+            break;
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "no answer: {ollama}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(d.has("connections.ollama.check"), "the button is back for another look");
+    assert!(edith_net::shared().entries(None).iter().any(|e| e.url.contains("/v1/models")));
+    use_test_base("ollama", None);
+}

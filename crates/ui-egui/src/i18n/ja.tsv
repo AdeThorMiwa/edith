@@ -3663,3 +3663,6 @@
 	Could not start the sign-in: {why}	サインインを開始できませんでした: {why}
 	Disconnected {name}.	{name} を切断しました。
 	Connected to {name}.	{name} に接続しました。
+	Check	確認
+	Checking…	確認中…
+	Running · models: {count}	実行中 · モデル数: {count}

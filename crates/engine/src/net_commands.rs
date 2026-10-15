@@ -11,6 +11,7 @@
 //! | `connections.list` | every known service with its kind, whether a key is stored, where to get one, and where a sign-in is (`connecting`) |
 //! | `connections.connect` | sign in to a service through its own page (a job; returns the address to open); see [`connect`] |
 //! | `connections.disconnect` | stop a sign-in and remove the stored key |
+//! | `connections.probe` | look once for a model server on this computer (Ollama, LM Studio); see [`probe`] |
 //!
 //! There is deliberately no command that stores or reads a secret: a key can only be typed into
 //! Settings ▸ Connections (or arrive through a sign-in), so it never appears in a command's
@@ -18,6 +19,7 @@
 //! commands is journaled.
 
 pub mod connect;
+pub mod probe;
 
 use std::path::Path;
 
@@ -216,6 +218,7 @@ fn connections_list(_s: &mut Session, _p: &Value) -> Result<Value> {
             let mut v = serde_json::to_value(st.service).unwrap_or(Value::Null);
             v["stored"] = json!(st.stored);
             v["connecting"] = connect::attempt(st.service.id).map_or(Value::Null, |a| a.to_json());
+            v["probe"] = probe::state(st.service.id).map_or(Value::Null, |p| p.to_json());
             v
         })
         .collect();
@@ -241,6 +244,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("secrets.delete", "Delete a Stored Secret", r#"{"name":str}"#, can_use_secrets, secrets_delete),
         spec("connections.list", "List Connections", "{}", always, connections_list),
         spec("connections.connect", "Connect a Service", r#"{"service":str}"#, always, connect::connect),
+        spec("connections.probe", "Look for a Model Server", r#"{"service":str,"wait":bool?}"#, always, probe::probe),
         spec("connections.disconnect", "Disconnect a Service", r#"{"service":str}"#, can_use_secrets, connect::disconnect),
     ]
 }

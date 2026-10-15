@@ -85,6 +85,65 @@ pub fn parse_models(body: &[u8]) -> Result<Vec<ModelInfo>, LlmError> {
     Ok(out)
 }
 
+/// What a local server says about one model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalModel {
+    /// Can chat (embedding models cannot).
+    pub chat: bool,
+    pub capabilities: Capabilities,
+}
+
+/// Ollama's `POST /api/show` answer: `capabilities` is a list of words (`completion`, `vision`,
+/// `tools`, `thinking`, `embedding`) and the context length sits in `model_info` under a key that
+/// ends in `.context_length`. `None` when the answer is not readable.
+pub fn parse_ollama_show(body: &[u8]) -> Option<LocalModel> {
+    let v: Value = serde_json::from_slice(body).ok()?;
+    let words = strings(v.get("capabilities"));
+    // Older servers send no capabilities at all: then nothing is known, and the model stays a chat model.
+    let known = v.get("capabilities").is_some_and(Value::is_array);
+    let context = v
+        .get("model_info")
+        .and_then(Value::as_object)
+        .and_then(|o| o.iter().find(|(k, _)| k.ends_with(".context_length")).and_then(|(_, n)| n.as_u64()))
+        .unwrap_or(0);
+    Some(LocalModel {
+        chat: !known || words.contains(&"completion"),
+        capabilities: Capabilities {
+            tools: words.contains(&"tools"),
+            images: words.contains(&"vision"),
+            thinking: words.contains(&"thinking"),
+            context_tokens: context,
+            ..Capabilities::default()
+        },
+    })
+}
+
+/// LM Studio's `GET /api/v0/models`: for each model its id, whether it is a language model (`llm`),
+/// a vision model (`vlm`) or an embedding model, and its largest context. What it says about tool
+/// use is not documented, so that is left unknown.
+pub fn parse_lmstudio_models(body: &[u8]) -> Vec<(String, LocalModel)> {
+    let Ok(v) = serde_json::from_slice::<Value>(body) else { return Vec::new() };
+    let Some(data) = v.get("data").and_then(Value::as_array) else { return Vec::new() };
+    data.iter()
+        .take(MAX_MODELS)
+        .filter_map(|m| {
+            let id = m.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())?;
+            let kind = m.get("type").and_then(Value::as_str).unwrap_or("");
+            Some((
+                id.chars().take(100).collect(),
+                LocalModel {
+                    chat: kind != "embeddings",
+                    capabilities: Capabilities {
+                        images: kind == "vlm",
+                        context_tokens: m.get("max_context_length").and_then(Value::as_u64).unwrap_or(0),
+                        ..Capabilities::default()
+                    },
+                },
+            ))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +203,44 @@ mod tests {
         assert!(parse_models(br#"{"data":[]}"#).unwrap().is_empty());
         let many = format!(r#"{{"data":[{}]}}"#, (0..MAX_MODELS + 50).map(|i| format!(r#"{{"id":"m{i}"}}"#)).collect::<Vec<_>>().join(","));
         assert_eq!(parse_models(many.as_bytes()).unwrap().len(), MAX_MODELS);
+    }
+
+    #[test]
+    fn ollama_says_what_each_model_can_do() {
+        let m = parse_ollama_show(
+            br#"{"capabilities":["completion","vision","tools"],"model_info":{"general.architecture":"llama","llama.context_length":131072}}"#,
+        )
+        .unwrap();
+        assert!(m.chat && m.capabilities.tools && m.capabilities.images && !m.capabilities.thinking);
+        assert_eq!(m.capabilities.context_tokens, 131_072);
+        let think = parse_ollama_show(br#"{"capabilities":["completion","thinking"],"model_info":{"qwen3.context_length":40960}}"#).unwrap();
+        assert!(think.capabilities.thinking && !think.capabilities.tools);
+        assert_eq!(think.capabilities.context_tokens, 40_960);
+        let embed = parse_ollama_show(br#"{"capabilities":["embedding"]}"#).unwrap();
+        assert!(!embed.chat, "an embedding model cannot chat");
+        let old = parse_ollama_show(br#"{"details":{"family":"llama"}}"#).unwrap();
+        assert!(old.chat && old.capabilities == Capabilities::default(), "an old server says nothing, so nothing is claimed");
+        for bad in [&b"nope"[..], b"[]", b""] {
+            assert!(parse_ollama_show(bad).is_none_or(|m| m.capabilities == Capabilities::default()), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn lm_studio_marks_vision_and_embedding_models() {
+        let list = parse_lmstudio_models(
+            br#"{"object":"list","data":[
+              {"id":"qwen2-vl-7b-instruct","type":"vlm","max_context_length":32768,"state":"not-loaded"},
+              {"id":"llama-3.2-3b","type":"llm","max_context_length":131072},
+              {"id":"text-embedding-nomic","type":"embeddings","max_context_length":2048},
+              {"id":""},{"type":"llm"},5]}"#,
+        );
+        let ids: Vec<_> = list.iter().map(|(i, _)| i.as_str()).collect();
+        assert_eq!(ids, ["qwen2-vl-7b-instruct", "llama-3.2-3b", "text-embedding-nomic"]);
+        assert!(list[0].1.capabilities.images && !list[1].1.capabilities.images);
+        assert_eq!(list[1].1.capabilities.context_tokens, 131_072);
+        assert!(list[1].1.chat && !list[2].1.chat);
+        assert!(!list[1].1.capabilities.tools, "tool support is not claimed where the server does not say");
+        assert!(parse_lmstudio_models(b"nope").is_empty() && parse_lmstudio_models(br#"{"data":5}"#).is_empty());
     }
 
     #[test]

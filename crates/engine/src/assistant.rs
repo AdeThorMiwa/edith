@@ -437,6 +437,18 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"settings": settings_json(&s.assistant.settings), "saved": s.assistant.dir.is_some() && save_error.is_none(), "saveError": save_error}))
 }
 
+/// An error from a provider as one plain sentence. A model server on this computer that does not
+/// answer is most likely just not started.
+pub(crate) fn friendly(e: &edith_ai::LlmError, local: Option<&'static str>) -> String {
+    use edith_net::NetError;
+    match (e, local) {
+        (edith_ai::LlmError::Net(NetError::Transport(_) | NetError::Timeout), Some(label)) => {
+            format!("Could not reach {label}. Is it running? Start it, then refresh the model list.")
+        }
+        _ => e.to_string(),
+    }
+}
+
 fn start_model_fetch(s: &mut Session) {
     {
         let mut c = lock(&s.assistant.models);
@@ -447,6 +459,8 @@ fn start_model_fetch(s: &mut Session) {
     }
     let cache = s.assistant.models.clone();
     let generation = lock(&cache).generation;
+    let local_label = edith_ai::endpoints::is_local(&s.assistant.settings.service)
+        .then(|| edith_net::services::find(&s.assistant.settings.service).map_or("The model server", |sv| sv.label));
     match s.assistant_provider() {
         Err(e) => {
             let mut c = lock(&cache);
@@ -471,7 +485,7 @@ fn start_model_fetch(s: &mut Session) {
                             c.models = list;
                             c.error = None;
                         }
-                        Err(e) => c.error = Some(e.to_string()),
+                        Err(e) => c.error = Some(friendly(&e, local_label)),
                     }
                 }
             });
