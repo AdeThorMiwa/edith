@@ -3306,6 +3306,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::voiceover::commands());
     v.extend(crate::narration::commands());
     v.extend(crate::net_commands::commands());
+    v.extend(crate::assistant::commands());
     v.extend(crate::keyboard::commands());
     v.extend(crate::project_panel::commands());
     v.extend(crate::media_browser::commands());

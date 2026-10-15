@@ -98,8 +98,8 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `crates/ui-egui/src/lib.rs` | one line after `job_status`: the status-bar Offline switch | F02.6 |
 | `crates/ui-egui/src/i18n/{es,ja,zh-cn,pt-br}.tsv` | lines appended at the end for the Connections panel (23 each in es, ja, zh-cn; the panel title in pt-br); the tests insist every `tl!` string is translated in those languages | F02.6 |
 | `crates/ui-egui/Cargo.toml` | two dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`) so the UI tests use the in-memory secret store | F02.6 |
-| `crates/engine/Cargo.toml` | the `edith-net` dependency and a `net` feature that forwards to it (3 lines) | F02.5 |
-| `crates/engine/src/lib.rs` | `pub mod net_commands;` and `mod net_tests;` | F02.5 |
-| `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` in `build()` | F02.5 |
+| `crates/engine/Cargo.toml` | the `edith-net` and `edith-ai` dependencies and a `net` feature that forwards to them (4 lines) | F02.5, F03.1 |
+| `crates/engine/src/lib.rs` | `pub mod net_commands;`, `pub mod assistant;`, `mod assistant_tools;`, the test modules, and one `Session` field (`assistant`) with its initialiser | F02.5, F03.1 |
+| `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` and `v.extend(crate::assistant::commands());` in `build()` | F02.5, F03.1 |
 | `apps/filmcraft/Cargo.toml`, `apps/filmcraft-cli/Cargo.toml` | `net` added to `default`, plus a `net` feature (3 lines each, so the first row above changes too) | F02.5 |
-| `apps/filmcraft/src/main.rs`, `apps/filmcraft-cli/src/main.rs` | one line each: `net_commands::init(...)`, so Offline mode is remembered | F02.5 |
+| `apps/filmcraft/src/main.rs`, `apps/filmcraft-cli/src/main.rs` | two lines each: `net_commands::init(...)` (Offline mode is remembered) and `assistant.set_dir(...)` (the assistant's settings) | F02.5, F03.1 |

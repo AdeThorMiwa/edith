@@ -181,6 +181,13 @@ pub fn recent_requests(limit: usize) -> Vec<LogEntry> {
     net::shared().entries(Some(limit))
 }
 
+/// Whether a key is stored for the service with this id (`None`: the service has no key slot, or
+/// the keychain could not be asked). Does not read the key.
+pub fn connected(service_id: &str) -> Option<bool> {
+    let name = net::services::find(service_id)?.secret?;
+    keychain::has(name).ok()
+}
+
 /// Whether this build can store keys (built with the `net` feature).
 pub fn secrets_available() -> bool {
     cfg!(feature = "net")

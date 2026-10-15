@@ -18,7 +18,7 @@ speech-download = ["filmcraft-speech/download"]
 # Natural voices for Text to Speech: Kokoro-82M on candle (CPU) and their download.
 neural-voices = ["filmcraft-tts/kokoro", "speech-download"]
 # The network client, the OS keychain and sign-in (edith-net). Off in wasm builds.
-net = ["edith-net/oauth", "edith-net/keychain"]
+net = ["edith-net/oauth", "edith-net/keychain", "edith-ai/keychain"]
 
 [dependencies]
 filmcraft-time = { workspace = true }
@@ -40,6 +40,7 @@ filmcraft-interchange = { workspace = true }
 filmcraft-captions = { workspace = true }
 filmcraft-speech = { workspace = true }
 edith-net = { workspace = true }
+edith-ai = { workspace = true }
 filmcraft-tts = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -207,6 +207,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         );
         let mut session = Session::default();
         if let Some(dir) = data_dir.clone().or_else(default_data_dir) {
+            session.assistant.set_dir(&dir); // fork: the assistant's settings live in the data directory
             let mut cfg = AutosaveConfig::new(dir);
             cfg.local_offset = local_offset;
             if let Err(e) = session.start_autosave(cfg) {

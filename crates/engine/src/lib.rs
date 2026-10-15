@@ -11,6 +11,8 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod aaf_omf;
+pub mod assistant;
+mod assistant_tools;
 pub mod autosave;
 pub mod captions;
 pub mod clip_ops;
@@ -448,6 +450,8 @@ pub struct Session {
     pub media_stamps: std::collections::HashMap<String, media_watch::Stamp>,
     /// The stamps being taken on a worker thread ([`Session::start_media_scan`]).
     pub media_scan: Option<media_watch::MediaScan>,
+    /// The assistant: threads, settings, the worker's tool channel (fork; roadmap F03).
+    pub assistant: assistant::AssistantHub,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -540,6 +544,7 @@ impl Session {
             exec_depth: 0,
             media_stamps: Default::default(),
             media_scan: None,
+            assistant: Default::default(),
         }
     }
 
@@ -1212,6 +1217,8 @@ const MAX_SUBCLIP_CHAIN: usize = 16;
 mod aaf_omf_tests;
 #[cfg(test)]
 mod animated_image_tests;
+#[cfg(test)]
+mod assistant_tests;
 #[cfg(test)]
 mod audio_effects_tests;
 #[cfg(test)]

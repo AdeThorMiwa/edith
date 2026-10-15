@@ -2074,6 +2074,7 @@ dependencies = [
 name = "filmcraft-engine"
 version = "0.7.2"
 dependencies = [
+ "edith-ai",
  "edith-net",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
