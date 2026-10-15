@@ -262,6 +262,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 - F03.4 Gemini (free tier) and any OpenAI-compatible endpoint.
 - F03.5 ChatGPT and Google sign-in, once access is confirmed (D2).
 - F03.6 The agent evaluation suite and trace replay (§4.8): fixture projects, code graders, a runner that compares models and prompt versions. The scripted model and trace recorder arrive in F03.1; this step builds the suite on them.
+- F03.7 **Polish and defaults** (captured 2026-10-15 from the architect's first hands-on test; design notes below). No dependencies, so it can come before F03.3 if daily comfort matters more than more providers: your call.
 - Parked: hosting vendor agents over ACP (Claude Code, Codex, Gemini CLI), lane D.
 
 **Where it lives.** `edith-llm` (providers), `edith-agent` (the agent, §4.8), `edith-ai` (the facade), `crates/engine/src/assistant.rs` (threads, `Environment`, tools over the session), `panels/assistant.rs` and `PanelKind::Assistant`. Commands `assistant.connect|disconnect|send|cancel|threads|setModel`.
@@ -269,6 +270,24 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 **Done when.** You can connect through at least two lanes, ask "why does the cut at 00:42 feel abrupt?" and get an answer that cites your actual timeline; disconnecting removes the secret; tests pass against a mock provider with no live network.
 
 **Notes.** The mentor value is immediate for someone new to editing. Every later feature adds its tools here.
+
+#### F03.7: polish and defaults (captured 2026-10-15)
+
+**Source.** The architect's first run of the Assistant (2026-10-15): everything worked as designed, and this is what they want better. None of it was in the roadmap, so it lives here. It is a list of intentions with a design note each, not a spec; each item gets a short design pass when it is picked up. Size: M (about 15 to 40 agent-hours for the lot).
+
+1. **Defaults that suit how it is used.**
+   - The **Frame** chip is on by default for a model that can see, and the choice is remembered (chips become settings in `edith-ai-settings.json`, not per-session). Cost is small: a 768 px frame is about 450 tokens, a fraction of a cent on Haiku. The "Sent along:" line already shows what went with each message, so nothing is hidden.
+   - Transcript and Markers stay off unless the architect says otherwise; Transcript could turn itself on when a transcript exists near the playhead.
+   - Settings gets a "Defaults" group so the first-run experience can be tuned in one place.
+2. **The agent sees the UI by default.** A `screen_view` tool and a **Screen** chip that capture the whole editor window (the panels, the timeline, what the person is looking at), so "what does this button do?" and "why does my timeline look like that?" can be answered from the real screen.
+   - It is a UI-layer capability (the engine has no window), reusing the existing `ui.screenshot` path through a host hook, the way `HostHooks::open_url` works. About 1,300 px wide, so roughly 1,400 tokens per capture.
+   - A text companion, `ui_elements` (panels, their automation ids and labels), is far cheaper and carries the same structure: offer both, prefer text when it is enough.
+   - Known limit found earlier: a window on another macOS Space, or hidden, cannot be captured. The tool then says so and falls back to the Program frame, never returning a stale or blank picture.
+   - Privacy: password fields are masked on screen and keys are never in labels; the Screen chip shows in "Sent along:" like any other, can be turned off in Defaults, and the panel shows a one-time note the first time it is on.
+3. **Panel placement.** The Assistant opens small in the lower-left tab group. Wanted: a sensible home from the first open (a wide column on the right, beside Program and Properties, or a layout of its own), remembered per workspace, openable from a header button and a shortcut. Design: add the Assistant to the built-in Editing workspace and offer an "Edith" workspace preset (Assistant large, Program, Timeline); see how `panels/workspaces` stores layouts before touching `dock.rs`. Upstream-owned files touched are listed in `docs/fork.md`.
+4. **A visual polish pass.** The first version is plain on purpose. Candidates: message spacing and a clearer assistant/person distinction, code and table rendering in answers, copy buttons, long tool results collapsed with a size note, a compact header (the model as a small chip, not a wide combo), a "jump to latest" button, better empty and not-connected states, light-theme and high-DPI checks. Reference: Zed's agent panel. Done when the architect says it feels right in daily use; pictures reviewed in both themes.
+5. **Smaller things seen in use.** Thread titles are the first 60 characters of the first question: let the model title a thread after its first answer (a cheap call), and allow rename. Message actions: copy, retry, "continue" after a cut-off reply, and edit-and-resend as a new branch (the history stays append-only). Keyboard: focus the input from anywhere, Esc to stop, Up to recall the last question. Show thinking live as it streams, and a running token count during a turn.
+6. **The architect's own list.** "A few other things here and there" were mentioned but not itemised; they go here when sent.
 
 #### F03.1 design: Edith's own agent on the Anthropic API (drafted 2026-10-15)
 
