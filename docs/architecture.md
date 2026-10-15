@@ -25,7 +25,7 @@ Design principles:
  L6  apps/filmcraft · apps/filmcraft-cli · apps/filmcraft-web
  L5  ui-egui · automation · platform
  L4  engine
- L3  render · gpu · export · llm · agent · golden (test-only)
+ L3  render · gpu · export · llm · agent · ai · golden (test-only)
  L2  edit · codecs · interchange · captions · speech · tts · tts-text · net
  L1  frame · media · project · audio-dsp · text
  L0  foundation: time · geom · color · bitstream · testkit (dev-dependency only)
@@ -70,6 +70,7 @@ and `filmcraft-cli`.
 | `net` | L2 | the one place the app reaches the internet and holds credentials (fork, roadmap F02): `NetState` (Offline switch, redacted request log), the known-services list, and behind features that are off for wasm: `http` (HTTP client with timeouts, retries, rate limits, ETag cache, streaming), `keychain` (OS secret store, never read back by commands), `oauth` (PKCE, loopback redirect receiver). Commands: `net.*`, `secrets.*`, `connections.list` in `engine::net_commands` |
 | `llm` | L3 | model providers for the Edith agent (fork, roadmap F03): one `ChatModel` interface with neutral message, tool, stream-event and capability types; the Anthropic Messages API (request builder, stream assembler and model list parser as plain code, HTTPS client behind feature `net`); a scripted model for tests. Knows nothing about editing. Package name `edith-llm` |
 | `agent` | L3 | the Edith agent (fork, roadmap F03): the loop (tool calls answered in one message, valid thread after every ending, retries only before output), versioned prompt packs, context assembly, budgets, the read-only/propose profile, run traces with deterministic replay, and the `Environment` interface the engine implements. Talks to models only through `llm`. Same-layer edge to `llm`. Package name `edith-agent` |
+| `ai` | L3 | the facade the rest of the app uses for AI (fork, roadmap F03): re-exports `llm` and `agent`, and holds the user's AI settings (default model, budgets; a fork-owned file in the data directory), model badges and choice, the cost summary, the `Assistant`, and the provider for a service (feature `net`). Same-layer edges to `llm` and `agent`. Package name `edith-ai` |
 | `tts-text` | L2 | text front end for narration: normalizer (numbers, money, dates, acronyms, pauses) and English pronunciation (CMUdict + letter-to-sound) to Kokoro phonemes |
 | `codecs` | L2 | container + codec hub: MP4/MOV, MKV, MXF, Ogg and MPEG TS / PS / video elementary stream sources, GOP-aware seeking, decoder registry, audio decoding |
 | `interchange` | L2 | EDL, FCP7 XML, FCPXML, OTIO, AAF (on `cfb`) and OMF 2.0 import/export (no file I/O; the engine supplies rendered audio essence) ([README](../crates/interchange/README.md)) |

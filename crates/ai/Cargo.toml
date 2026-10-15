@@ -1,0 +1,25 @@
+[package]
+name = "edith-ai"
+description = "The facade the rest of Edith uses for AI: re-exports edith-llm and edith-agent, and holds the settings (default model, budgets), model badges and choice, cost summaries, and the Assistant that ties a model, tools and settings together"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The real providers (HTTPS). Off in wasm builds.
+net = ["edith-llm/net"]
+# Read provider keys from the OS keychain.
+keychain = ["net", "edith-llm/keychain"]
+
+[dependencies]
+edith-llm = { workspace = true }
+edith-agent = { workspace = true }
+edith-net = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
