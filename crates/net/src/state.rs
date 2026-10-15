@@ -3,6 +3,7 @@
 use crate::NetError;
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -42,7 +43,12 @@ pub struct NetState {
     offline: AtomicBool,
     seq: AtomicU64,
     log: Mutex<VecDeque<LogEntry>>,
+    /// The marker file that remembers Offline mode across restarts (see [`NetState::persist_in`]).
+    marker: Mutex<Option<PathBuf>>,
 }
+
+/// File name of the Offline marker inside the data directory: the file exists while Offline.
+pub const OFFLINE_MARKER: &str = "network-offline";
 
 impl NetState {
     pub fn new() -> Self {
@@ -55,6 +61,24 @@ impl NetState {
 
     pub fn set_offline(&self, on: bool) {
         self.offline.store(on, Ordering::SeqCst);
+        let marker = self.marker.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(path) = marker {
+            // Best effort: a read-only data directory only means the choice is not remembered.
+            if on {
+                let _ = std::fs::write(&path, b"offline\n");
+            } else {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
+    /// Remembers Offline mode in `dir` from now on, and adopts what a previous run left there.
+    /// Call once at start-up, before any request.
+    pub fn persist_in(&self, dir: &Path) {
+        let path = dir.join(OFFLINE_MARKER);
+        let was_offline = path.exists();
+        *self.marker.lock().unwrap_or_else(PoisonError::into_inner) = Some(path);
+        self.offline.store(was_offline, Ordering::SeqCst);
     }
 
     /// `Err(Offline)` while Offline mode is on. Every outgoing call starts with this.
@@ -140,6 +164,29 @@ mod tests {
         assert_eq!(s.entries(Some(3)).len(), 3);
         s.clear_log();
         assert!(s.entries(None).is_empty());
+    }
+
+    #[test]
+    fn offline_mode_is_remembered_in_the_data_directory() {
+        let dir = std::env::temp_dir().join(format!("fc-net-offline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = NetState::new();
+        a.persist_in(&dir);
+        assert!(!a.offline());
+        a.set_offline(true);
+        assert!(dir.join(OFFLINE_MARKER).exists());
+        let b = NetState::new();
+        b.persist_in(&dir);
+        assert!(b.offline(), "a new run starts Offline when the last one ended Offline");
+        b.set_offline(false);
+        assert!(!dir.join(OFFLINE_MARKER).exists());
+        // A missing directory never panics and still works in memory.
+        let c = NetState::new();
+        c.persist_in(&dir.join("missing"));
+        c.set_offline(true);
+        assert!(c.offline());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

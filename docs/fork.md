@@ -1,6 +1,6 @@
 # Working in this fork
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** new file (branches, upstream sync routine, Rust version, fork rules, speech defaults, build notes)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-15 · **Change:** F02 hook points listed (was: new file (branches, upstream sync routine, Rust version, fork rules, speech defaults, build notes))
 
 This checkout is `AdeThorMiwa/filmcraft`, a fork of [`storytold/filmcraft`](https://github.com/storytold/filmcraft). The fork adds a creator layer on top of the editor (assistant, sourcing, planning, analysis, voices, look; see [upcoming-features.md](upcoming-features.md)) and keeps merging upstream's work. This page is how the two stay compatible. [AGENTS.md](../AGENTS.md) and [contributing.md](contributing.md) still apply in full.
 
@@ -81,3 +81,11 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `apps/filmcraft/Cargo.toml` | `default = ["whisper", "neural-voices"]` (one line, with a trailing comment) | F01.1 |
 | `apps/filmcraft-cli/Cargo.toml` | the same `default`, plus a `neural-voices` feature that forwards to the engine (3 lines), so MCP and CLI clients can transcribe and narrate | F01.1 |
 | `crates/speech/src/whisper/tokenizer.rs` | `expect()` replaced by `filter_map`, plus a test of the byte table: a lint fix the new defaults surface (see the exception under Fork rules) | F01.1 |
+| `Cargo.toml` | one workspace dependency line, `filmcraft-net` | F02.1 |
+| `xtask/src/main.rs` | one `LAYERS` entry, `("net", 2)` | F02.1 |
+| `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
+| `crates/engine/Cargo.toml` | the `filmcraft-net` dependency and a `net` feature that forwards to it (3 lines) | F02.5 |
+| `crates/engine/src/lib.rs` | `pub mod net_commands;` and `mod net_tests;` | F02.5 |
+| `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` in `build()` | F02.5 |
+| `apps/filmcraft/Cargo.toml`, `apps/filmcraft-cli/Cargo.toml` | `net` added to `default`, plus a `net` feature (3 lines each, so the first row above changes too) | F02.5 |
+| `apps/filmcraft/src/main.rs`, `apps/filmcraft-cli/src/main.rs` | one line each: `net_commands::init(...)`, so Offline mode is remembered | F02.5 |

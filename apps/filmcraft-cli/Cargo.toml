@@ -13,11 +13,13 @@ name = "filmcraft-cli"
 path = "src/main.rs"
 
 [features]
-default = ["whisper", "neural-voices"] # fork: same defaults as apps/filmcraft, so MCP and CLI clients can transcribe and narrate (docs/fork.md)
+default = ["whisper", "neural-voices", "net"] # fork: same defaults as apps/filmcraft, so MCP and CLI clients can transcribe and narrate (docs/fork.md)
 # Speech-to-text (Text panel ▸ Transcribe) with Whisper on the CPU, and model downloads.
 whisper = ["filmcraft-engine/whisper", "filmcraft-engine/speech-download"]
 # Natural Text to Speech voices (Kokoro-82M on the CPU, downloaded on first use).
 neural-voices = ["filmcraft-engine/neural-voices"]
+# The network client, OS keychain and sign-in (crates/net); on by default in this fork.
+net = ["filmcraft-engine/net"]
 
 [dependencies]
 filmcraft-engine = { workspace = true }

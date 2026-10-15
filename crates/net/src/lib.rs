@@ -24,13 +24,14 @@ pub mod oauth;
 pub mod redact;
 #[cfg(feature = "keychain")]
 pub mod secrets;
+pub mod services;
 mod state;
 #[cfg(all(test, feature = "http"))]
 mod testserver;
 #[cfg(feature = "http")]
 mod tls;
 
-pub use state::{LogEntry, NetState, Outcome, shared};
+pub use state::{LogEntry, NetState, OFFLINE_MARKER, Outcome, shared};
 
 /// Everything that can go wrong in this crate. Messages are safe to show and log: they never
 /// contain a secret, a query string or a request body.

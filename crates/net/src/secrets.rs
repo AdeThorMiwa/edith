@@ -95,8 +95,44 @@ impl SecretStore {
     }
 }
 
-/// The process-wide OS store, created on first use.
+static INSTALLED: OnceLock<SecretStore> = OnceLock::new();
+
+/// Makes `store` the process-wide store instead of the OS keychain. For tests and tools: call it
+/// before the first [`os`]. Returns `false` (and changes nothing) if a store is already installed.
+pub fn install(store: SecretStore) -> bool {
+    INSTALLED.set(store).is_ok()
+}
+
+/// A store that lives in memory only (lost at exit). For tests; never a fallback for the keychain.
+pub fn in_memory() -> Result<SecretStore, NetError> {
+    let mock = keyring_core::mock::Store::new().map_err(map_err)?;
+    Ok(SecretStore::with_store(Arc::new(NoSearch(mock))))
+}
+
+/// The mock store with search switched off (its search matches loosely): `has` falls back to
+/// reading the secret, which is how several real stores behave too.
+struct NoSearch(Arc<keyring_core::mock::Store>);
+
+impl keyring_core::api::CredentialStoreApi for NoSearch {
+    fn vendor(&self) -> String {
+        "filmcraft in-memory store".to_string()
+    }
+    fn id(&self) -> String {
+        "in-memory".to_string()
+    }
+    fn build(&self, service: &str, user: &str, modifiers: Option<&HashMap<&str, &str>>) -> keyring_core::Result<Entry> {
+        self.0.build(service, user, modifiers)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// The process-wide store: the installed one, else the operating system's, created on first use.
 pub fn os() -> Result<&'static SecretStore, NetError> {
+    if let Some(s) = INSTALLED.get() {
+        return Ok(s);
+    }
     static OS: OnceLock<Result<SecretStore, NetError>> = OnceLock::new();
     OS.get_or_init(SecretStore::os).as_ref().map_err(Clone::clone)
 }
@@ -143,27 +179,8 @@ mod tests {
     use super::*;
     use keyring_core::api::CredentialStoreApi;
 
-    /// The mock store with search switched off, which is how several real stores behave: `has`
-    /// then falls back to reading the secret.
-    struct NoSearch(Arc<keyring_core::mock::Store>);
-
-    impl keyring_core::api::CredentialStoreApi for NoSearch {
-        fn vendor(&self) -> String {
-            "test".to_string()
-        }
-        fn id(&self) -> String {
-            "test".to_string()
-        }
-        fn build(&self, service: &str, user: &str, modifiers: Option<&HashMap<&str, &str>>) -> keyring_core::Result<Entry> {
-            self.0.build(service, user, modifiers)
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
     fn mock() -> SecretStore {
-        SecretStore::with_store(Arc::new(NoSearch(keyring_core::mock::Store::new().expect("mock store"))))
+        in_memory().unwrap()
     }
 
     #[test]

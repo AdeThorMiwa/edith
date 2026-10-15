@@ -2032,6 +2032,7 @@ dependencies = [
  "filmcraft-isobmff",
  "filmcraft-media",
  "filmcraft-mxf",
+ "filmcraft-net",
  "filmcraft-project",
  "filmcraft-render",
  "filmcraft-scopes",
