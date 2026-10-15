@@ -509,3 +509,30 @@ fn the_assistant_commands_are_not_journaled_and_have_no_way_to_edit() {
     }
     assert!(crate::commands::command_specs().iter().filter(|c| c.id.starts_with("assistant.")).count() >= 10);
 }
+
+/// Asks the real model about the demo project, with the key stored in the keychain: a handful of
+/// tool calls and a short answer, a few cents at most. It checks the whole chain against the live
+/// service for the first time, tool use included.
+/// `cargo test -p filmcraft-engine --lib --features net -- --ignored real_assistant`
+#[cfg(feature = "net")]
+#[test]
+#[ignore = "uses the real network and the stored Anthropic key"]
+fn real_assistant_answers_about_the_demo_project_using_its_tools() {
+    let mut s = demo();
+    let started = Instant::now();
+    let r = s
+        .execute("assistant.send", json!({"text": "Use your tools to look at my edit. Name the first clip on the main video track and tell me how long the whole edit is. Be brief.", "wait": true}))
+        .unwrap();
+    eprintln!("finished in {:.1}s: {}", started.elapsed().as_secs_f64(), r["finish"]);
+    eprintln!("answer: {}", r["text"]);
+    eprintln!("usage: {}", r["usageText"]);
+    let thread = r["thread"].as_u64().unwrap();
+    let v = s.execute("assistant.thread", json!({"thread": thread})).unwrap();
+    let calls: Vec<String> =
+        v["events"].as_array().unwrap().iter().filter(|e| e["type"] == "tool_call").map(|e| e["name"].as_str().unwrap_or("?").to_string()).collect();
+    eprintln!("tools it called: {calls:?}");
+    assert_eq!(r["finish"]["kind"], "done", "{r}");
+    assert!(!calls.is_empty(), "the model never used a tool");
+    let text = r["text"].as_str().unwrap().to_lowercase();
+    assert!(text.contains("ocean") && text.contains("26"), "the answer should name the first clip and the length: {text}");
+}
