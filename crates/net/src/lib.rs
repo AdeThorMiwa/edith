@@ -15,8 +15,16 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+#[cfg(feature = "http")]
+mod cache;
+#[cfg(feature = "http")]
+pub mod http;
 pub mod redact;
 mod state;
+#[cfg(all(test, feature = "http"))]
+mod testserver;
+#[cfg(feature = "http")]
+mod tls;
 
 pub use state::{LogEntry, NetState, Outcome, shared};
 

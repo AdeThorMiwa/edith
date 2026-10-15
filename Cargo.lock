@@ -2158,8 +2158,13 @@ dependencies = [
 name = "filmcraft-net"
 version = "0.7.2"
 dependencies = [
+ "rustls",
+ "rustls-rustcrypto",
  "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

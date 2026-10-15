@@ -4,7 +4,7 @@ use crate::NetError;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Entries kept in the log; older ones are dropped.
 pub const LOG_CAP: usize = 500;
@@ -100,9 +100,9 @@ fn now_ms() -> u64 {
 }
 
 /// The process-wide state used by the app and the commands.
-pub fn shared() -> &'static NetState {
-    static SHARED: OnceLock<NetState> = OnceLock::new();
-    SHARED.get_or_init(NetState::new)
+pub fn shared() -> &'static Arc<NetState> {
+    static SHARED: OnceLock<Arc<NetState>> = OnceLock::new();
+    SHARED.get_or_init(|| Arc::new(NetState::new()))
 }
 
 #[cfg(test)]
