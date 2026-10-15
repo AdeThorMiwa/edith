@@ -295,6 +295,8 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Costs, honestly.** This uses pay-as-you-go API credit, not a Claude subscription. Nothing has been measured yet; F03.1's done-when includes a measured cost for a typical mentor session so the default model is chosen on data. Free alternatives stay available: Gemini's free tier and OpenRouter's free models (F03.3, F03.4), and local models.
 
+**Keychain prompts (found 2026-10-15 by the architect).** A development build is asked for permission on every keychain read, and a tool-using turn makes several requests, so the first design (read the key per request) produced a prompt each time and hid the prompt wait inside "latency". Now `SecretStore::get_cached` reads the key once and keeps it in wipe-on-drop memory for 30 minutes; saving, removing or a provider rejecting the key drops it. Telling the prompt to "Always Allow" covers a program until it is rebuilt; a signed release build does not ask again.
+
 #### F03.2 design: what the agent sees of the edit (drafted 2026-10-15)
 
 **Question asked:** give the model the timeline as OpenTimelineIO (OTIO) with provenance embedded? **Answer: OTIO for hand-off and archives, not for the prompt.**

@@ -12,7 +12,8 @@
 use crate::{NetError, redact};
 use keyring_core::{CredentialStore, Entry};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
 /// The keychain "service" every Edith entry is filed under.
@@ -25,20 +26,26 @@ pub fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.len() <= 64 && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// How long [`SecretStore::get_cached`] keeps a key in memory before asking the keychain again.
+pub const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+
 pub struct SecretStore {
     store: Arc<CredentialStore>,
+    /// Keys read recently, held in wipe-on-drop memory so one keychain prompt (a development build
+    /// gets one per read) covers a whole conversation. Dropped by `set`, `delete` and `forget_cached`.
+    cache: Mutex<HashMap<String, (Zeroizing<String>, Instant)>>,
 }
 
 impl SecretStore {
     /// A store over any `keyring-core` credential store (tests use the crate's mock store).
     pub fn with_store(store: Arc<CredentialStore>) -> Self {
-        Self { store }
+        Self { store, cache: Mutex::new(HashMap::new()) }
     }
 
     /// The operating system's store. Fails (never panics) when there is none, for example a
     /// Linux session without a Secret Service.
     pub fn os() -> Result<Self, NetError> {
-        Ok(Self { store: os_store()? })
+        Ok(Self::with_store(os_store()?))
     }
 
     fn entry(&self, name: &str) -> Result<Entry, NetError> {
@@ -55,6 +62,7 @@ impl SecretStore {
         if value.is_empty() || value.len() > MAX_VALUE || value.chars().any(char::is_control) {
             return Err(NetError::Secret("the secret is empty, too long or contains control characters".to_string()));
         }
+        self.forget_cached(name);
         self.entry(name)?.set_password(value).map_err(map_err)
     }
 
@@ -85,8 +93,42 @@ impl SecretStore {
         }
     }
 
+    /// Like [`SecretStore::get`], but a key read in the last [`CACHE_TTL`] is returned from memory
+    /// instead of asking the keychain again. A development build is asked for permission on every
+    /// keychain read, and a conversation makes many requests, so providers use this one.
+    pub fn get_cached(&self, name: &str) -> Result<Option<Zeroizing<String>>, NetError> {
+        self.get_cached_for(name, CACHE_TTL)
+    }
+
+    /// [`SecretStore::get_cached`] with a chosen lifetime (tests use a tiny one).
+    pub fn get_cached_for(&self, name: &str, ttl: Duration) -> Result<Option<Zeroizing<String>>, NetError> {
+        if let Some((value, at)) = self.cache.lock().unwrap_or_else(PoisonError::into_inner).get(name)
+            && at.elapsed() < ttl
+        {
+            return Ok(Some(value.clone()));
+        }
+        let fresh = self.get(name)?;
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        match &fresh {
+            Some(v) => {
+                cache.insert(name.to_string(), (v.clone(), Instant::now()));
+            }
+            None => {
+                cache.remove(name);
+            }
+        }
+        Ok(fresh)
+    }
+
+    /// Drops the in-memory copy of `name` (the next [`SecretStore::get_cached`] reads the keychain).
+    /// Called when a key is saved or removed, and when a provider rejects it.
+    pub fn forget_cached(&self, name: &str) {
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner).remove(name);
+    }
+
     /// Deletes the secret. `Ok(false)` when there was none.
     pub fn delete(&self, name: &str) -> Result<bool, NetError> {
+        self.forget_cached(name);
         match self.entry(name)?.delete_credential() {
             Ok(()) => Ok(true),
             Err(keyring_core::Error::NoEntry) => Ok(false),
@@ -183,6 +225,30 @@ mod tests {
         in_memory().unwrap()
     }
 
+    /// A store that counts how many times the keychain is asked for an entry (each read builds one).
+    struct Counting(Arc<keyring_core::mock::Store>, Arc<std::sync::atomic::AtomicUsize>);
+
+    impl keyring_core::api::CredentialStoreApi for Counting {
+        fn vendor(&self) -> String {
+            "test".to_string()
+        }
+        fn id(&self) -> String {
+            "counting".to_string()
+        }
+        fn build(&self, service: &str, user: &str, modifiers: Option<&HashMap<&str, &str>>) -> keyring_core::Result<Entry> {
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.0.build(service, user, modifiers)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn counting() -> (SecretStore, Arc<std::sync::atomic::AtomicUsize>) {
+        let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (SecretStore::with_store(Arc::new(Counting(keyring_core::mock::Store::new().unwrap(), n.clone()))), n)
+    }
+
     #[test]
     fn round_trip_set_has_get_delete() {
         let s = mock();
@@ -264,5 +330,46 @@ mod tests {
         assert_eq!(s.get(&name).unwrap().as_deref().map(String::as_str), Some("throwaway-value"));
         assert!(s.delete(&name).unwrap());
         assert!(!s.has(&name).unwrap());
+    }
+
+    #[test]
+    fn a_cached_key_is_read_from_the_keychain_once_not_once_per_request() {
+        let (s, reads) = counting();
+        s.set("provider.x.api_key", "sk-test-12345678").unwrap();
+        let after_set = reads.load(std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..10 {
+            assert_eq!(s.get_cached("provider.x.api_key").unwrap().as_deref().map(String::as_str), Some("sk-test-12345678"));
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst) - after_set, 1, "ten requests, one keychain read (one prompt)");
+        // an uncached read always asks
+        s.get("provider.x.api_key").unwrap();
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst) - after_set, 2);
+    }
+
+    #[test]
+    fn the_cache_is_dropped_on_save_delete_forget_and_expiry() {
+        let (s, reads) = counting();
+        let n = |r: &Arc<std::sync::atomic::AtomicUsize>| r.load(std::sync::atomic::Ordering::SeqCst);
+        s.set("a.key", "first-key-value").unwrap();
+        assert_eq!(s.get_cached("a.key").unwrap().as_deref().map(String::as_str), Some("first-key-value"));
+        // replacing the key is seen at once
+        s.set("a.key", "second-key-value").unwrap();
+        assert_eq!(s.get_cached("a.key").unwrap().as_deref().map(String::as_str), Some("second-key-value"));
+        // forgetting makes the next read ask again
+        let before = n(&reads);
+        s.forget_cached("a.key");
+        s.get_cached("a.key").unwrap();
+        assert_eq!(n(&reads) - before, 1);
+        // removing the key means no stale copy survives
+        s.delete("a.key").unwrap();
+        assert!(s.get_cached("a.key").unwrap().is_none());
+        // a zero lifetime never serves from memory
+        s.set("b.key", "some-key-value").unwrap();
+        s.get_cached_for("b.key", Duration::ZERO).unwrap();
+        let before = n(&reads);
+        s.get_cached_for("b.key", Duration::ZERO).unwrap();
+        assert_eq!(n(&reads) - before, 1);
+        // a name that is not valid is an error, never a cache hit
+        assert!(s.get_cached("Bad Name").is_err());
     }
 }

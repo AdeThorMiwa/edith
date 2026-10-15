@@ -12,8 +12,26 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-/// Where the key comes from, asked once per request. It is never stored in the client.
-pub type KeySource = Arc<dyn Fn() -> Result<Zeroizing<String>, LlmError> + Send + Sync>;
+/// Where the key comes from, asked once per request, and how to drop any copy kept of it. The
+/// client never stores the key itself; a source may keep one in wipe-on-drop memory so a
+/// conversation costs one keychain prompt instead of one per request.
+#[derive(Clone)]
+pub struct KeySource {
+    get: Arc<dyn Fn() -> Result<Zeroizing<String>, LlmError> + Send + Sync>,
+    forget: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl KeySource {
+    pub fn new(get: impl Fn() -> Result<Zeroizing<String>, LlmError> + Send + Sync + 'static) -> Self {
+        Self { get: Arc::new(get), forget: Arc::new(|| {}) }
+    }
+
+    /// Called when the provider rejects the key, so a replaced key is read afresh next time.
+    pub fn with_forget(mut self, forget: impl Fn() + Send + Sync + 'static) -> Self {
+        self.forget = Arc::new(forget);
+        self
+    }
+}
 
 pub struct Anthropic {
     client: Arc<Client>,
@@ -30,11 +48,15 @@ impl Anthropic {
     /// Uses the key stored under the Anthropic service in the OS keychain.
     #[cfg(feature = "keychain")]
     pub fn from_keychain(client: Arc<Client>) -> Self {
-        let key: KeySource = Arc::new(|| {
-            let name = edith_net::services::find("anthropic")
-                .and_then(|s| s.secret)
-                .ok_or_else(|| LlmError::Unavailable("the Anthropic service is not known".to_string()))?;
-            edith_net::secrets::os()?.get(name)?.ok_or_else(|| LlmError::Auth("no Anthropic key is stored; add one in Connections".to_string()))
+        let secret = || edith_net::services::find("anthropic").and_then(|s| s.secret);
+        let key = KeySource::new(move || {
+            let name = secret().ok_or_else(|| LlmError::Unavailable("the Anthropic service is not known".to_string()))?;
+            edith_net::secrets::os()?.get_cached(name)?.ok_or_else(|| LlmError::Auth("no Anthropic key is stored; add one in Connections".to_string()))
+        })
+        .with_forget(move || {
+            if let (Some(name), Ok(store)) = (secret(), edith_net::secrets::os()) {
+                store.forget_cached(name);
+            }
         });
         Self::new(client, key)
     }
@@ -54,9 +76,17 @@ impl Anthropic {
 
     /// `req` with the key and version headers added, and the key itself (for scrubbing errors).
     fn authorize(&self, req: NetRequest) -> Result<(NetRequest, Zeroizing<String>), LlmError> {
-        let key = (self.key)()?;
+        let key = (self.key.get)()?;
         let req = req.header("x-api-key", &key).header("anthropic-version", API_VERSION);
         Ok((req, key))
+    }
+
+    /// A rejected key means the copy kept of it may be stale (the person replaced it): drop it.
+    fn after_error(&self, e: LlmError) -> LlmError {
+        if matches!(e, LlmError::Auth(_)) {
+            (self.key.forget)();
+        }
+        e
     }
 
     /// Sends the prepared streaming request and assembles the reply. Every error leaves through
@@ -99,7 +129,7 @@ impl ChatModel for Anthropic {
         let (req, key) = self.authorize(NetRequest::get(&format!("{}/v1/models?limit=1000", self.base_url)))?;
         let resp = self.client.send(&req).map_err(|e| LlmError::from(e).scrubbed(&key))?;
         if !resp.ok() {
-            return Err(error_from_http(resp.status, &resp.body).scrubbed(&key));
+            return Err(self.after_error(error_from_http(resp.status, &resp.body).scrubbed(&key)));
         }
         parse_models(&resp.body).map_err(|e| e.scrubbed(&key))
     }
@@ -111,7 +141,7 @@ impl ChatModel for Anthropic {
         let (mut req, key) = self.authorize(post)?;
         req.cancel = Some(cancel.clone());
         req.timeout = Some(self.timeout);
-        self.run(&req, cancel, sink).map_err(|e| e.scrubbed(&key))
+        self.run(&req, cancel, sink).map_err(|e| self.after_error(e.scrubbed(&key)))
     }
 }
 
@@ -135,7 +165,7 @@ mod tests {
     }
 
     fn key() -> KeySource {
-        Arc::new(|| Ok(Zeroizing::new(KEY.to_string())))
+        KeySource::new(|| Ok(Zeroizing::new(KEY.to_string())))
     }
 
     fn model(url: &str) -> Anthropic {
@@ -213,7 +243,7 @@ mod tests {
     #[test]
     fn no_key_means_no_request() {
         let s = serve(|_, _| sse(String::new()));
-        let none: KeySource = Arc::new(|| Err(LlmError::Auth("no Anthropic key is stored; add one in Connections".into())));
+        let none = KeySource::new(|| Err(LlmError::Auth("no Anthropic key is stored; add one in Connections".into())));
         let e = Anthropic::new(net(), none).with_base_url(&s.url).stream(&ask(), &cancel(), &mut |_| {}).unwrap_err();
         assert!(matches!(e, LlmError::Auth(_)));
         assert_eq!(s.hits(), 0);
@@ -223,7 +253,7 @@ mod tests {
     fn the_key_is_asked_for_on_every_request_and_never_kept() {
         let asked = Arc::new(AtomicUsize::new(0));
         let a = asked.clone();
-        let counting: KeySource = Arc::new(move || {
+        let counting = KeySource::new(move || {
             a.fetch_add(1, Ordering::SeqCst);
             Ok(Zeroizing::new(KEY.to_string()))
         });
@@ -232,6 +262,27 @@ mod tests {
         m.stream(&ask(), &cancel(), &mut |_| {}).unwrap();
         m.stream(&ask(), &cancel(), &mut |_| {}).unwrap();
         assert_eq!(asked.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_rejected_key_is_forgotten_so_a_replaced_one_is_read_afresh() {
+        let forgotten = Arc::new(AtomicUsize::new(0));
+        let f = forgotten.clone();
+        let source = KeySource::new(|| Ok(Zeroizing::new(KEY.to_string()))).with_forget(move || {
+            f.fetch_add(1, Ordering::SeqCst);
+        });
+        let refused = serve(|_, _| response(401, &[], br#"{"error":{"type":"authentication_error","message":"invalid x-api-key"}}"#));
+        let e = Anthropic::new(net(), source.clone()).with_base_url(&refused.url).stream(&ask(), &cancel(), &mut |_| {}).unwrap_err();
+        assert!(matches!(e, LlmError::Auth(_)));
+        assert_eq!(forgotten.load(Ordering::SeqCst), 1, "a 401 drops the kept key");
+        assert!(matches!(Anthropic::new(net(), source.clone()).with_base_url(&refused.url).models(), Err(LlmError::Auth(_))));
+        assert_eq!(forgotten.load(Ordering::SeqCst), 2);
+        // success and other errors leave the kept key alone
+        let ok = serve(|_, _| sse(f::start(1) + &f::text_block(0, &["x"]) + &f::end("end_turn", 1)));
+        Anthropic::new(net(), source.clone()).with_base_url(&ok.url).stream(&ask(), &cancel(), &mut |_| {}).unwrap();
+        let busy = serve(|_, _| response(529, &[], br#"{"error":{"type":"overloaded_error","message":"x"}}"#));
+        assert!(Anthropic::new(net(), source).with_base_url(&busy.url).stream(&ask(), &cancel(), &mut |_| {}).is_err());
+        assert_eq!(forgotten.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -531,6 +531,12 @@ fn real_assistant_answers_about_the_demo_project_using_its_tools() {
     let calls: Vec<String> =
         v["events"].as_array().unwrap().iter().filter(|e| e["type"] == "tool_call").map(|e| e["name"].as_str().unwrap_or("?").to_string()).collect();
     eprintln!("tools it called: {calls:?}");
+    // How long each request to the provider took (the network layer logs every one), so a slow turn
+    // can be told apart: many requests, or a few slow ones.
+    for e in edith_net::shared().entries(None) {
+        eprintln!("  request {} {} -> {:?} in {} ms ({} bytes)", e.method, e.url, e.status, e.millis, e.bytes);
+    }
+    eprintln!("keychain reads are counted by the secret store's cache: one per half hour, not one per request");
     assert_eq!(r["finish"]["kind"], "done", "{r}");
     assert!(!calls.is_empty(), "the model never used a tool");
     let text = r["text"].as_str().unwrap().to_lowercase();
