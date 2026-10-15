@@ -2474,6 +2474,7 @@ dependencies = [
  "filmcraft-gpu",
  "filmcraft-interchange",
  "filmcraft-media",
+ "filmcraft-net",
  "filmcraft-platform",
  "filmcraft-project",
  "filmcraft-render",

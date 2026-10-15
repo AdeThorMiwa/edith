@@ -1789,6 +1789,7 @@ impl FilmcraftApp {
             self.ui.status.clear();
         }
         self.job_status(ui, sb, &t);
+        panels::connections::status_indicator(self, ui, sb, &t); // fork: Offline switch
     }
 
     /// The running job (export / render previews), if any; plays the rendered range when a preview

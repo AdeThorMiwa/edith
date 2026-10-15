@@ -20,6 +20,8 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use filmcraft_net as net;
+pub use net::services::{Kind, Service};
+pub use net::{LogEntry, Outcome};
 
 use crate::commands::{CommandSpec, always, bad, bool_p, str_p};
 use crate::panels::Level;
@@ -51,6 +53,9 @@ mod keychain {
     pub fn delete(name: &str) -> std::result::Result<bool, String> {
         net::secrets::os().and_then(|s| s.delete(name)).map_err(|e| e.to_string())
     }
+    pub fn set(name: &str, value: &str) -> std::result::Result<(), String> {
+        net::secrets::os().and_then(|s| s.set(name, value)).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(not(feature = "net"))]
@@ -62,6 +67,9 @@ mod keychain {
         Err("secrets are not available in this build".to_string())
     }
     pub fn delete(_: &str) -> std::result::Result<bool, String> {
+        Err("secrets are not available in this build".to_string())
+    }
+    pub fn set(_: &str, _: &str) -> std::result::Result<(), String> {
         Err("secrets are not available in this build".to_string())
     }
 }
@@ -131,20 +139,64 @@ fn secrets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": name, "deleted": deleted}))
 }
 
-fn connections_list(_s: &mut Session, _p: &Value) -> Result<Value> {
+/// A known service and whether a key is stored for it (`None`: local, or the keychain could not
+/// be asked).
+pub struct ServiceStatus {
+    pub service: &'static Service,
+    pub stored: Option<bool>,
+}
+
+/// Every known service with its stored state, plus the first keychain problem met. Asks the
+/// keychain once per service, so the UI caches the answer instead of calling this every frame.
+pub fn service_statuses() -> (Vec<ServiceStatus>, Option<String>) {
     let mut problem: Option<String> = None;
-    let services: Vec<Value> = net::services::SERVICES
+    let list = net::services::SERVICES
         .iter()
-        .map(|svc| {
-            let stored = svc.secret.and_then(|name| match keychain::has(name) {
+        .map(|service| {
+            let stored = service.secret.and_then(|name| match keychain::has(name) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     problem.get_or_insert(e);
                     None
                 }
             });
-            let mut v = serde_json::to_value(svc).unwrap_or(Value::Null);
-            v["stored"] = json!(stored);
+            ServiceStatus { service, stored }
+        })
+        .collect();
+    (list, problem)
+}
+
+/// Stores a secret typed into Settings. **Not a command**, on purpose: a key must never travel
+/// through command parameters, the journal or an agent. Only the Connections panel calls this.
+/// `name` must be a known service's secret slot.
+pub fn save_secret(name: &str, value: &str) -> std::result::Result<(), String> {
+    if !net::services::SERVICES.iter().any(|s| s.secret == Some(name)) {
+        return Err("unknown connection".to_string());
+    }
+    keychain::set(name, value)
+}
+
+/// The newest `limit` request-log entries, oldest first.
+pub fn recent_requests(limit: usize) -> Vec<LogEntry> {
+    net::shared().entries(Some(limit))
+}
+
+/// Whether this build can store keys (built with the `net` feature).
+pub fn secrets_available() -> bool {
+    cfg!(feature = "net")
+}
+
+pub fn is_offline() -> bool {
+    net::shared().offline()
+}
+
+fn connections_list(_s: &mut Session, _p: &Value) -> Result<Value> {
+    let (statuses, problem) = service_statuses();
+    let services: Vec<Value> = statuses
+        .iter()
+        .map(|st| {
+            let mut v = serde_json::to_value(st.service).unwrap_or(Value::Null);
+            v["stored"] = json!(st.stored);
             v
         })
         .collect();

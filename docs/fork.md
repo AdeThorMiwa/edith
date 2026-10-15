@@ -84,6 +84,10 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `Cargo.toml` | one workspace dependency line, `filmcraft-net` | F02.1 |
 | `xtask/src/main.rs` | one `LAYERS` entry, `("net", 2)` | F02.1 |
 | `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
+| `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` (variant, `ALL` length, title: 4 lines) | F02.6 |
+| `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;` and one `match` arm | F02.6 |
+| `crates/ui-egui/src/lib.rs` | one line after `job_status`: the status-bar Offline switch | F02.6 |
+| `crates/ui-egui/Cargo.toml` | two dev-dependencies (`filmcraft-engine` with `net`, `filmcraft-net` with `keychain`) so the UI tests use the in-memory secret store | F02.6 |
 | `crates/engine/Cargo.toml` | the `filmcraft-net` dependency and a `net` feature that forwards to it (3 lines) | F02.5 |
 | `crates/engine/src/lib.rs` | `pub mod net_commands;` and `mod net_tests;` | F02.5 |
 | `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` in `build()` | F02.5 |
