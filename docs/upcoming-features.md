@@ -295,6 +295,24 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Costs, honestly.** This uses pay-as-you-go API credit, not a Claude subscription. Nothing has been measured yet; F03.1's done-when includes a measured cost for a typical mentor session so the default model is chosen on data. Free alternatives stay available: Gemini's free tier and OpenRouter's free models (F03.3, F03.4), and local models.
 
+#### F03.2 design: what the agent sees of the edit (drafted 2026-10-15)
+
+**Question asked:** give the model the timeline as OpenTimelineIO (OTIO) with provenance embedded? **Answer: OTIO for hand-off and archives, not for the prompt.**
+
+**Measured** on the demo project (14 clips, 6 tracks, 5 transitions, 4 markers), with the OTIO exporter that already exists (`crates/interchange/src/otio.rs`): the OTIO file is 102,374 bytes (about 25,600 tokens, estimated as characters divided by 4), the editor's own sequence JSON 41,840 bytes (about 10,500), and a compact edit list of the same edit 1,317 bytes (about 330). OTIO costs about 7 KB per clip, because every time is a `RationalTime` object and each clip carries its media description and effect parameters. A 100-clip project would be around 730 KB or 180,000 tokens: dear on every request of a tool loop (about $0.02 a request on Haiku, about $0.37 on Sonnet, before caching), and near the limit of what fits at all. One sample, so treat the ratios as the point, not the digits.
+
+**Why OTIO is wrong for the prompt.** The model needs to understand an edit, not reproduce a file. OTIO's structure (Timeline, Stack, Track, Clip, `media_references`, `active_media_reference_key`) is noise for that job, and it has no home for what Edith adds (beats, transcript alignment, measurements); those would all go in `metadata` anyway.
+
+**Where OTIO is right.**
+- **Export and archive** with provenance embedded in the standard place, namespaced metadata: `metadata.edith.provenance` on each clip's media reference, holding source, id, URL, author, licence, whether credit is required, whether it is AI-generated, and when it was fetched. The exporter already round-trips Edith's own fields in `metadata.filmcraft`; that key stays readable after the rename. This is the licence ledger's (F04) hand-off format.
+- **Import** from other editors (Resolve, Premiere and Avid all write OTIO): import it, then show the agent the same compact view as any other project.
+
+**What the agent sees instead.** Tool results use a compact edit list, a text form editors and models both read well:
+- `sequence_view(range?)`: a header line (name, size, rate, length) then one line per clip, `V1 00:00:04:23-00:00:09:10 Aurora_Timelapse.mp4 src 00:00:20:17`, followed by non-default speed, gain and effect names only (parameters on demand), transitions as their own lines, markers last.
+- **Provenance is shown by exception**: a clip from a free source carries a short tag, `[pexels, Pexels License, no credit]`; a clip with a licence risk (credit required, unknown, AI-generated) carries a loud one; local files carry none. `provenance(clip)` returns the whole record.
+- `clip_detail(clip)`: every parameter of one clip. `otio_slice(range)`: a time range as OTIO, only if a task needs the standard form (rare, later).
+- A range argument keeps a long project affordable: the agent looks at the part it was asked about.
+
 #### F03.3 design: the OpenAI-compatible client and OpenRouter sign-in (drafted 2026-10-15, before building)
 
 **Checked against OpenRouter's docs on 2026-10-15** (re-check before building; see §9):
@@ -323,6 +341,8 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 **How it works.** A `provenance` record per media item, stored with the project (undoable; D1) and a project-level policy (`commercial`, `attribution_ok`, `synthetic_ok`). Commands `provenance.get|set|list`, `provenance.credits {format}`, `provenance.audit`. The Source Hub and every importer write records automatically; manual imports can be tagged ("my footage", "licensed"). UI: a license badge in the Project panel, a Credits and Rights dialog, an audit step at export.
 
 **Done when.** Import a clip with a CC BY license, see its badge, get its credit line in the credits block, and get an audit warning if the policy forbids it.
+
+**OTIO.** The OTIO export (`file.exportInterchange {format: "otio"}`) embeds each clip's provenance in `metadata.edith.provenance` and reads it back; see the F03.2 design above for why OTIO is not also the format shown to the agent.
 
 **Notes.** Disclosure of realistic synthetic media is a YouTube setting; the ledger supplies the timecodes. The ledger only encodes what a source says; it is not legal advice.
 
