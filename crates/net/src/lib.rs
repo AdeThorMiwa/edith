@@ -20,6 +20,8 @@ mod cache;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod redact;
+#[cfg(feature = "keychain")]
+pub mod secrets;
 mod state;
 #[cfg(all(test, feature = "http"))]
 mod testserver;
