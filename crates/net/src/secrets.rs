@@ -372,4 +372,22 @@ mod tests {
         // a name that is not valid is an error, never a cache hit
         assert!(s.get_cached("Bad Name").is_err());
     }
+
+    /// One real keychain read of the Anthropic key, nothing else: no network, and only the key's
+    /// length is printed. Used to count how many permission prompts a single read causes.
+    /// `cargo test -p edith-net --features keychain -- --ignored real_os_keychain_read_once --nocapture`
+    #[test]
+    #[ignore = "uses the real OS keychain and may show a permission prompt"]
+    fn real_os_keychain_read_once() {
+        let name = "provider.anthropic.api_key";
+        let s = SecretStore::os().unwrap();
+        eprintln!("store opened; reading `{name}` once...");
+        let t = Instant::now();
+        let got = s.get(name).unwrap();
+        eprintln!(
+            "read done in {:.1}s: {}",
+            t.elapsed().as_secs_f64(),
+            got.map_or("no key stored".to_string(), |k| format!("a key of {} characters", k.len()))
+        );
+    }
 }
