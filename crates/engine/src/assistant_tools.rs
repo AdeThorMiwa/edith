@@ -63,6 +63,15 @@ pub(crate) fn tools() -> Vec<ToolDef> {
             clip_detail,
         ),
         def(
+            "frame_view",
+            "A picture of the edit as it looks at one moment (the Program monitor), for when seeing is better than reading timecodes: framing, colour, contrast, what is on screen. Costs more than text, so look at the moments that matter. Not available to models that cannot see pictures.",
+            json!({
+                "time": {"type": "string", "description": "The moment: seconds or timecode. Default: the playhead."},
+                "size": {"type": "integer", "description": "Longest side in pixels, 256 to 1568. Default 768."},
+            }),
+            frame_view,
+        ),
+        def(
             "transcript",
             "The spoken words of a clip or media item with timecodes, grouped into lines at pauses. For a clip the times are timeline times and only the part of the media the clip shows is included. Returns nothing if no transcript has been made.",
             json!({
@@ -504,4 +513,83 @@ fn transcript(s: &Session, input: &Value) -> ToolOutput {
         out.push_str(&format!("\n[stopped after {MAX_WORDS} words; ask for a narrower range with from and to]"));
     }
     ToolOutput::ok(out)
+}
+
+/// A still of the open sequence at `t`, longest side `max_side`, as a JPEG picture. Read-only:
+/// the playhead does not move.
+fn render_still(s: &Session, t: Tick, max_side: u32) -> Result<(edith_ai::Image, u32, u32), String> {
+    let q = s.active_sequence().ok_or("no sequence is open")?;
+    let (w, h) = (q.settings.width.max(1), q.settings.height.max(1));
+    let scale = (max_side as f32 / w.max(h) as f32).min(1.0);
+    // frames still loading (the web build) are reported, never passed off as the picture
+    let _ = filmcraft_media::pending::take();
+    let img = s.try_render_program_at(scale, t).map_err(|e| e.to_string())?;
+    if filmcraft_media::pending::take() {
+        return Err("the frame is still loading; look again in a moment".into());
+    }
+    let (iw, ih) = (u32::try_from(img.w).unwrap_or(0), u32::try_from(img.h).unwrap_or(0));
+    let bytes = filmcraft_export::still::encode(&img, filmcraft_export::still::StillFormat::Jpeg, 8).map_err(|e| e.to_string())?;
+    Ok((edith_ai::Image::from_bytes("image/jpeg", &bytes), iw, ih))
+}
+
+fn frame_view(s: &Session, input: &Value) -> ToolOutput {
+    let Some(q) = s.active_sequence() else { return ToolOutput::error("no sequence is open") };
+    let t = match input.get("time").filter(|v| !v.is_null()).map(|v| parse_time(v, q, "time")).transpose() {
+        Ok(v) => v.unwrap_or_else(|| s.playhead()),
+        Err(e) => return ToolOutput::error(e),
+    };
+    if t > q.duration() {
+        return ToolOutput::error(format!("that is past the end of the edit ({})", tc(q, q.duration())));
+    }
+    let size = match input.get("size").filter(|v| !v.is_null()) {
+        None => 768,
+        Some(v) => match v.as_u64().filter(|n| (256..=1568).contains(n)) {
+            Some(n) => n as u32,
+            None => return ToolOutput::error("size must be a whole number from 256 to 1568"),
+        },
+    };
+    match render_still(s, t, size) {
+        Ok((image, w, h)) => ToolOutput::with_image(format!("The Program frame at {} ({w}x{h}).", tc(q, t)), image),
+        Err(e) => ToolOutput::error(e),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// context for the chips (resolved on the session thread when a question is sent)
+// ---------------------------------------------------------------------------------------------
+
+/// The chip `frame`: the picture at the playhead.
+pub(crate) fn frame_block(s: &Session) -> Result<edith_ai::ContextBlock, String> {
+    let q = s.active_sequence().ok_or("no sequence is open")?;
+    let t = s.playhead();
+    let (image, w, h) = render_still(s, t, 768)?;
+    Ok(edith_ai::ContextBlock { label: "frame".into(), text: format!("The Program frame at the playhead, {} ({w}x{h}).", tc(q, t)), image: Some(image) })
+}
+
+/// The chip `transcript`: what is said within 20 seconds of the playhead, in the clips there.
+pub(crate) fn transcript_block(s: &Session) -> edith_ai::ContextBlock {
+    let Some(q) = s.active_sequence() else { return edith_ai::ContextBlock::text("transcript", "No sequence is open.") };
+    let now = s.playhead();
+    let (from, to) = (Tick((now.0 - 20 * TICKS_PER_SECOND).max(0)), Tick(now.0 + 20 * TICKS_PER_SECOND));
+    let mut lines: Vec<String> = Vec::new();
+    for t in q.video_tracks.iter().chain(q.audio_tracks.iter()) {
+        for i in t.items.iter().filter(|i| i.start < to && i.end() > from && s.project.transcripts.contains_key(&i.item)) {
+            let out = transcript(s, &json!({"clip": i.id.0, "from": secs(from.max(i.start)), "to": secs(to.min(i.end()))}));
+            if !out.is_error && !out.content.contains("no spoken words") {
+                lines.push(out.content);
+            }
+        }
+        if !lines.is_empty() {
+            break;
+        }
+    }
+    let text = if lines.is_empty() { format!("No transcript near the playhead ({}).", tc(q, now)) } else { lines.join("\n") };
+    edith_ai::ContextBlock::text("transcript", text)
+}
+
+/// The chip `markers`: every marker of the open sequence.
+pub(crate) fn markers_block(s: &Session) -> edith_ai::ContextBlock {
+    let Some(q) = s.active_sequence() else { return edith_ai::ContextBlock::text("markers", "No sequence is open.") };
+    let lines: Vec<String> = q.markers.iter().take(100).map(|m| marker_line(q, m)).collect();
+    edith_ai::ContextBlock::text("markers", if lines.is_empty() { "The sequence has no markers.".to_string() } else { lines.join("\n") })
 }

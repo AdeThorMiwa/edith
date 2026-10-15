@@ -5,20 +5,26 @@ use edith_llm::{Cancel, ToolSpec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// What a tool answered.
+/// What a tool answered: words, and optionally pictures for a model that can see.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
+    pub images: Vec<edith_llm::Image>,
 }
 
 impl ToolOutput {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false }
+        Self { content: content.into(), is_error: false, images: Vec::new() }
     }
 
     pub fn error(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true }
+        Self { content: content.into(), is_error: true, images: Vec::new() }
+    }
+
+    /// Words and a picture.
+    pub fn with_image(content: impl Into<String>, image: edith_llm::Image) -> Self {
+        Self { content: content.into(), is_error: false, images: vec![image] }
     }
 }
 

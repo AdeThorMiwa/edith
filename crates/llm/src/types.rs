@@ -27,12 +27,19 @@ pub enum Part {
         input_error: Option<String>,
     },
     /// The answer to a [`Part::ToolUse`], sent back in a user message. All answers to one reply
-    /// go in the **same** message.
+    /// go in the **same** message. A tool may answer with pictures as well as text.
     ToolResult {
         tool_use_id: String,
         content: String,
         #[serde(default)]
         is_error: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Image>,
+    },
+    /// A picture the person attached (a frame of their edit). Only for models that can see.
+    Image {
+        media_type: String,
+        data: String,
     },
     /// A provider-specific block that must be sent back unchanged. Never read by the agent.
     Opaque {
@@ -69,6 +76,21 @@ impl Message {
     /// The tool calls in this message, in order.
     pub fn tool_uses(&self) -> impl Iterator<Item = &Part> {
         self.parts.iter().filter(|p| matches!(p, Part::ToolUse { .. }))
+    }
+}
+
+/// A picture: the bytes of an encoded image file (JPEG, PNG, GIF or WebP) as base64.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
+}
+
+impl Image {
+    /// A picture from the bytes of an encoded image file.
+    pub fn from_bytes(media_type: &str, bytes: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self { media_type: media_type.to_string(), data: base64::engine::general_purpose::STANDARD.encode(bytes) }
     }
 }
 
@@ -238,4 +260,28 @@ pub struct ModelInfo {
     pub display_name: String,
     pub capabilities: Capabilities,
     pub price: Option<Price>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_image_is_the_base64_of_the_file_bytes() {
+        let i = Image::from_bytes("image/jpeg", b"ABCDEF");
+        assert_eq!((i.media_type.as_str(), i.data.as_str()), ("image/jpeg", "QUJDREVG"));
+        assert_eq!(Image::from_bytes("image/png", b"").data, "");
+    }
+
+    #[test]
+    fn pictures_survive_a_round_trip_through_json_and_empty_lists_are_not_written() {
+        let r = Part::ToolResult { tool_use_id: "t".into(), content: "c".into(), is_error: false, images: vec![Image::from_bytes("image/png", b"x")] };
+        let back: Part = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
+        let plain = Part::ToolResult { tool_use_id: "t".into(), content: "c".into(), is_error: false, images: vec![] };
+        assert!(!serde_json::to_string(&plain).unwrap().contains("images"));
+        // an older saved thread, written before pictures existed, still reads
+        let old: Part = serde_json::from_str(r#"{"type":"tool_result","tool_use_id":"t","content":"c"}"#).unwrap();
+        assert_eq!(old, plain);
+    }
 }

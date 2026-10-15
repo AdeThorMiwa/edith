@@ -1456,6 +1456,7 @@ dependencies = [
 name = "edith-llm"
 version = "0.7.2"
 dependencies = [
+ "base64 0.22.1",
  "edith-net",
  "serde",
  "serde_json",

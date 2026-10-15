@@ -102,6 +102,26 @@ impl Thread {
         dropped
     }
 
+    /// A copy with the pictures taken out, a line of text standing in for each. Used to save a
+    /// conversation: picture bytes would swell the file and are not worth keeping.
+    pub fn without_images(&self) -> Thread {
+        let mut t = self.clone();
+        for m in &mut t.messages {
+            for p in &mut m.parts {
+                match p {
+                    Part::Image { .. } => *p = Part::Text { text: "[a picture was attached here]".to_string() },
+                    Part::ToolResult { content, images, .. } if !images.is_empty() => {
+                        let n = images.len();
+                        images.clear();
+                        content.push_str(&format!(" [{n} picture{} not kept]", if n == 1 { "" } else { "s" }));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        t
+    }
+
     /// Estimated cost of the thread in US dollars, if the model's price is known.
     pub fn estimated_cost(&self, price: Option<&Price>) -> Option<f64> {
         price.map(|p| p.estimate(&self.usage))
@@ -136,6 +156,10 @@ pub enum AgentEvent {
     /// or streamed thread reads as a whole conversation.
     UserMessage {
         text: String,
+        /// The labels of the context sent along (`playhead`, `selection`, `frame`, …), so the
+        /// person can always see what the model was given.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attached: Vec<String>,
     },
     StepStarted {
         step: u32,
@@ -162,6 +186,9 @@ pub enum AgentEvent {
         name: String,
         content: String,
         is_error: bool,
+        /// How many pictures came with the answer (the pictures themselves are not streamed).
+        #[serde(default)]
+        pictures: u32,
     },
     Usage {
         reply: Usage,
@@ -211,7 +238,11 @@ fn answer_all(message: &Message, text: &str) -> Option<Message> {
         .parts
         .iter()
         .filter_map(|p| {
-            if let Part::ToolUse { id, .. } = p { Some(Part::ToolResult { tool_use_id: id.clone(), content: text.to_string(), is_error: true }) } else { None }
+            if let Part::ToolUse { id, .. } = p {
+                Some(Part::ToolResult { tool_use_id: id.clone(), content: text.to_string(), is_error: true, images: Vec::new() })
+            } else {
+                None
+            }
         })
         .collect();
     (!results.is_empty()).then(|| Message::tool_results(results))
@@ -248,7 +279,7 @@ impl Agent<'_> {
     ) -> TurnReport {
         let c = &self.config;
         thread.messages.push(user_message(context, text, c.max_context_block_chars));
-        sink(AgentEvent::UserMessage { text: shown.to_string() });
+        sink(AgentEvent::UserMessage { text: shown.to_string(), attached: context.iter().map(|b| b.label.clone()).collect() });
         // The gate: tools that would change the project are neither offered nor run in a read-only thread.
         let all = self.env.tools();
         let offered: Vec<&(ToolSpec, bool)> = all.iter().filter(|(_, read_only)| c.profile.allows(*read_only)).collect();
@@ -358,8 +389,14 @@ impl Agent<'_> {
                     self.env.run(name, input, cancel)
                 };
                 let content = clip_text(&out.content, c.max_tool_result_chars);
-                sink(AgentEvent::ToolResult { id: id.clone(), name: name.clone(), content: content.clone(), is_error: out.is_error });
-                results.push(Part::ToolResult { tool_use_id: id.clone(), content, is_error: out.is_error });
+                sink(AgentEvent::ToolResult {
+                    id: id.clone(),
+                    name: name.clone(),
+                    content: content.clone(),
+                    is_error: out.is_error,
+                    pictures: out.images.len() as u32,
+                });
+                results.push(Part::ToolResult { tool_use_id: id.clone(), content, is_error: out.is_error, images: out.images.clone() });
             }
             if !results.is_empty() {
                 thread.messages.push(Message::tool_results(results));

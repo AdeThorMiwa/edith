@@ -19,7 +19,11 @@ pub enum Entry {
         input: String,
         result: Option<String>,
         is_error: bool,
+        /// How many pictures came back with the answer.
+        pictures: u32,
     },
+    /// What was sent along with the message above (`playhead`, `selection`, `frame`, …).
+    Attached(Vec<String>),
     /// A line from the system: a retry, a limit reached, a failure. `warn` shows it in amber.
     Note {
         text: String,
@@ -69,7 +73,14 @@ impl ChatLog {
     pub fn apply(&mut self, ev: &Value) {
         let s = |k: &str| ev.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         match ev.get("type").and_then(Value::as_str).unwrap_or("") {
-            "user_message" => self.push_user(&s("text")),
+            "user_message" => {
+                self.push_user(&s("text"));
+                let attached: Vec<String> =
+                    ev.get("attached").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+                if !attached.is_empty() {
+                    self.entries.push(Entry::Attached(attached));
+                }
+            }
             "step_started" => self.step_start = self.entries.len(),
             "step_restarted" => self.entries.truncate(self.step_start),
             "text" => match self.entries.last_mut() {
@@ -80,22 +91,24 @@ impl ChatLog {
                 Some(Entry::Thinking(t)) => t.push_str(&s("text")),
                 _ => self.entries.push(Entry::Thinking(s("text"))),
             },
-            "tool_started" => self.entries.push(Entry::Tool { id: s("id"), name: s("name"), input: String::new(), result: None, is_error: false }),
+            "tool_started" => self.entries.push(Entry::Tool { id: s("id"), name: s("name"), input: String::new(), result: None, is_error: false, pictures: 0 }),
             "tool_call" => {
                 let (id, name, input) = (s("id"), s("name"), input_summary(ev.get("input").unwrap_or(&Value::Null)));
                 match self.tool_mut(&id) {
                     Some(Entry::Tool { input: i, .. }) => *i = input,
-                    _ => self.entries.push(Entry::Tool { id, name, input, result: None, is_error: false }),
+                    _ => self.entries.push(Entry::Tool { id, name, input, result: None, is_error: false, pictures: 0 }),
                 }
             }
             "tool_result" => {
                 let (id, name, content, err) = (s("id"), s("name"), s("content"), ev.get("is_error").and_then(Value::as_bool).unwrap_or(false));
+                let pics = ev.get("pictures").and_then(Value::as_u64).unwrap_or(0) as u32;
                 match self.tool_mut(&id) {
-                    Some(Entry::Tool { result, is_error, .. }) => {
+                    Some(Entry::Tool { result, is_error, pictures, .. }) => {
                         *result = Some(content);
                         *is_error = err;
+                        *pictures = pics;
                     }
-                    _ => self.entries.push(Entry::Tool { id, name, input: String::new(), result: Some(content), is_error: err }),
+                    _ => self.entries.push(Entry::Tool { id, name, input: String::new(), result: Some(content), is_error: err, pictures: pics }),
                 }
             }
             "notice" => self.push_note(&s("text"), false),
@@ -216,6 +229,21 @@ mod tests {
             json!({"type": "text", "text": "Because."}),
         ]);
         assert_eq!(l.entries, vec![Entry::User("why is it abrupt?".into()), Entry::Assistant("Because.".into())]);
+    }
+
+    #[test]
+    fn what_was_sent_along_shows_under_the_message_and_tool_cards_count_pictures() {
+        let l = feed(&[
+            json!({"type": "user_message", "text": "look", "attached": ["playhead", "frame"]}),
+            json!({"type": "tool_started", "id": "t1", "name": "frame_view"}),
+            json!({"type": "tool_result", "id": "t1", "name": "frame_view", "content": "frame", "is_error": false, "pictures": 1}),
+            json!({"type": "user_message", "text": "no context"}),
+        ]);
+        assert_eq!(l.entries[0], Entry::User("look".into()));
+        assert_eq!(l.entries[1], Entry::Attached(vec!["playhead".into(), "frame".into()]));
+        assert!(matches!(&l.entries[2], Entry::Tool { pictures: 1, .. }));
+        assert_eq!(l.entries[3], Entry::User("no context".into()), "no attachments, no extra line");
+        assert_eq!(l.entries.len(), 4);
     }
 
     #[test]

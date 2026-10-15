@@ -44,6 +44,9 @@ struct Chat {
     running: bool,
     chip_selection: bool,
     chip_playhead: bool,
+    chip_transcript: bool,
+    chip_markers: bool,
+    chip_frame: bool,
     error: Option<String>,
     polled_at: f64,
     /// The slash commands (`/pacing`, …) as the engine lists them.
@@ -68,6 +71,9 @@ impl Chat {
             running: false,
             chip_selection: true,
             chip_playhead: true,
+            chip_transcript: false,
+            chip_markers: false,
+            chip_frame: false,
             error: None,
             polled_at: f64::NEG_INFINITY,
             commands: Vec::new(),
@@ -152,7 +158,18 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
 
 /// What the assistant is given along with the question, as the chips say: the playhead, and the
 /// selected clips.
-fn context_blocks(app: &FilmcraftApp, selection: bool, playhead: bool) -> Vec<Value> {
+/// Which chips are on.
+#[derive(Clone, Copy)]
+struct Chips {
+    selection: bool,
+    playhead: bool,
+    transcript: bool,
+    markers: bool,
+    frame: bool,
+}
+
+fn context_blocks(app: &FilmcraftApp, chips: Chips) -> Vec<Value> {
+    let (selection, playhead) = (chips.selection, chips.playhead);
     let s = &app.session;
     let Some(q) = s.active_sequence() else { return Vec::new() };
     let rate = q.settings.frame_rate;
@@ -172,6 +189,12 @@ fn context_blocks(app: &FilmcraftApp, selection: bool, playhead: bool) -> Vec<Va
             .collect();
         if !lines.is_empty() {
             out.push(json!({"label": "selection", "text": format!("Selected: {}.", lines.join("; "))}));
+        }
+    }
+    // what the engine gathers itself, when the message is sent
+    for (on, kind) in [(chips.transcript, "transcript"), (chips.markers, "markers"), (chips.frame, "frame")] {
+        if on {
+            out.push(json!({"kind": kind}));
         }
     }
     out
@@ -226,8 +249,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .map(|a| a.iter().filter_map(|t| Some((t["id"].as_u64()?, t["title"].as_str()?.to_string()))).collect())
         .unwrap_or_default();
 
-    // ---- header: model, thread, new, settings ... cost ----
-    ui.horizontal(|ui| {
+    // ---- header: model, thread, new, delete, settings (wraps in a narrow panel) ----
+    ui.horizontal_wrapped(|ui| {
         let name = models
             .as_ref()
             .and_then(|m| m["models"].as_array())
@@ -402,9 +425,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             });
                         elems.push((format!("assistant.entry.{i}"), h.header_response, text.clone()));
                     }
-                    Entry::Tool { name, input, result, is_error, .. } => {
+                    Entry::Tool { name, input, result, is_error, pictures, .. } => {
                         let color = if *is_error { WARN } else { t.text_dim };
-                        let waiting = if result.is_none() { "  …" } else { "" };
+                        let waiting = if result.is_none() {
+                            "  …".to_string()
+                        } else if *pictures > 0 {
+                            format!("  [{}]", tl!("with a picture"))
+                        } else {
+                            String::new()
+                        };
                         let title = if input.is_empty() {
                             format!("{} {name}{waiting}", tl!("Looked at"))
                         } else {
@@ -419,6 +448,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                                 });
                             });
                         elems.push((format!("assistant.tool.{i}"), h.header_response, format!("{name}: {}", short(result.as_deref().unwrap_or(""), 300))));
+                    }
+                    Entry::Attached(labels) => {
+                        let text = format!("{} {}", tl!("Sent along:"), labels.join(", "));
+                        let r = ui.label(RichText::new(&text).size(11.0).color(t.text_faint));
+                        elems.push((format!("assistant.entry.{i}"), r, text));
                     }
                     Entry::Note { text, warn } => {
                         let r = ui.label(RichText::new(text).size(12.0).color(if *warn { WARN } else { t.text_faint }));
@@ -437,9 +471,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     });
 
     // ---- chips ----
-    ui.horizontal(|ui| {
+    let sees = models
+        .as_ref()
+        .and_then(|m| m["models"].as_array())
+        .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
+        .and_then(|m| m["capabilities"]["images"].as_bool())
+        .unwrap_or(true);
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(tl!("Sends along:")).size(11.0).color(t.text_faint));
-        let blocks = context_blocks(app, true, true);
+        let blocks = context_blocks(app, Chips { selection: true, playhead: true, transcript: false, markers: false, frame: false });
         let text_of = |label: &str| blocks.iter().find(|b| b["label"] == label).and_then(|b| b["text"].as_str()).unwrap_or("nothing selected").to_string();
         let r = ui.selectable_label(chat.chip_selection, tl!("Selection")).on_hover_text(text_of("selection"));
         elems.push(("assistant.chip.selection".into(), r.clone(), format!("Selection {}", if chat.chip_selection { "on" } else { "off" })));
@@ -450,6 +490,24 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         elems.push(("assistant.chip.playhead".into(), r.clone(), format!("Playhead {}", if chat.chip_playhead { "on" } else { "off" })));
         if r.clicked() {
             chat.chip_playhead = !chat.chip_playhead;
+        }
+        let r = ui.selectable_label(chat.chip_transcript, tl!("Transcript")).on_hover_text(tl!("What is said within 20 seconds of the playhead."));
+        elems.push(("assistant.chip.transcript".into(), r.clone(), format!("Transcript {}", if chat.chip_transcript { "on" } else { "off" })));
+        if r.clicked() {
+            chat.chip_transcript = !chat.chip_transcript;
+        }
+        let r = ui.selectable_label(chat.chip_markers, tl!("Markers")).on_hover_text(tl!("Every marker in this sequence."));
+        elems.push(("assistant.chip.markers".into(), r.clone(), format!("Markers {}", if chat.chip_markers { "on" } else { "off" })));
+        if r.clicked() {
+            chat.chip_markers = !chat.chip_markers;
+        }
+        let hover =
+            if sees { tl!("A picture of the Program monitor at the playhead. Costs more than text.") } else { tl!("This model cannot look at pictures.") };
+        let r =
+            ui.add_enabled_ui(sees, |ui| ui.selectable_label(chat.chip_frame && sees, tl!("Frame"))).inner.on_hover_text(hover).on_disabled_hover_text(hover);
+        elems.push(("assistant.chip.frame".into(), r.clone(), format!("Frame {}", if chat.chip_frame && sees { "on" } else { "off" })));
+        if r.clicked() {
+            chat.chip_frame = !chat.chip_frame;
         }
     });
 
@@ -499,7 +557,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         });
     });
 
-    let (sel, play) = (chat.chip_selection, chat.chip_playhead);
+    let chips = Chips {
+        selection: chat.chip_selection,
+        playhead: chat.chip_playhead,
+        transcript: chat.chip_transcript,
+        markers: chat.chip_markers,
+        frame: chat.chip_frame && sees,
+    };
     drop(chat);
     for (id, r, label) in &elems {
         app.auto.add_response(id, r, label);
@@ -509,7 +573,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let mut chat = lock(&shared);
         match a {
             Action::Send(text) => {
-                let mut params = json!({"text": text, "context": context_blocks(app, sel, play)});
+                let mut params = json!({"text": text, "context": context_blocks(app, chips)});
                 if let Some(id) = chat.thread {
                     params["thread"] = json!(id);
                 }

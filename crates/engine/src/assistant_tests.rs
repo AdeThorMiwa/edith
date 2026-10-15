@@ -189,6 +189,13 @@ fn tools_refuse_hostile_arguments_with_an_error_not_a_panic() {
         ("transcript", json!({"clip": 99999999})),
         ("transcript", json!({"item": "x"})),
         ("transcript", json!({"item": 1, "from": "zzz"})),
+        ("frame_view", json!({"time": "banana"})),
+        ("frame_view", json!({"time": 1e300})),
+        ("frame_view", json!({"time": -1})),
+        ("frame_view", json!({"time": 9999})),
+        ("frame_view", json!({"size": 10})),
+        ("frame_view", json!({"size": 100000})),
+        ("frame_view", json!({"size": "big"})),
     ];
     for (name, input) in cases {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_tool(&s, name, input.clone())));
@@ -308,7 +315,7 @@ fn context_blocks_are_sent_in_the_user_message() {
     let req = &model.requests()[0];
     assert!(req.messages[0].text().contains("[selection]") && req.messages[0].text().contains("#29"));
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
-    assert_eq!(req.tools.len(), 4);
+    assert_eq!(req.tools.len(), 5, "overview, sequence view, clip detail, frame view, transcript");
     assert_eq!(req.model, "claude-haiku-5-5");
 }
 
@@ -715,4 +722,181 @@ fn a_save_that_fails_is_reported_in_the_conversation_and_never_breaks_the_turn()
     let notices: Vec<&str> = view["events"].as_array().unwrap().iter().filter(|e| e["type"] == "notice").filter_map(|e| e["text"].as_str()).collect();
     assert!(notices.iter().any(|n| n.contains("could not be saved")), "{notices:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn vision_models(images: bool) -> Arc<ScriptedModel> {
+    let caps = Capabilities {
+        tools: true,
+        parallel_tools: true,
+        images,
+        thinking: true,
+        effort: true,
+        caching: true,
+        context_tokens: 1_000_000,
+        max_output_tokens: 128_000,
+    };
+    let info = ModelInfo { id: "claude-haiku-5-5".into(), display_name: "Haiku".into(), capabilities: caps, price: None };
+    Arc::new(ScriptedModel::new().with_models(vec![info]))
+}
+
+fn load_models(s: &mut Session) {
+    let started = Instant::now();
+    loop {
+        let v = s.execute("assistant.models", json!({})).unwrap();
+        if v["updating"] == false && !v["models"].as_array().unwrap().is_empty() {
+            return;
+        }
+        assert!(started.elapsed() < Duration::from_secs(10), "the model list never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn frame_view_returns_a_jpeg_of_the_moment_asked_for_and_leaves_the_playhead_alone() {
+    let s = demo();
+    let playhead = s.playhead();
+    let out = run_tool(&s, "frame_view", json!({}));
+    assert!(!out.is_error, "{}", out.content);
+    assert_eq!(out.images.len(), 1);
+    assert_eq!(out.images[0].media_type, "image/jpeg");
+    assert!(out.images[0].data.starts_with("/9j/"), "a JPEG file starts FF D8 FF, which is /9j/ in base64: {}", &out.images[0].data[..12]);
+    assert!(out.content.contains("The Program frame at 00:00:04:06") && out.content.contains("768x432"), "{}", out.content);
+    assert_eq!(s.playhead(), playhead, "looking does not move the playhead");
+    // another moment, and a size: bigger costs more
+    let at2 = run_tool(&s, "frame_view", json!({"time": 2, "size": 1568}));
+    // 2.0 s at 23.976 fps is between frames; the frame at or before it is shown (frame 47, 00:00:01:23)
+    assert!(!at2.is_error && at2.content.contains("00:00:01:23") && at2.content.contains("1568x882"), "{}", at2.content);
+    assert!(at2.images[0].data.len() > out.images[0].data.len());
+    let small = run_tool(&s, "frame_view", json!({"time": "00:00:02:00", "size": 256}));
+    assert!(small.images[0].data.len() < out.images[0].data.len());
+    assert!(run_tool(&Session::default(), "frame_view", json!({})).is_error, "no sequence, no picture");
+}
+
+#[test]
+fn the_chips_attach_a_frame_the_transcript_near_the_playhead_and_the_markers() {
+    let mut s = demo();
+    // a transcript for the first clip, with words around the playhead (00:00:04:06 is inside the first clip)
+    let (item, source_in, start) = {
+        let q = s.active_sequence().unwrap();
+        let i = &q.video_tracks[0].items[0];
+        (i.item, i.source_in, i.start)
+    };
+    let words: Vec<_> = ["The", "lighthouse", "keeper", "had", "not", "slept."]
+        .iter()
+        .enumerate()
+        .map(|(n, w)| {
+            let a = Tick(source_in.0 + (start.0 + 3 * TICKS_PER_SECOND) + n as i64 * TICKS_PER_SECOND / 2);
+            filmcraft_project::Word::new(*w, a, Tick(a.0 + TICKS_PER_SECOND / 3))
+        })
+        .collect();
+    Arc::make_mut(&mut s.project)
+        .transcripts
+        .insert(item, Arc::new(filmcraft_project::Transcript { language: "en".into(), source: "manual".into(), speakers: vec![], words }));
+    let model = vision_models(true);
+    model.push_reply(text_reply("I see it.").0, text_reply("I see it.").1);
+    s.assistant.use_model(model.clone());
+    load_models(&mut s);
+    let r = s.execute("assistant.send", json!({"text": "look", "wait": true, "context": [{"kind": "frame"}, {"kind": "transcript"}, {"kind": "markers"}, {"label": "playhead", "text": "at 00:00:04:06"}]})).unwrap();
+    let first = &model.requests()[0];
+    assert!(first.tools.iter().any(|t| t.name == "frame_view"), "a model that can see is offered the frame tool");
+    let parts = &first.messages[0].parts;
+    assert!(
+        parts.iter().any(|p| matches!(p, Part::Image { media_type, data } if media_type == "image/jpeg" && data.starts_with("/9j/"))),
+        "the frame is in the message"
+    );
+    let text = first.messages[0].text();
+    assert!(text.contains("[transcript]") && text.contains("lighthouse keeper"), "{text}");
+    assert!(text.contains("[markers]") && text.contains("Music hit"), "{text}");
+    assert!(text.contains("[frame]") && text.contains("The Program frame at the playhead"));
+    // the conversation names what was sent along, never the picture itself
+    let events = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap()["events"].clone();
+    assert_eq!(events[0]["attached"], json!(["frame", "transcript", "markers", "playhead"]));
+    assert!(!events.to_string().contains("/9j/"), "picture bytes are not streamed");
+}
+
+#[test]
+fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool() {
+    let mut s = demo();
+    let model = vision_models(false);
+    model.push_reply(text_reply("ok").0, text_reply("ok").1);
+    s.assistant.use_model(model.clone());
+    load_models(&mut s);
+    let e = s.execute("assistant.send", json!({"text": "look", "context": [{"kind": "frame"}]})).unwrap_err().to_string();
+    assert!(e.contains("cannot look at pictures") && e.contains("images"), "{e}");
+    assert!(s.assistant.threads.is_empty(), "a refused question leaves no thread");
+    // without the frame chip it works, and the tool list leaves the frame tool out
+    s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
+    assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
+    assert_eq!(model.requests()[0].tools.len(), 4);
+    // and the engine would refuse to run it anyway if asked
+    let out = s.run_assistant_tool("frame_view", &json!({}));
+    assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");
+}
+
+#[test]
+fn hostile_context_kinds_are_refused() {
+    let mut s = demo();
+    s.assistant.use_model(scripted(vec![]));
+    for bad in [json!([{"kind": "nope"}]), json!([{"kind": 5}]), json!([{"kind": null, "label": "l"}]), json!([{"kind": ["frame"]}])] {
+        assert!(s.execute("assistant.send", json!({"text": "hi", "context": bad.clone()})).is_err(), "{bad}");
+    }
+    assert!(s.assistant.threads.is_empty());
+}
+
+#[test]
+fn saved_conversations_do_not_keep_picture_bytes() {
+    let dir = tmp("threads-pictures");
+    let mut s = demo();
+    s.assistant.set_dir(&dir);
+    let model = vision_models(true);
+    model.push_reply(tool_reply(&[("t1", "frame_view", json!({}))]).0, tool_reply(&[("t1", "frame_view", json!({}))]).1);
+    model.push_reply(text_reply("A sunset.").0, text_reply("A sunset.").1);
+    s.assistant.use_model(model);
+    load_models(&mut s);
+    let id =
+        s.execute("assistant.send", json!({"text": "what is on screen?", "wait": true, "context": [{"kind": "frame"}]})).unwrap()["thread"].as_u64().unwrap();
+    let file = std::fs::read_to_string(saved_file(&dir, id)).unwrap();
+    assert!(!file.contains("/9j/"), "no picture bytes on disk");
+    assert!(file.contains("a picture was attached here") && file.contains("picture not kept"));
+    assert!(file.len() < 200_000, "{} bytes", file.len());
+    // and the conversation is still valid to continue after a restart
+    let mut again = demo();
+    again.assistant.set_dir(&dir);
+    let next = scripted(vec![text_reply("still here")]);
+    again.assistant.use_model(next.clone());
+    again.execute("assistant.send", json!({"text": "and now?", "thread": id, "wait": true})).unwrap();
+    assert!(next.requests()[0].messages.iter().flat_map(|m| &m.parts).all(|p| !matches!(p, Part::Image { .. })));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Asks the real model to look at a frame of the demo project, with the key stored in the keychain:
+/// one small picture (about 700 tokens) and a short answer, a few tenths of a cent. The first live
+/// check that a picture really reaches the model.
+/// `cargo test -p filmcraft-engine --lib --features net -- --ignored real_assistant_looks`
+#[cfg(feature = "net")]
+#[test]
+#[ignore = "uses the real network and the stored Anthropic key"]
+fn real_assistant_looks_at_a_frame_and_describes_it() {
+    let mut s = demo();
+    let started = Instant::now();
+    let r = s
+        .execute(
+            "assistant.send",
+            json!({"text": "Use frame_view to look at the playhead, then describe in one short sentence what is on screen.", "wait": true}),
+        )
+        .unwrap();
+    eprintln!("finished in {:.1}s: {}", started.elapsed().as_secs_f64(), r["finish"]);
+    eprintln!("answer: {}", r["text"]);
+    eprintln!("usage: {}", r["usageText"]);
+    let v = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap();
+    let calls: Vec<String> =
+        v["events"].as_array().unwrap().iter().filter(|e| e["type"] == "tool_call").map(|e| e["name"].as_str().unwrap_or("?").to_string()).collect();
+    eprintln!("tools it called: {calls:?}");
+    for e in edith_net::shared().entries(None) {
+        eprintln!("  request {} -> {:?} in {} ms ({} bytes)", e.method, e.status, e.millis, e.bytes);
+    }
+    assert_eq!(r["finish"]["kind"], "done", "{r}");
+    assert!(calls.iter().any(|c| c == "frame_view"), "the model never looked at the frame: {calls:?}");
+    let text = r["text"].as_str().unwrap().to_lowercase();
+    assert!(["sun", "sea", "ocean", "water", "horizon", "sky"].iter().any(|w| text.contains(w)), "the description should match a sunset over water: {text}");
 }

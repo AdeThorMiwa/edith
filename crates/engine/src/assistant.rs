@@ -168,7 +168,7 @@ fn saved_from_state(id: u64, title: &str, st: &ThreadState) -> SavedThread {
         version: 1,
         id,
         title: title.to_string(),
-        thread: st.thread.clone(),
+        thread: st.thread.without_images(),
         events: st.events.iter().cloned().collect(),
         dropped: st.dropped,
         finish: st.finish.clone(),
@@ -527,19 +527,33 @@ fn delete_thread(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"deleted": id}))
 }
 
-fn context_blocks(p: &Value, cmd: &str) -> Result<Vec<ContextBlock>> {
+/// The context sent along with a question. Each block is `{label, text}`, or `{kind}` for what the
+/// engine knows how to gather itself: `frame` (a picture of the Program monitor at the playhead,
+/// only for a model that can see), `transcript` (what is said near the playhead) and `markers`.
+fn context_blocks(s: &Session, p: &Value, cmd: &str, can_see: bool) -> Result<Vec<ContextBlock>> {
     let Some(v) = p.get("context").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
-    let arr = v.as_array().ok_or_else(|| bad(cmd, "`context` must be a list of {label, text}"))?;
+    let arr = v.as_array().ok_or_else(|| bad(cmd, "`context` must be a list of {label, text} or {kind}"))?;
     if arr.len() > 10 {
         return Err(bad(cmd, "at most 10 context blocks"));
     }
     arr.iter()
         .map(|b| {
+            if let Some(kind) = b.get("kind") {
+                return match kind.as_str() {
+                    Some("frame") if !can_see => {
+                        Err(bad(cmd, "the chosen model cannot look at pictures; pick a model with the `images` badge, or turn the Frame chip off"))
+                    }
+                    Some("frame") => assistant_tools::frame_block(s).map_err(|e| EngineError::Other(format!("could not attach the frame: {e}"))),
+                    Some("transcript") => Ok(assistant_tools::transcript_block(s)),
+                    Some("markers") => Ok(assistant_tools::markers_block(s)),
+                    _ => Err(bad(cmd, "a context `kind` must be frame, transcript or markers")),
+                };
+            }
             let label = b.get("label").and_then(Value::as_str).filter(|l| !l.is_empty() && l.chars().count() <= 40);
             let text = b.get("text").and_then(Value::as_str).filter(|t| t.len() <= 100_000);
             match (label, text) {
-                (Some(l), Some(t)) => Ok(ContextBlock { label: l.to_string(), text: t.to_string() }),
-                _ => Err(bad(cmd, "each context block needs a `label` (up to 40 characters) and `text` (up to 100000 bytes)")),
+                (Some(l), Some(t)) => Ok(ContextBlock::text(l, t)),
+                _ => Err(bad(cmd, "each context block needs a `label` (up to 40 characters) and `text` (up to 100000 bytes), or a `kind`")),
             }
         })
         .collect()
@@ -557,7 +571,9 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`wait` must be true or false")),
     };
-    let ctx = context_blocks(p, cmd)?;
+    // A model that cannot see pictures is neither offered the frame tool nor sent a frame.
+    let can_see = s.model_info().is_none_or(|i| i.capabilities.images);
+    let ctx = context_blocks(s, p, cmd, can_see)?;
     // A slash command is expanded now, before any thread exists, so a mistyped one leaves nothing behind.
     let ask = match edith_ai::PromptPack::builtin().expand(text) {
         Ok(Some(expanded)) => expanded,
@@ -577,7 +593,10 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     let settings = s.assistant.settings.clone();
     let profile = lock(&shared.state).profile;
     let defs = assistant_tools::tools();
-    let env = Arc::new(ChannelEnvironment { specs: defs.iter().map(|d| (d.spec.clone(), d.read_only)).collect(), tx: Mutex::new(s.assistant.tool_tx.clone()) });
+    let env = Arc::new(ChannelEnvironment {
+        specs: defs.iter().filter(|d| can_see || d.spec.name != "frame_view").map(|d| (d.spec.clone(), d.read_only)).collect(),
+        tx: Mutex::new(s.assistant.tool_tx.clone()),
+    });
     let assistant = Arc::new(Assistant::new(model, env, &settings, info.as_ref(), profile));
 
     let job =

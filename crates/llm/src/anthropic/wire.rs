@@ -4,6 +4,21 @@ use super::PROVIDER;
 use crate::{LlmError, Message, Part, Request, Role};
 use serde_json::{Value, json};
 
+/// Largest picture sent, in bytes of base64 (the API refuses more than 5 MB per image).
+const MAX_IMAGE_BASE64: usize = 6 * 1024 * 1024;
+
+/// A picture as the API wants it. A type the API does not take, or a picture too large for it, is
+/// replaced by a line of text saying so: sending it would make the whole request fail.
+fn image_json(media_type: &str, data: &str) -> Value {
+    if !matches!(media_type, "image/jpeg" | "image/png" | "image/gif" | "image/webp") {
+        return json!({"type": "text", "text": "[a picture of a type that cannot be sent was left out]"});
+    }
+    if data.len() > MAX_IMAGE_BASE64 {
+        return json!({"type": "text", "text": "[a picture that was too large to send was left out]"});
+    }
+    json!({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}})
+}
+
 fn part_json(part: &Part) -> Option<Value> {
     Some(match part {
         Part::Text { text } => json!({"type": "text", "text": text}),
@@ -13,8 +28,20 @@ fn part_json(part: &Part) -> Option<Value> {
             let input = if input_error.is_some() || !input.is_object() { json!({}) } else { input.clone() };
             json!({"type": "tool_use", "id": id, "name": name, "input": input})
         }
-        Part::ToolResult { tool_use_id, content, is_error } => {
-            let mut v = json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": content});
+        Part::Image { media_type, data } => image_json(media_type, data),
+        Part::ToolResult { tool_use_id, content, is_error, images } => {
+            // With pictures the content is a list: the words first, then each picture.
+            let body = if images.is_empty() {
+                json!(content)
+            } else {
+                let mut blocks: Vec<Value> = Vec::new();
+                if !content.is_empty() {
+                    blocks.push(json!({"type": "text", "text": content}));
+                }
+                blocks.extend(images.iter().map(|i| image_json(&i.media_type, &i.data)));
+                Value::Array(blocks)
+            };
+            let mut v = json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": body});
             if *is_error && let Some(o) = v.as_object_mut() {
                 o.insert("is_error".to_string(), Value::Bool(true));
             }
@@ -147,8 +174,8 @@ mod tests {
             ],
         });
         r.messages.push(Message::tool_results(vec![
-            Part::ToolResult { tool_use_id: "toolu_1".into(), content: "ok".into(), is_error: false },
-            Part::ToolResult { tool_use_id: "toolu_2".into(), content: "bad input".into(), is_error: true },
+            Part::ToolResult { tool_use_id: "toolu_1".into(), content: "ok".into(), is_error: false, images: Vec::new() },
+            Part::ToolResult { tool_use_id: "toolu_2".into(), content: "bad input".into(), is_error: true, images: Vec::new() },
         ]));
         let b = build_body(&r).unwrap();
         let a = &b["messages"][1]["content"];
@@ -178,5 +205,69 @@ mod tests {
         let mut r = req();
         r.model = "  ".into();
         assert!(matches!(build_body(&r), Err(LlmError::BadRequest(_))));
+    }
+
+    #[test]
+    fn pictures_go_out_as_image_blocks_and_inside_tool_results_as_a_list() {
+        let mut r = req();
+        r.messages = vec![Message {
+            role: Role::User,
+            parts: vec![Part::Image { media_type: "image/jpeg".into(), data: "QUJD".into() }, Part::Text { text: "what is wrong with this frame?".into() }],
+        }];
+        let b = build_body(&r).unwrap();
+        assert_eq!(b["messages"][0]["content"][0], json!({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "QUJD"}}));
+        assert_eq!(b["messages"][0]["content"][1]["type"], "text");
+
+        let img = crate::Image { media_type: "image/png".into(), data: "REVG".into() };
+        let mut r = req();
+        r.messages.push(Message {
+            role: Role::Assistant,
+            parts: vec![Part::ToolUse { id: "t1".into(), name: "frame_view".into(), input: json!({}), input_error: None }],
+        });
+        r.messages.push(Message::tool_results(vec![Part::ToolResult {
+            tool_use_id: "t1".into(),
+            content: "the frame at 00:00:04:23".into(),
+            is_error: false,
+            images: vec![img.clone()],
+        }]));
+        let b = build_body(&r).unwrap();
+        let c = &b["messages"][2]["content"][0]["content"];
+        assert_eq!(c[0], json!({"type": "text", "text": "the frame at 00:00:04:23"}));
+        assert_eq!(c[1]["source"]["media_type"], "image/png");
+        // a picture with no words is just the picture; with no picture the content is still a plain string
+        r.messages.pop();
+        r.messages.push(Message::tool_results(vec![Part::ToolResult { tool_use_id: "t1".into(), content: String::new(), is_error: false, images: vec![img] }]));
+        let b = build_body(&r).unwrap();
+        assert_eq!(b["messages"][2]["content"][0]["content"].as_array().unwrap().len(), 1);
+        r.messages.pop();
+        r.messages.push(Message::tool_results(vec![Part::ToolResult {
+            tool_use_id: "t1".into(),
+            content: "text only".into(),
+            is_error: false,
+            images: vec![],
+        }]));
+        assert_eq!(build_body(&r).unwrap()["messages"][2]["content"][0]["content"], "text only");
+    }
+
+    #[test]
+    fn pictures_the_api_would_refuse_are_replaced_by_a_line_of_text_not_sent() {
+        let mut r = req();
+        r.messages = vec![Message {
+            role: Role::User,
+            parts: vec![
+                Part::Image { media_type: "image/svg+xml".into(), data: "QUJD".into() },
+                Part::Image { media_type: "image/jpeg".into(), data: "A".repeat(7 * 1024 * 1024) },
+                Part::Image { media_type: "image/webp".into(), data: "QUJD".into() },
+                Part::Text { text: "q".into() },
+            ],
+        }];
+        let b = build_body(&r).unwrap();
+        let c = &b["messages"][0]["content"];
+        assert_eq!(c[0]["type"], "text");
+        assert!(c[0]["text"].as_str().unwrap().contains("cannot be sent"));
+        assert_eq!(c[1]["type"], "text");
+        assert!(c[1]["text"].as_str().unwrap().contains("too large"));
+        assert_eq!(c[2]["type"], "image", "an acceptable picture still goes");
+        assert!(b.to_string().len() < 2000, "the oversize picture is not in the request");
     }
 }

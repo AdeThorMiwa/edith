@@ -99,7 +99,10 @@ fn a_plain_question_is_answered_and_the_thread_grows_by_two() {
     assert_eq!((r.finish, r.steps), (Finish::Done, 1));
     assert_eq!(t.messages.len(), 2);
     assert_eq!(t.messages[1].text(), "It jumps because the cut ignores the sentence.");
-    assert!(matches!(events.first(), Some(AgentEvent::UserMessage { text }) if text == "why is the cut abrupt?"), "the turn opens with what the person said");
+    assert!(
+        matches!(events.first(), Some(AgentEvent::UserMessage { text, attached }) if text == "why is the cut abrupt?" && attached.is_empty()),
+        "the turn opens with what the person said"
+    );
     assert!(events.iter().any(|e| matches!(e, AgentEvent::Text { text } if text.contains("jumps"))));
     assert!(matches!(events.last(), Some(AgentEvent::Finished { finish: Finish::Done })));
     assert_eq!(t.usage, usage(10, 5));
@@ -382,7 +385,7 @@ fn big_tool_results_are_cut_before_they_reach_the_model() {
 #[test]
 fn context_goes_in_the_user_message_so_the_cached_prompt_never_changes() {
     let e = editor();
-    let ctx = [ContextBlock { label: "selection".into(), text: "clip A, 0:42 to 0:47".into() }];
+    let ctx = [ContextBlock::text("selection", "clip A, 0:42 to 0:47")];
     let run_once = |ctx: &[ContextBlock]| {
         let m = ScriptedModel::new();
         push(&m, text_reply("a"));
@@ -481,7 +484,9 @@ fn repair_keeps_a_valid_thread_whole_and_cuts_a_broken_one_back_to_its_valid_par
     let user = |s: &str| Message::user_text(s);
     let call = |id: &str| Message { role: Role::Assistant, parts: vec![use_part(id, "project_inspect", json!({}))] };
     let answer = |ids: &[&str]| {
-        Message::tool_results(ids.iter().map(|i| Part::ToolResult { tool_use_id: (*i).into(), content: "ok".into(), is_error: false }).collect())
+        Message::tool_results(
+            ids.iter().map(|i| Part::ToolResult { tool_use_id: (*i).into(), content: "ok".into(), is_error: false, images: Vec::new() }).collect(),
+        )
     };
     let broken: Vec<(Vec<Message>, usize)> = vec![
         // a call that was never answered: cut back to before it (a trailing question is fine)
@@ -498,7 +503,13 @@ fn repair_keeps_a_valid_thread_whole_and_cuts_a_broken_one_back_to_its_valid_par
         (vec![user("q"), Message { role: Role::User, parts: vec![use_part("x", "n", json!({}))] }], 1),
         // an assistant message that is also an answer
         (
-            vec![user("q"), Message { role: Role::Assistant, parts: vec![Part::ToolResult { tool_use_id: "x".into(), content: "c".into(), is_error: false }] }],
+            vec![
+                user("q"),
+                Message {
+                    role: Role::Assistant,
+                    parts: vec![Part::ToolResult { tool_use_id: "x".into(), content: "c".into(), is_error: false, images: Vec::new() }],
+                },
+            ],
             1,
         ),
     ];
@@ -512,4 +523,49 @@ fn repair_keeps_a_valid_thread_whole_and_cuts_a_broken_one_back_to_its_valid_par
     }
     let mut empty = Thread::new();
     assert_eq!(empty.repair(), 0);
+}
+
+#[test]
+fn a_tool_can_answer_with_a_picture_and_it_reaches_the_model_but_not_the_event_stream() {
+    let img = edith_llm::Image { media_type: "image/jpeg".into(), data: "QUJDREVG".into() };
+    let sent = img.clone();
+    let e = FakeEnvironment::new().tool("frame_view", true, move |_| ToolOutput::with_image("the frame at 00:00:04:23", sent.clone()));
+    let m = ScriptedModel::new();
+    push(&m, tool_reply(vec![use_part("t1", "frame_view", json!({}))]));
+    push(&m, text_reply("It looks like a sunset."));
+    let mut t = Thread::new();
+    let (r, events) = run(&agent(&m, &e, |_| {}), &mut t, "what is on screen?");
+    assert_eq!(r.finish, Finish::Done);
+    let Part::ToolResult { images, content, .. } = &t.messages[2].parts[0] else { panic!() };
+    assert_eq!((images.clone(), content.as_str()), (vec![img], "the frame at 00:00:04:23"));
+    // the second request carried the picture
+    assert!(matches!(&m.requests()[1].messages[2].parts[0], Part::ToolResult { images, .. } if images.len() == 1));
+    // the stream says a picture came, without the bytes
+    let Some(AgentEvent::ToolResult { pictures, .. }) = events.iter().find(|e| matches!(e, AgentEvent::ToolResult { .. })) else { panic!() };
+    assert_eq!(*pictures, 1);
+    assert!(!format!("{events:?}").contains("QUJDREVG"), "picture bytes never travel in events or traces");
+}
+
+#[test]
+fn the_user_message_event_names_the_context_that_was_sent_and_saved_threads_drop_picture_bytes() {
+    let img = edith_llm::Image::from_bytes("image/jpeg", b"PICTURE-BYTES");
+    let e = FakeEnvironment::new().tool("frame_view", true, {
+        let img = img.clone();
+        move |_| ToolOutput::with_image("a frame", img.clone())
+    });
+    let m = ScriptedModel::new();
+    push(&m, tool_reply(vec![use_part("t1", "frame_view", json!({}))]));
+    push(&m, text_reply("Looks fine."));
+    let mut t = Thread::new();
+    let ctx = [ContextBlock::text("playhead", "at 00:00:01:00"), ContextBlock { label: "frame".into(), text: "the frame".into(), image: Some(img) }];
+    let (_, events) = run_with(&agent(&m, &e, |_| {}), &mut t, &ctx, "check this", &cancel());
+    assert!(matches!(&events[0], AgentEvent::UserMessage { attached, .. } if attached == &["playhead", "frame"]), "{:?}", events[0]);
+    // the thread as it is sent holds pictures; the copy that is saved does not
+    assert!(t.messages.iter().flat_map(|m| &m.parts).any(|p| matches!(p, Part::Image { .. })));
+    let saved = t.without_images();
+    let text = serde_json::to_string(&saved).unwrap();
+    assert!(!text.contains(&edith_llm::Image::from_bytes("image/jpeg", b"PICTURE-BYTES").data), "no picture bytes in the saved copy");
+    assert!(text.contains("a picture was attached here") && text.contains("1 picture not kept"));
+    assert_valid(&saved);
+    assert_eq!(saved.messages.len(), t.messages.len());
 }

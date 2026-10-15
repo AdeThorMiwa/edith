@@ -412,3 +412,66 @@ fn delete_needs_two_clicks_and_removes_the_conversation_and_its_file() {
     assert!(!d.has("assistant.delete"), "with no thread there is nothing to delete");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn vision_model(images: bool, replies: Vec<(Vec<StreamEvent>, Response)>) -> Arc<ScriptedModel> {
+    let caps = Capabilities {
+        tools: true,
+        parallel_tools: true,
+        images,
+        thinking: true,
+        effort: true,
+        caching: true,
+        context_tokens: 1_000_000,
+        max_output_tokens: 128_000,
+    };
+    let m = ScriptedModel::new().with_models(vec![ModelInfo {
+        id: "claude-haiku-5-5".into(),
+        display_name: "Claude Haiku 5.5".into(),
+        capabilities: caps,
+        price: None,
+    }]);
+    for (e, r) in replies {
+        m.push_reply(e, r);
+    }
+    Arc::new(m)
+}
+
+#[test]
+fn the_transcript_markers_and_frame_chips_send_what_they_name_and_the_message_says_so() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let model = vision_model(true, vec![text_reply("I can see a sunset.")]);
+    d.app().session.assistant.use_model(model.clone());
+    d.open_assistant();
+    d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
+    assert_eq!(d.label("assistant.chip.frame"), "Frame off", "the frame chip starts off: pictures cost more than text");
+    for chip in ["transcript", "markers", "frame"] {
+        d.click(&format!("assistant.chip.{chip}"));
+    }
+    assert_eq!(d.label("assistant.chip.frame"), "Frame on");
+    d.type_into_input("what is on screen?");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("sunset")));
+    let first = &model.requests()[0].messages[0];
+    assert!(first.parts.iter().any(|p| matches!(p, Part::Image { media_type, .. } if media_type == "image/jpeg")), "the frame went with the question");
+    assert!(first.text().contains("[markers]") && first.text().contains("[transcript]"), "{}", first.text());
+    let entries = d.entries();
+    let sent = entries.iter().find(|(_, l)| l.starts_with("Sent along:")).expect("a line saying what was sent");
+    for label in ["playhead", "transcript", "markers", "frame"] {
+        assert!(sent.1.contains(label), "{label} missing from {:?}", sent.1);
+    }
+    d.snapshot("assistant-frame");
+}
+
+#[test]
+fn a_model_that_cannot_see_has_the_frame_chip_disabled() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(vision_model(false, vec![]));
+    d.open_assistant();
+    d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
+    d.frames(6);
+    let chip = d.elements("assistant.chip.frame").into_iter().find(|e| e["id"] == "assistant.chip.frame").expect("the chip is there");
+    assert_eq!(chip["label"], "Frame off");
+    assert_eq!(chip["enabled"], json!(false), "{chip}");
+}

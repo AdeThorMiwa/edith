@@ -339,8 +339,8 @@ mod tests {
         assert_eq!(first.stop_reason, StopReason::ToolUse);
         req.messages.push(first.message.clone());
         req.messages.push(Message::tool_results(vec![
-            Part::ToolResult { tool_use_id: "toolu_1".into(), content: "[]".into(), is_error: false },
-            Part::ToolResult { tool_use_id: "toolu_2".into(), content: "hello".into(), is_error: false },
+            Part::ToolResult { tool_use_id: "toolu_1".into(), content: "[]".into(), is_error: false, images: Vec::new() },
+            Part::ToolResult { tool_use_id: "toolu_2".into(), content: "hello".into(), is_error: false, images: Vec::new() },
         ]));
         assert_eq!(m.stream(&req, &cancel(), &mut |_| {}).unwrap().message.text(), "done");
         let second = s.requests.lock().unwrap()[1].clone();
