@@ -3592,3 +3592,28 @@
 	Export the labels to a preset file…	Exportar las etiquetas a un archivo de ajuste preestablecido…
 	Show the presets folder	Mostrar la carpeta de ajustes preestablecidos
 	Delete this preset	Eliminar este ajuste preestablecido
+
+# Connections panel and the Offline switch (fork roadmap F02). Written from the plain meaning of the English text.
+	API key	Clave de API
+	Connected	Conectado
+	Connections	Conexiones
+	Could not save the key: {why}	No se pudo guardar la clave: {why}
+	Get a key	Obtener una clave
+	No requests yet.	Aún no hay solicitudes.
+	Offline mode: make no network requests	Modo sin conexión: no hacer solicitudes de red
+	Offline: no network requests. Click to go online.	Sin conexión: no se hacen solicitudes de red. Haz clic para volver a conectar.
+	On this computer	En este equipo
+	Online	En línea
+	Online. Click to stop all network requests.	En línea. Haz clic para detener todas las solicitudes de red.
+	Paste a key	Pega una clave
+	Recent requests	Solicitudes recientes
+	Saved the key for {name}.	Se guardó la clave de {name}.
+	Services	Servicios
+	Sign in	Iniciar sesión
+	The keychain cannot be used: {why}	No se puede usar el llavero: {why}
+	This build has no keychain support, so keys cannot be saved.	Esta versión no admite el llavero, así que no se pueden guardar claves.
+	While Offline is on, everything that needs the internet stops at once. Local features keep working.	Mientras el modo sin conexión esté activado, todo lo que necesita internet se detiene al instante. Las funciones locales siguen funcionando.
+	blocked (offline)	bloqueada (sin conexión)
+	failed	falló
+	free option	opción gratuita
+	from cache	desde la caché

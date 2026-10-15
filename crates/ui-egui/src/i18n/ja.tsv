@@ -3594,3 +3594,28 @@
 	Export the labels to a preset file…	ラベルをプリセットファイルに書き出し…
 	Show the presets folder	プリセットフォルダーを表示
 	Delete this preset	このプリセットを削除
+
+# Connections panel and the Offline switch (fork roadmap F02). Written from the plain meaning of the English text.
+	API key	APIキー
+	Connected	接続済み
+	Connections	接続
+	Could not save the key: {why}	キーを保存できませんでした: {why}
+	Get a key	キーを取得
+	No requests yet.	リクエストはまだありません。
+	Offline mode: make no network requests	オフラインモード: ネットワークリクエストを行わない
+	Offline: no network requests. Click to go online.	オフライン: ネットワークリクエストは行われません。クリックするとオンラインに戻ります。
+	On this computer	このコンピューター上
+	Online	オンライン
+	Online. Click to stop all network requests.	オンライン。クリックするとすべてのネットワークリクエストを停止します。
+	Paste a key	キーを貼り付け
+	Recent requests	最近のリクエスト
+	Saved the key for {name}.	{name} のキーを保存しました。
+	Services	サービス
+	Sign in	サインイン
+	The keychain cannot be used: {why}	キーチェーンを使用できません: {why}
+	This build has no keychain support, so keys cannot be saved.	このビルドはキーチェーンに対応していないため、キーを保存できません。
+	While Offline is on, everything that needs the internet stops at once. Local features keep working.	オフラインモードの間は、インターネットが必要なものはすべて直ちに停止します。ローカル機能は引き続き使えます。
+	blocked (offline)	ブロック済み（オフライン）
+	failed	失敗
+	free option	無料枠あり
+	from cache	キャッシュから

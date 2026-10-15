@@ -3570,3 +3570,28 @@
 	Export the labels to a preset file…	将标签导出为预设文件…
 	Show the presets folder	显示预设文件夹
 	Delete this preset	删除此预设
+
+# Connections panel and the Offline switch (fork roadmap F02). Written from the plain meaning of the English text.
+	API key	API 密钥
+	Connected	已连接
+	Connections	连接
+	Could not save the key: {why}	无法保存密钥：{why}
+	Get a key	获取密钥
+	No requests yet.	还没有请求。
+	Offline mode: make no network requests	脱机模式：不发出任何网络请求
+	Offline: no network requests. Click to go online.	脱机：不发出网络请求。点击以恢复联机。
+	On this computer	在此电脑上
+	Online	联机
+	Online. Click to stop all network requests.	联机。点击以停止所有网络请求。
+	Paste a key	粘贴密钥
+	Recent requests	最近的请求
+	Saved the key for {name}.	已保存 {name} 的密钥。
+	Services	服务
+	Sign in	登录
+	The keychain cannot be used: {why}	无法使用钥匙串：{why}
+	This build has no keychain support, so keys cannot be saved.	此版本不支持钥匙串，因此无法保存密钥。
+	While Offline is on, everything that needs the internet stops at once. Local features keep working.	脱机模式开启期间，所有需要联网的功能会立即停止，本地功能仍可使用。
+	blocked (offline)	已阻止（脱机）
+	failed	失败
+	free option	提供免费选项
+	from cache	来自缓存
