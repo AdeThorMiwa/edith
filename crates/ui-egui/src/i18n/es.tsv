@@ -3617,3 +3617,28 @@
 	failed	falló
 	free option	opción gratuita
 	from cache	desde la caché
+
+# Assistant panel (fork roadmap F03). Written from the plain meaning of the English text.
+	Ask Edith about your edit…	Pregúntale a Edith sobre tu edición…
+	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	Pregunta sobre tu edición. Puedo mirar el proyecto, los clips, los marcadores y las transcripciones; no puedo cambiar nada.
+	Assistant	Asistente
+	Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.	Edith necesita un modelo con el que hablar. Añade tu clave de Anthropic en Conexiones y este panel se activará.
+	Effort	Esfuerzo
+	Looked at	Consultó
+	Model default	Predeterminado del modelo
+	Most steps per question	Máximo de pasos por pregunta
+	New thread	Nuevo hilo
+	No models loaded yet	Aún no se han cargado modelos
+	Open Connections	Abrir Conexiones
+	Selection	Selección
+	Send	Enviar
+	Sends along:	Se envía junto con:
+	Settings	Ajustes
+	Show a summary of its thinking	Mostrar un resumen de su razonamiento
+	Stop a thread at about $	Detener un hilo en unos $
+	Summarize my edit	Resume mi edición
+	The cost is an estimate from list prices.	El costo es una estimación según los precios de lista.
+	Thinking…	Pensando…
+	What would make this cut feel more cinematic?	¿Qué haría que este montaje se sintiera más cinematográfico?
+	Where does the pacing feel slow or uneven?	¿Dónde se siente lento o irregular el ritmo?
+	Working…	Trabajando…

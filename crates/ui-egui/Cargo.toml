@@ -56,6 +56,7 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 # fork: the Connections tests run against the in-memory secret store, never the real keychain
 filmcraft-engine = { workspace = true, features = ["net"] }
 edith-net = { workspace = true, features = ["keychain"] }
+edith-ai = { workspace = true }
 
 # build.rs bakes contributors/contributors.json into the binary (About ▸ Contributors).
 [build-dependencies]

@@ -97,6 +97,11 @@ pub enum Finish {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentEvent {
+    /// What the person typed (context blocks are not repeated), first in every turn, so a recorded
+    /// or streamed thread reads as a whole conversation.
+    UserMessage {
+        text: String,
+    },
     StepStarted {
         step: u32,
     },
@@ -194,6 +199,7 @@ impl Agent<'_> {
     pub fn run_turn(&self, thread: &mut Thread, context: &[ContextBlock], text: &str, cancel: &Cancel, sink: &mut dyn FnMut(AgentEvent)) -> TurnReport {
         let c = &self.config;
         thread.messages.push(user_message(context, text, c.max_context_block_chars));
+        sink(AgentEvent::UserMessage { text: text.to_string() });
         // The gate: tools that would change the project are neither offered nor run in a read-only thread.
         let all = self.env.tools();
         let offered: Vec<&(ToolSpec, bool)> = all.iter().filter(|(_, read_only)| c.profile.allows(*read_only)).collect();

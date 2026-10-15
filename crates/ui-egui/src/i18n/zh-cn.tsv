@@ -3595,3 +3595,28 @@
 	failed	失败
 	free option	提供免费选项
 	from cache	来自缓存
+
+# Assistant panel (fork roadmap F03). Written from the plain meaning of the English text.
+	Ask Edith about your edit…	向 Edith 询问你的剪辑…
+	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	询问关于你的剪辑的问题。我可以查看项目、素材片段、标记和转录文本，但不能更改任何内容。
+	Assistant	助手
+	Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.	Edith 需要一个可对话的模型。在“连接”中添加你的 Anthropic 密钥，此面板就会启用。
+	Effort	推理强度
+	Looked at	查看了
+	Model default	模型默认值
+	Most steps per question	每个问题的最大步骤数
+	New thread	新对话
+	No models loaded yet	尚未加载模型
+	Open Connections	打开“连接”
+	Selection	选区
+	Send	发送
+	Sends along:	一并发送:
+	Settings	设置
+	Show a summary of its thinking	显示其思考摘要
+	Stop a thread at about $	对话达到约 $ 时停止
+	Summarize my edit	总结我的剪辑
+	The cost is an estimate from list prices.	费用是根据标价得出的估算。
+	Thinking…	思考中…
+	What would make this cut feel more cinematic?	怎样才能让这个剪辑更有电影感？
+	Where does the pacing feel slow or uneven?	节奏在哪里显得缓慢或不均匀？
+	Working…	处理中…

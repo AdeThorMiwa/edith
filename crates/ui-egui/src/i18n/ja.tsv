@@ -3619,3 +3619,28 @@
 	failed	失敗
 	free option	無料枠あり
 	from cache	キャッシュから
+
+# Assistant panel (fork roadmap F03). Written from the plain meaning of the English text.
+	Ask Edith about your edit…	Edith に編集について質問…
+	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	編集について質問してください。プロジェクト、クリップ、マーカー、文字起こしを見ることはできますが、何も変更はできません。
+	Assistant	アシスタント
+	Edith needs a model to talk to. Add your Anthropic key in Connections, and this panel will light up.	Edith には話しかけるモデルが必要です。接続に Anthropic のキーを追加すると、このパネルが使えるようになります。
+	Effort	推論の強度
+	Looked at	確認:
+	Model default	モデルの既定
+	Most steps per question	1 回の質問での最大ステップ数
+	New thread	新しいスレッド
+	No models loaded yet	モデルはまだ読み込まれていません
+	Open Connections	接続を開く
+	Selection	選択範囲
+	Send	送信
+	Sends along:	一緒に送るもの:
+	Settings	設定
+	Show a summary of its thinking	思考の要約を表示
+	Stop a thread at about $	スレッドを約 $ で停止
+	Summarize my edit	編集を要約して
+	The cost is an estimate from list prices.	費用は定価からの見積もりです。
+	Thinking…	考え中…
+	What would make this cut feel more cinematic?	このカットをより映画的に感じさせるには？
+	Where does the pacing feel slow or uneven?	どこでテンポが遅い、またはばらついていますか？
+	Working…	処理中…

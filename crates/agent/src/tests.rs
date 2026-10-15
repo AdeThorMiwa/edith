@@ -99,6 +99,7 @@ fn a_plain_question_is_answered_and_the_thread_grows_by_two() {
     assert_eq!((r.finish, r.steps), (Finish::Done, 1));
     assert_eq!(t.messages.len(), 2);
     assert_eq!(t.messages[1].text(), "It jumps because the cut ignores the sentence.");
+    assert!(matches!(events.first(), Some(AgentEvent::UserMessage { text }) if text == "why is the cut abrupt?"), "the turn opens with what the person said");
     assert!(events.iter().any(|e| matches!(e, AgentEvent::Text { text } if text.contains("jumps"))));
     assert!(matches!(events.last(), Some(AgentEvent::Finished { finish: Finish::Done })));
     assert_eq!(t.usage, usage(10, 5));

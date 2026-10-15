@@ -93,11 +93,12 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `Cargo.toml` | workspace dependency lines for the fork's crates (`edith-net`, `edith-llm`, `edith-agent`, `edith-ai`) | F02.1 |
 | `xtask/src/main.rs` | `LAYERS` entries (`("net", 2)`, `("llm", 3)`, `("agent", 3)`, `("ai", 3)`), `SAME_LAYER` edges (`agent`/`ai` to `llm`, `ai` to `agent`), and the prefix rule accepts `edith-` next to `filmcraft-` (two lines) | F02.1, F02.7, F03.1 |
 | `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
-| `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` (variant, `ALL` length, title: 4 lines) | F02.6 |
-| `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;` and one `match` arm | F02.6 |
-| `crates/ui-egui/src/lib.rs` | one line after `job_status`: the status-bar Offline switch | F02.6 |
-| `crates/ui-egui/src/i18n/{es,ja,zh-cn,pt-br}.tsv` | lines appended at the end for the Connections panel (23 each in es, ja, zh-cn; the panel title in pt-br); the tests insist every `tl!` string is translated in those languages | F02.6 |
-| `crates/ui-egui/Cargo.toml` | two dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`) so the UI tests use the in-memory secret store | F02.6 |
+| `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` and `PanelKind::Assistant` (variant, `ALL` length, title: 4 lines each) | F02.6, F03.1 |
+| `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;`, `pub mod assistant;`, `pub mod assistant_view;` and one `match` arm each for the two panels | F02.6, F03.1 |
+| `crates/ui-egui/src/lib.rs` | one line after `job_status` (the status-bar Offline switch) and one in `logic()` (`session.pump_assistant()`, every frame) | F02.6, F03.1 |
+| `crates/ui-egui/src/i18n/{es,ja,zh-cn,pt-br}.tsv` | lines appended at the end for the Connections and Assistant panels (23 each in es, ja, zh-cn for each; the panel titles in pt-br); the tests insist every `tl!` string is translated in those languages | F02.6, F03.1 |
+| `crates/ui-egui/tests/chrome_ui.rs` | the panel-extent helper ignores `status.*` elements (the status bar's own, now including the Offline switch) | F03.1 |
+| `crates/ui-egui/Cargo.toml` | dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`, `edith-ai`) so the UI tests use the in-memory secret store and a scripted model | F02.6, F03.1 |
 | `crates/engine/Cargo.toml` | the `edith-net` and `edith-ai` dependencies and a `net` feature that forwards to them (4 lines) | F02.5, F03.1 |
 | `crates/engine/src/lib.rs` | `pub mod net_commands;`, `pub mod assistant;`, `mod assistant_tools;`, the test modules, and one `Session` field (`assistant`) with its initialiser | F02.5, F03.1 |
 | `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` and `v.extend(crate::assistant::commands());` in `build()` | F02.5, F03.1 |

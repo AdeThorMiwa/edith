@@ -2008,6 +2008,7 @@ impl eframe::App for FilmcraftApp {
         if ctx.input(|i| i.viewport().close_requested()) && panels::clip_dialogs::intercept_quit(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
+        self.session.pump_assistant(); // fork: answers the assistant's tool calls, every frame
         let had_synthetic = !self.synthetic.is_empty();
         self.drain_control(ctx);
         if !self.synthetic.is_empty() && !had_synthetic {

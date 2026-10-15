@@ -269,9 +269,12 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
     let price = info.as_ref().and_then(|i| i.price.clone());
     let available = s.assistant.model_override.is_some() || cfg!(feature = "net");
     let threads: Vec<Value> = s.assistant.threads.iter().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect();
+    let connected = crate::net_commands::connected(&s.assistant.settings.service);
     Ok(json!({
         "available": available,
-        "connected": crate::net_commands::connected(&s.assistant.settings.service),
+        "connected": connected,
+        // Ready to answer: a provider is plugged in (tests, tools) or a key is stored for the service.
+        "ready": available && (s.assistant.model_override.is_some() || connected == Some(true)),
         "settings": settings_json(&s.assistant.settings),
         "settingsNote": s.assistant.settings_note,
         "model": info.as_ref().map(model_json),
