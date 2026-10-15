@@ -1,6 +1,6 @@
 # Upcoming features
 
-> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-13 · **Change:** F01 done (speech on by default, `upstream` remote, fork rules in fork.md, `CLAUDE.md` pointer); earlier: new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
+> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-15 · **Change:** F02 built (network, secrets, sign-in pieces, Connections panel; final check pending), D5 and D11 decided; earlier: F01 done (speech on by default, `upstream` remote, fork rules in fork.md, `CLAUDE.md` pointer); new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
 
 The plan for what this fork adds on top of FilmCraft, in the order we intend to build it. It is the working agreement between the **architect** (product design and architecture decisions) and the **builder** (agents, one feature at a time). Upstream's own plan stays in [roadmap.md](roadmap.md) and [gaps.md](gaps.md); this file does not replace it.
 
@@ -30,6 +30,8 @@ The target workflow:
 4. **Rough cut.** Ask for a rough cut. You get a *proposal*: cuts on sentence boundaries, B-roll placed, ambience under, music ducked. Preview it against your current cut, then accept all, part or none, as one undo step.
 5. **Craft.** Add the film finish (grain, halation, diffusion), run the consistency checker, read the sound map and spotting sheet. The coach and your reference fingerprint show in plain numbers where the pacing drifts from the style you are aiming for.
 6. **Deliver.** Loudness check, chapters, credits block, disclosure checklist, thumbnail frame.
+
+**Where it goes.** The assistant is meant to grow into an editing agent in the way Claude Code is a coding agent: a product of its own, with its own prompts, tools, memory and measured quality, that happens to run on whichever model is best this year. That is why the agent is kept separate from the model providers (§4.8), why it is built with an evaluation suite from the start (F03.6), and why its design follows published research, recorded in [research/agent-and-editing.md](research/agent-and-editing.md). The first finding is a useful warning: on a benchmark of real editing tasks the best agents failed mostly on craft, not on following the brief, and the authors trace it to agents perceiving footage only through stills and transcripts. The editing craft it brings (reading a cut in measurements, knowing a format's beats, comparing against your reference) comes from F08 to F13, not from the model.
 
 **What this is not.** Not autopilot. Not generative-first: free sources and local tools come first, generation is opt-in and late. Not a Premiere-parity project: that is upstream's job.
 
@@ -98,19 +100,21 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 
 | Crate or location | Layer | Purpose | Used by |
 |---|---|---|---|
-| `filmcraft-net` (`crates/net`) | L2 | HTTP client, cache, rate limits, Offline mode, secret store, OAuth/PKCE | F02 and every networked feature |
-| `filmcraft-ai` (`crates/ai`) | L2 | Chat provider clients (Anthropic, OpenAI-compatible, Gemini, OpenRouter), streaming, message and tool types, ACP client | F03, F15, F21 |
-| `filmcraft-sources` (`crates/sources`) | L2 | `MediaSource` trait, provider adapters, license normalization | F05, F25 |
-| `filmcraft-analysis` (`crates/analysis`) | L2 | Pure metrics over frames, audio and sequences | F10 onward |
+| `edith-net` (`crates/net`) | L2 | HTTP client, cache, rate limits, Offline mode, secret store, OAuth/PKCE | F02 and every networked feature |
+| `edith-llm` (`crates/llm`) | L3 | **Model providers** behind one narrow interface: Anthropic, OpenAI-compatible (OpenRouter, OpenAI, Ollama, LM Studio), Gemini. Neutral message, tool, stream-event and capability types. Knows nothing about editing | F03, F15, F21 |
+| `edith-agent` (`crates/agent`) | L3 | **The Edith agent**: loop, prompt packs, context assembly, tool registry, budgets, history rules, trace recording, evaluation harness. Talks to a model only through `edith-llm`'s trait and to the editor only through an `Environment` trait. Knows nothing about vendors or projects | F03, F15, F16, F17 |
+| `edith-ai` (`crates/ai`) | L3 | **The facade the rest of the app uses**: re-exports everything from `edith-llm` and `edith-agent`, and holds the wiring and small utilities around them (build an assistant for a chosen service from the keychain and the model list, shared settings, brand text for prompts). The engine depends on this crate alone | F03 onward |
+| `edith-sources` (`crates/sources`) | L2 | `MediaSource` trait, provider adapters, license normalization | F05, F25 |
+| `edith-analysis` (`crates/analysis`) | L2 | Pure metrics over frames, audio and sequences | F10 onward |
 | Planner, provenance, lexicon, proposal-log types | L1 in `filmcraft-project` | Project data (undoable) | F04, F06, F08, F14 |
-| Engine glue (`assistant.rs`, `hub.rs`, `planner.rs`, `proposals.rs`, …) | L4 in `crates/engine/src/` | Commands, jobs, tool loop | all |
+| Engine glue (`assistant.rs`, `hub.rs`, `planner.rs`, `proposals.rs`, …) | L4 in `crates/engine/src/` | Commands, jobs, threads; implements the agent's `Environment` and tools over the session | all |
 | Panels | L5 in `crates/ui-egui/src/panels/` | UI, listed in `PanelKind` (`dock.rs`) | all |
 
-Rules: add every new crate to `LAYERS` in `xtask/src/main.rs` (a crate without a layer fails `cargo xtask layers`) and any same-layer edge to `SAME_LAYER`. `cargo xtask wasm` checks every L0–L4 crate for the browser, so network crates must compile without their network feature, the pattern `crates/speech` uses (`download`, off for wasm). AI and network features are desktop-only, like speech today.
+Rules: add every new crate to `LAYERS` in `xtask/src/main.rs` (a crate without a layer fails `cargo xtask layers`) and any same-layer edge to `SAME_LAYER` (`agent` to `llm`, `ai` to both, are such edges). The tool accepts the `edith-` prefix next to `filmcraft-` (a two-line change in `xtask/src/main.rs`). `cargo xtask wasm` checks every L0–L4 crate for the browser, so network crates must compile without their network feature, the pattern `crates/speech` uses (`download`, off for wasm). AI and network features are desktop-only, like speech today.
 
 ### 4.2 Network, secrets and OAuth
 
-All network access goes through `filmcraft-net` (F02): the pure-Rust TLS stack already used for model downloads in `crates/speech` (`ureq` 3 + rustls + `rustls-rustcrypto` + the platform verifier), per-host rate limits, an on-disk cache, a request log with secrets redacted, a global Offline mode, and an OS-keychain secret store. OAuth is built from PKCE (S256), a loopback redirect receiver and the `open` crate the desktop app already uses to launch the browser.
+All network access goes through `edith-net` (F02): the pure-Rust TLS stack already used for model downloads in `crates/speech` (`ureq` 3 + rustls + `rustls-rustcrypto` + the platform verifier), per-host rate limits, an on-disk cache, a request log with secrets redacted, a global Offline mode, and an OS-keychain secret store. OAuth is built from PKCE (S256), a loopback redirect receiver and the `open` crate the desktop app already uses to launch the browser.
 
 ### 4.3 Connecting an AI provider (F03)
 
@@ -121,7 +125,7 @@ The pane has a **Connect** button per provider. What it does depends on what eac
 | **A. Sign in (OAuth/PKCE)** | Opens the provider's page in your browser; you approve; FilmCraft receives a token or key on a loopback redirect. | per provider | **OpenRouter** (documented PKCE flow that returns a key you control; no app registration). **ChatGPT sign-in** (new, for partner apps; access for a personal app unconfirmed). Google (needs an OAuth client from Google Cloud). | OpenRouter available now; others to verify |
 | **B. API key** | Opens the provider's console key page; you paste the key; it goes to the OS keychain. | pay-as-you-go, or free tier | Anthropic, OpenAI, Google Gemini (free tier through AI Studio), any OpenAI-compatible endpoint | available |
 | **C. Local** | Detects Ollama or LM Studio on localhost. | free (your hardware) | Ollama, LM Studio, llama.cpp server | available |
-| **D. Bring your own agent (ACP)** | Starts the vendor's own agent (Claude Code, Codex, Gemini CLI) over the Agent Client Protocol; *that agent* shows its own browser sign-in with your subscription. | your existing plan | Claude (Pro/Max), Codex, Gemini CLI | F03.4; policy-sensitive |
+| **D. Bring your own agent (ACP)** | Starts the vendor's own agent (Claude Code, Codex, Gemini CLI) over the Agent Client Protocol; *that agent* shows its own browser sign-in with your subscription. | your existing plan | Claude (Pro/Max), Codex, Gemini CLI | **Parked** (architect, 2026-10-15: Claude via API key instead) |
 
 **Why Claude is special.** Anthropic does not let third-party apps sign users in with a Claude subscription: it has blocked subscription tokens outside Claude Code since January 2026 and wrote the rule into its terms in February. Products may embed the *unmodified* Claude Code and let the user sign in there. That is how Zed works: Claude subscriptions run through its external-agent (ACP) path, its built-in providers use API keys held in the OS keychain, and ChatGPT and GitHub Copilot have their own sign-in flows. So the "press Connect, authorize in my Claude console" experience is possible for Claude only through lane D, and through an API key (lane B, with a link to the console's key page) otherwise.
 
@@ -164,6 +168,26 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 - Effects get golden-image tests. Analysis gets synthetic fixtures with known metrics (the generators in `crates/media`).
 - Every feature ships its commands, automation ids and state in `state.rs`, so agents and MCP can reach it.
 
+### 4.8 The agent is separate from the provider
+
+The Edith agent is meant to improve on its own, as a researched and measured editing agent, whichever model runs under it. So there is a hard seam between the two.
+
+**Providers (`edith-llm`) know how to talk to a model, nothing else.** One trait, `ChatModel`, with `capabilities()` (tools, parallel tools, images, thinking, caching, context size, output cap, price) and `stream(request, sink)`. The request is neutral: system parts, messages made of `Text`, `ToolUse`, `ToolResult` and `Opaque` parts, tool specs, a reasoning effort, an output cap, cache hints. Events are neutral too: text, thinking summary, tool use, usage, done with a normalized stop reason, error. Each provider translates to and from its own wire format and nothing vendor-shaped leaks upward.
+- **`Opaque` parts** carry what a vendor needs echoed back unchanged (Anthropic's thinking blocks are the case today). The agent stores and replays them in order, never reads them, and drops them when the next model comes from a different provider. That is how a thread survives a model switch and how the history stays append-only.
+- A model that lacks a capability does not break the agent: it adapts (no tools: chat-only thread; no images: describe the frame with F10's measurements instead).
+
+**The agent (`edith-agent`) is Edith's craft, and owns everything that makes it good.**
+- **The loop and its policy**: steps, token and cost budgets, parallel read-only tools, Stop, error recovery, what to do on a refusal.
+- **Prompt packs**: system prompt, mentor prompts, per-format guidance, tool descriptions. Plain files with a version, assembled in a stable order so the cached prefix stays cached.
+- **Context assembly**: what the chips (`@selection`, `@frame`, `@transcript`, `@beat`) turn into, how large results are trimmed, how a long thread is compacted without rewriting history.
+- **The tool registry**: a `Tool` trait with a spec and a `run` against an `Environment`. The engine implements the tools (it owns the project); the agent owns how they are described and how their results are shaped for the model.
+- **Safety profile**: read-only now, propose after F14. The gate lives in the agent and again in the engine, so a bug in one cannot grant edits.
+- **Traces**: every run records a JSONL trace (prompt pack version, model, events, tool calls with inputs and results, usage). A trace can be replayed with no network and no model.
+
+**Direction of dependencies.** `agent` depends on the `llm` interface and on nothing vendor-specific; `llm` depends on `net`; `edith-ai` depends on both and re-exports them with the wiring around them; the engine depends on `edith-ai` and supplies the `Environment`. Nothing below the engine imports the project, so the agent can be tested with a fake editor and a scripted model.
+
+**Research loop (F03.6).** A suite of tasks: a small fixture project built from engine commands, a question or goal, and graders. Graders are code first (does the answer cite timestamps that exist; did it call the tools the task needs; did it stay read-only; token and cost use), with an optional model judge using a written rubric later. The suite runs against any provider, so a result is about the agent or the model and never both at once. Rule from F03.6 on: a change to a prompt pack, a tool description or the loop policy ships with its eval delta. Domain knowledge (Format Packs, the reference fingerprint, the sound map) enters as tools and retrieval, because an editing agent differs from a coding agent in what it must perceive: video is not text, so it needs measurements of pacing, loudness, cuts and frames as its eyes and ears (F10), and the model only explains and proposes.
+
 ## 5. Features, in order
 
 **Definition of done for every feature:** commands with typed parameters, `describe` docs and tests (including hostile parameters) · UI with automation ids · looked at the result by running with `--control` and taking `ui.screenshot` · never-crash rules respected · fixtures instead of live network · `cargo xtask ci` green · this file updated (status and the *Last updated* line).
@@ -195,19 +219,24 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 
 **What it does.** One safe way for the app to reach the internet and hold credentials. Every networked feature uses it, so "no silent network calls", rate limits, caching, Offline mode and the usage meter exist in exactly one place.
 
-**How it works.**
-- **HTTP client** in `filmcraft-net`: timeouts, retries with backoff, per-host rate limits, an on-disk cache that honors ETag and Last-Modified, a descriptive User-Agent, streaming reads for server-sent events (LLM replies).
-- **Offline mode**: a global switch (status bar and `net.setOffline`); every call fails fast with a clear error.
-- **Request log** in the Events panel, secrets redacted.
-- **Secret store**: OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). Secrets never enter `.fcproj`, logs, MCP output or screenshots. Only the UI can enter one; commands can test that one exists but never read it back.
-- **OAuth building blocks**: PKCE, loopback redirect receiver on `127.0.0.1` with a random port, `state` check, single use, timeout.
-- **Settings ▸ Connections**: every service and provider with status, Connect/Disconnect and usage.
+**How it works.** The code is the crate `edith-net` (L2, [README](../crates/net/README.md)), the engine module `net_commands`, and the panel `panels/connections.rs`.
+- **HTTP client** (feature `http`): `https` only (plain `http` only to `127.0.0.1` in tests), timeouts, retries with backoff for GET (and for a request the caller marks safe to repeat), `Retry-After`, per-host rate limits, an on-disk cache that honors ETag and Last-Modified (opt-in per request, keyed by a hash of the URL, never for requests with credentials), a descriptive User-Agent, response and header size caps, streaming line reads for server-sent events, cancel. Hostile addresses and headers (control characters, `Host`, `Content-Length`, user names in URLs) are refused before anything is sent. The transport runs under `catch_unwind`.
+- **Offline mode**: one switch (status bar, the panel, `net.setOffline`); every request fails at once with a clear error and the attempt is logged. It is remembered across restarts by an empty marker file in the data directory (`network-offline`), so no preference or project field is involved.
+- **Request log**: the newest 500 requests in memory, shown in the Connections panel and by `net.log`. Each entry has only method, `scheme://host/path`, status, size, time and a scrubbed error: never a query string, header or body.
+- **Secret store** (feature `keychain`): macOS Keychain, Windows Credential Manager, Linux Secret Service (pure Rust over D-Bus). No plaintext fallback: with no keychain, saving fails with a clear message. Secrets never enter `.fcproj`, preferences, logs, MCP output or screenshots. Only the Connections panel can save one, through a Rust function that is **not a command**; commands can ask whether one exists and delete it, never read it back, and none of them is journaled.
+- **OAuth building blocks** (feature `oauth`): PKCE S256 (checked against the RFC 7636 vector), `state`, a one-shot receiver on `127.0.0.1` at a random port that accepts only `GET /callback` with the host name it was bound to (so a web page cannot reach it by DNS rebinding), caps requests at 4 KiB, never echoes the code, stops after a timeout, on cancel or after 20 unusable requests, and closes the port after one use; and a token-request helper. The provider-specific sign-in (OpenRouter first) is wired in F03.1.
+- **Connections panel** (Window ▸ Connections), not a Settings page: that keeps the edits to upstream files to a minimum. It shows the Offline switch, every known service with whether a key is stored, a masked field to paste a key, **Get a key** (opens the provider's key page) and **Remove**, and the request log. The list of services and their keychain slots is `crates/net/src/services.rs`; later features add to it.
+- **Features**: all of this is behind Cargo features that are off for the web build. In this fork the apps turn `net` on by default (`--no-default-features` gives upstream's lean build).
 
-**Commands.** `net.status`, `net.setOffline`, `net.log`, `secrets.has`, `secrets.delete`, `connections.list`.
+**Commands.** `net.status`, `net.setOffline`, `net.log` (limit, or `clear`), `secrets.has`, `secrets.delete`, `connections.list`. There is deliberately no `secrets.set` or `secrets.get`.
 
 **Done when.** A mock provider is called with a stored secret; Offline mode blocks it; the secret appears in no log; hostile responses (huge bodies, bad JSON, stalled connections) never panic.
 
-**Notes.** Spike (D5): which keychain crate (license, maintenance, macOS behavior).
+**Decided.** D5: `keyring-core` 1 plus one store crate per OS (`apple-native-keyring-store`, `windows-native-keyring-store`, `zbus-secret-service-keyring-store` with pure-Rust crypto). All MIT OR Apache-2.0, the maintained successor of the single `keyring` crate, and macOS reuses the `security-framework` already in the lockfile. D11 (new): the pure-Rust TLS provider `rustls-rustcrypto` is still marked alpha and "not for production" by its authors, and API keys will travel over it; it is kept behind one function (`crates/net/src/tls.rs`) so it can be swapped, and the risk is accepted for now.
+
+**Not covered yet.** The Windows and Linux keychain stores compile only on those systems; they were checked for licences and dependencies but not built here. The real "Connect" button (open the provider's page, receive the redirect, store the key) is F03.1; until then the panel takes a pasted key. A macOS build that is not signed with a stable identity asks for keychain access again after each rebuild.
+
+**Notes.** Tests: the crate has about 45 (a local mock server for the client; the receiver is attacked with wrong paths, wrong state, wrong host, oversize and flooding; an `#[ignore]`d test each for real HTTPS and the real keychain), the engine has 7, the Connections panel has 5 headless UI tests including one that types a key and checks it appears in no `ui.inspect`, label, event or command result.
 
 ---
 
@@ -225,18 +254,65 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 - **Read-only tools**: project and sequence inspect, markers, a transcript window, a Program monitor frame, `command_list` search. Same names and shapes as the MCP tools in `crates/automation/src/server.rs`, implemented in the engine layer.
 - **Threading**: provider calls run on worker threads under `catch_unwind`; tool calls run on the session thread between frames; tokens arrive over a channel; long calls show in `jobs.list`.
 
-**Steps.**
-- F03.1 Provider abstraction, Connections UI, lanes B and C, and OpenRouter sign-in (A).
-- F03.2 Chat panel, streaming, threads.
-- F03.3 Context chips, read-only tools, mentor prompts.
-- F03.4 ACP host lane (Claude Code, Codex, Gemini CLI) with their own sign-in and permission prompts.
+**Steps** (reordered 2026-10-15: the architect's main provider is Claude, used with their own API key; the Claude Code / ACP route was considered and dropped).
+- F03.0 **Research notes** (not a gate): a first pass is in [research/agent-and-editing.md](research/agent-and-editing.md). F03.1 is built now from what is known there, and each later stage reads more and records what it changes. Better research later improves the agent; it does not hold it up.
+- F03.1 The chat panel (threads, streaming view, tool-call cards, thinking summaries, cost meter, Stop) and the **Anthropic client with Edith's own agent loop** (lane B, Claude first).
+- F03.2 Context chips, the read-only tools, mentor prompts.
+- F03.3 Provider abstraction, the OpenAI-compatible client, and the Connect buttons: OpenRouter sign-in (A), other API keys (B), local servers (C).
+- F03.4 Gemini (free tier) and any OpenAI-compatible endpoint.
 - F03.5 ChatGPT and Google sign-in, once access is confirmed (D2).
+- F03.6 The agent evaluation suite and trace replay (§4.8): fixture projects, code graders, a runner that compares models and prompt versions. The scripted model and trace recorder arrive in F03.1; this step builds the suite on them.
+- Parked: hosting vendor agents over ACP (Claude Code, Codex, Gemini CLI), lane D.
 
-**Where it lives.** `filmcraft-ai` (provider clients), `crates/engine/src/assistant.rs` (threads, tool loop), `panels/assistant.rs` and `PanelKind::Assistant`. Commands `assistant.connect|disconnect|send|cancel|threads|setModel`.
+**Where it lives.** `edith-llm` (providers), `edith-agent` (the agent, §4.8), `edith-ai` (the facade), `crates/engine/src/assistant.rs` (threads, `Environment`, tools over the session), `panels/assistant.rs` and `PanelKind::Assistant`. Commands `assistant.connect|disconnect|send|cancel|threads|setModel`.
 
 **Done when.** You can connect through at least two lanes, ask "why does the cut at 00:42 feel abrupt?" and get an answer that cites your actual timeline; disconnecting removes the secret; tests pass against a mock provider with no live network.
 
 **Notes.** The mentor value is immediate for someone new to editing. Every later feature adds its tools here.
+
+#### F03.1 design: Edith's own agent on the Anthropic API (drafted 2026-10-15)
+
+**What "the Claude agent experience" means here.** Not Claude Code's shell and file tools, but its *harness*: you watch the model stream its answer, see a short summary of its thinking, see each tool call as a card with its inputs and result, can stop it at any point, see what it costs, and keep a long session going without losing the thread. Edith builds that loop itself on the Messages API with your key. The tools are Edith's (inspect the project, read a transcript, look at a frame), so the agent can only do what the editor exposes, and later its edits arrive as proposals you accept (F14).
+
+**API facts** (from Anthropic's current reference, 2026-10-15; no Rust SDK exists, so Edith speaks the HTTP API itself, over the F02 client):
+- `POST https://api.anthropic.com/v1/messages` with headers `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: application/json`.
+- Models (cached 2026-10-06): Fable 5.1 `claude-fable-5-1`, Opus 5.5 `claude-opus-5-5` ($4 / $20 per million tokens in / out), Sonnet 5.5 `claude-sonnet-5-5` ($2 / $10), Haiku 5.5 `claude-haiku-5-5` ($0.10 / $0.50). `GET /v1/models` returns each model's context size, output cap and capabilities, which feeds the picker's badges instead of a baked-in table.
+- Streaming is server-sent events: `message_start`, `content_block_start`, `content_block_delta` (text, thinking summary, partial tool-input JSON), `content_block_stop`, `message_delta` (with `stop_reason` and usage), `message_stop`, plus `ping` and `error` events. The client keeps the lines it already reads (F02) and a small state machine builds the blocks.
+- Tools: `tools: [{name, description, input_schema}]`; a `tool_use` block in the reply gets a `tool_result` back in the next user message. **Several tool calls in one reply must be answered in one user message.** `strict: true` makes arguments schema-valid; `eager_input_streaming: true` streams large inputs, and a streamed input must be validated before it runs because it can arrive truncated.
+- Thinking: `thinking: {type: "adaptive", display: "summarized"}` and `output_config: {effort: ...}`; `budget_tokens` is rejected on the current models and thinking cannot be switched off on Opus 5.5 (lower the effort instead). Thinking blocks must be sent back unchanged on later turns, so the conversation history is **append-only**; editing earlier turns invalidates them.
+- Forced `tool_choice` (`any` or a named tool) is rejected on the newest models; use `auto` plus an instruction.
+- Safety refusals arrive as `stop_reason: "refusal"` with HTTP 200; the loop must check the stop reason before reading content, and can opt into the server-side `fallbacks` parameter.
+- Cost control: prompt caching (`cache_control` on the stable system prompt and tool list; check `usage.cache_read_input_tokens`), effort, and the model choice. Long sessions can use context editing (beta `context-management-2025-06-27`) or compaction (beta `compact-2026-01-12`), but both must keep the history append-only.
+
+**Shape.**
+- **Two crates, one seam** (§4.8). `edith-llm` (L3): the `ChatModel` trait, neutral types and the Anthropic implementation, behind the F02 features. `edith-agent` (L3): the loop, prompt packs, context assembly, tool registry, budgets, traces, and a `ScriptedModel` that replays recorded streams. Events from the model are `Text`, `ThinkingSummary`, `ToolUse{id, name, input}`, `Usage`, `Done(stop_reason)`, `Error`; the agent turns them into its own `AgentEvent`s for the panel.
+- The **agent loop** (in `edith-agent`): send, stream, collect tool calls, run them through the `Environment` (read-only tools on the session thread between frames, results capped in size), answer them in one message, repeat until `end_turn`, a step limit, Stop, or an error. The engine runs it as a job (`jobs.list`, cancellable) under `catch_unwind`; a stalled stream times out.
+- **Cost meter**: tokens and an estimated price per thread, from the response `usage`, with the price table taken from the models list when it carries prices and from a dated built-in table otherwise (shown as an estimate).
+- **Default model** is for you to pick (D13). The numbers above say Haiku 5.5 is about 20 times cheaper than Sonnet 5.5 for the same tokens, which suits plain chat and quick questions; Sonnet 5.5 or Opus 5.5 suit careful critique of a cut. The picker shows capability and price badges and never hides a model.
+- **What stays out**: no shell, no file access, no web tools in the first version. Web search and fetch are server tools Anthropic runs, so they could be offered later behind a visible switch, because they send your text to the web.
+
+**Tests (no live network).** The mock server replays recorded streams: plain text; thinking then text; a tool call whose JSON arrives in pieces; two parallel tool calls; a refusal; an `error` event mid-stream; a `ping`-only stall; an enormous tool input; invalid JSON in a `data:` line; a stream that ends without `message_stop`. The loop is tested for the single-message answer to parallel calls, the step limit, Stop, and that the key appears in no log, result or error.
+
+**Costs, honestly.** This uses pay-as-you-go API credit, not a Claude subscription. Nothing has been measured yet; F03.1's done-when includes a measured cost for a typical mentor session so the default model is chosen on data. Free alternatives stay available: Gemini's free tier and OpenRouter's free models (F03.3, F03.4), and local models.
+
+#### F03.3 design: the OpenAI-compatible client and OpenRouter sign-in (drafted 2026-10-15, before building)
+
+**Checked against OpenRouter's docs on 2026-10-15** (re-check before building; see §9):
+- Sign-in page: `https://openrouter.ai/auth` with `callback_url`, `code_challenge`, `code_challenge_method=S256`, `state` (and optional `key_label`). "Localhost callbacks are supported on any port"; `127.0.0.1` is not mentioned, so the redirect uses `http://localhost:<port>/callback`. `state` comes back unchanged, but **not when the user denies**. Codes expire after 10 minutes.
+- Exchange: `POST https://openrouter.ai/api/v1/auth/keys` with JSON `{code, code_verifier, code_challenge_method}`; the answer has a `key`. The key is a normal API key the user can see and revoke in their OpenRouter account. Docs state no limits for it.
+- Chat: `POST https://openrouter.ai/api/v1/chat/completions`, `Authorization: Bearer <key>`, optional `HTTP-Referer` and `X-Title` (they name the app). Body: `model`, `messages`, `tools` (`{type:"function", function:{name, description, parameters}}`), `stream:true`. The stream is server-sent events of `chat.completion.chunk` with `delta`; usage arrives once, in the last chunk before `[DONE]`; comment lines must be ignored; a choice can carry an `error` object; `finish_reason` is one of `stop`, `length`, `tool_calls`, `content_filter`, `error`.
+- Models: `GET /api/v1/models` (the page says it needs a key), `?supported_parameters=tools` filters to models that can call tools. Prices are strings; "free" is *presumably* `"0"` for both prompt and completion. The page does not say so, so check against the live list before relying on it.
+
+**Shape.**
+- Provider code goes in `edith-llm` (L3, depends on `edith-net`, same feature gates, off for wasm). `ChatModel` trait: `models()` and `chat_stream(request, on_event)` where `on_event` gets `Text`, `ToolCallDelta`, `Usage`, `Done(reason)`, `Error` and returns whether to continue. Requests and replies are plain structs; nothing provider-specific leaks above the trait.
+- **F03.3a**: one *OpenAI-compatible* client covers OpenRouter, OpenAI, Ollama and LM Studio (same wire format; only base URL and auth differ). Also here: the OpenRouter sign-in and the local-server detection (lane C). **F03.4**: Anthropic's own message format, then Gemini (check whether its OpenAI-compatible endpoint is enough).
+- **Connect** (lane A): `connections.connect {service}` starts a job (it shows in `jobs.list` and can be cancelled), builds the sign-in address with `oauth::Flow` (redirect host `localhost`), hands the address to the host to open (the UI opens the browser; the CLI and MCP get it in the result), waits for the redirect, exchanges the code, stores the key in the keychain, and logs "Connected to OpenRouter". The key never passes through the engine's return values. `connections.disconnect` is `secrets.delete` plus a log line. Lane B keeps the paste field and **Get a key**.
+- **Changes needed in F02 code**: `Loopback::redirect_uri` takes the host name (`localhost` here); a denial callback (an `error` and no `state`) ends the wait with "you declined" instead of waiting out the timeout, but can never produce a code; a "headless" fallback (omit `callback_url`, show the code, let the user paste it) for the case where the browser cannot reach the loopback port; the panel shows a **Connect** button with a "Waiting for the browser… Cancel" state.
+- **Tests** (no live network): the mock server speaks recorded SSE transcripts, including comment lines, a mid-stream `error`, tool-call arguments split across chunks, a stream that ends without `[DONE]`, a stalled stream, an enormous single line and invalid JSON in a `data:` line; the whole sign-in is run against a mock provider that plays both the browser and the exchange; the stored key is checked to be absent from every log and result.
+
+**Risks.** `localhost` may resolve to IPv6 first; browsers retry IPv4, but if a machine does not, the receiver should also listen on `::1`. OpenRouter could change the sign-in rules (they are recent and documented only for `localhost`). Free models change daily, so the model picker must read the live list instead of a baked-in one (D3).
+
+**Decided 2026-10-15.** (1) Claude comes first, through your own API key (F03.1); OpenRouter stays the first *sign-in* because it is the only one with a documented flow that needs no app registration. A Claude *subscription* cannot be used through OpenRouter: OpenRouter bills its own credits, and its guide for Claude Code says no Anthropic plan is needed. Claude models are available there, pay-as-you-go. (2) The model picker **shows** capabilities (tools, images, context size, price, free) as badges and hides nothing: a model that cannot call tools still brainstorms well. The editing features simply stay unavailable in a thread whose model lacks tools, and say why. (3) Requests identify the app as Edith (`X-Title: Edith`; `HTTP-Referer` is the project's address once it has one). See the naming rule in [fork.md](fork.md#naming-edith).
 
 ### F04 Provenance and license ledger · Must · M · ⬜
 
@@ -280,7 +356,7 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 - F05.4 Audio sources (Freesound, Internet Archive audio).
 - F05.5 Local folder index.
 
-**Where it lives.** `filmcraft-sources` (network behind a feature), engine commands `hub.providers|search|acquire|shortlist`, `panels/find_media.rs`.
+**Where it lives.** `edith-sources` (network behind a feature), engine commands `hub.providers|search|acquire|shortlist`, `panels/find_media.rs`.
 
 **Done when.** A request returns candidates from at least three sources with correct license data; acquiring one writes the file, the ledger entry and the bin item; Offline mode and rate limits are honored; adapters pass against recorded responses.
 
@@ -367,7 +443,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **What it does.** Measures footage and audio so later features can talk in numbers.
 
-**How it works.** `filmcraft-analysis` is a set of pure functions over frames and audio buffers. The engine runs them as background jobs and caches results by content hash plus algorithm version (rebuildable, never in the project). Output is a versioned `AnalysisReport`.
+**How it works.** `edith-analysis` is a set of pure functions over frames and audio buffers. The engine runs them as background jobs and caches results by content hash plus algorithm version (rebuildable, never in the project). Output is a versioned `AnalysisReport`.
 - **Per shot**: mean luma, contrast, saturation, palette (5 colors in Lab), color temperature, sharpness, grain estimate, motion energy and a rough camera-move class, letterbox and aspect.
 - **Per audio segment**: loudness (BS.1770, already in `audio-dsp`), loudness range, true peak, silence share, spectral balance, a speech/music/ambience guess, music beat grid.
 - **Sequence level** (from the model, no decoding): shot-length distribution, cut density, J/L-cut share, transition use, narration words per minute, track occupancy.
@@ -617,15 +693,18 @@ Each has a recommendation, so work can start before you answer; a decision here 
 | # | Decision | Recommendation |
 |---|---|---|
 | D1 | Where undoable custom project data lives: per-feature schema bumps, one extension map inside `Project`, or sidecar files | One extension map inside `Project` (a single upstream hook, no version churn, undo and crash recovery for free). Non-undoable UI state goes beside the project like `view`. Sidecars lose undo. |
-| D2 | Order of the AI connection lanes (§4.3) | B (API key), C (local) and OpenRouter first; then D (ACP) for your Claude subscription; then ChatGPT and Google sign-in once access is confirmed. |
+| D2 | Order of the AI connection lanes (§4.3) | **Decided 2026-10-15: Claude through your own API key first** (lane B); then OpenRouter sign-in, other keys and local servers; then ChatGPT and Google sign-in once access is confirmed. Lane D (ACP) is parked. |
 | D3 | Default free model for the assistant: Gemini free tier, OpenRouter free models, or local | Decide by testing the mentor prompts on each before F03.2 ships. |
 | D4 | Format Pack file format and location | TOML for hand-editing plus a JSON Schema; a folder in the data directory; an explicit version field. |
-| D5 | Keychain crate (license, maintenance, macOS behavior) | A spike at the start of F02. |
+| D5 | Keychain crate (license, maintenance, macOS behavior) | **Decided in F02 (2026-10-15):** `keyring-core` plus one store crate per OS; see F02. |
 | D6 | Point `CLAUDE.md` at this file (one line in an upstream-owned file) | Yes, so every agent session starts from it. **Decided 2026-10-12: yes (done in F01.3).** |
-| D7 | Crate naming | Keep the `filmcraft-` prefix for workspace consistency. |
+| D7 | Crate naming | **Decided 2026-10-15:** every crate the fork creates is named `edith-*` (`edith-net`, `edith-llm`, `edith-agent`, `edith-ai`, later `edith-sources`, `edith-analysis`). Directories keep the repo's short names (`crates/net`, `crates/llm`, …) and nothing moves. Upstream's `filmcraft-*` crates keep their names until the big rename (D12). |
+| D13 | Default model for new assistant threads | Haiku 5.5 for chat and quick questions, with Sonnet 5.5 one click away for critique; decide with the measured cost from F03.1. |
+| D12 | Renaming the product to Edith | **Decided 2026-10-15, incrementally:** new things are Edith from the start; code a stage touches that still says FilmCraft is changed to Edith when that is cheap, and left for the big rename when it is not (crate names, `.fcproj`, the data directory, anything that fans out across files). See [fork.md](fork.md#naming-edith). |
 | D8 | Default profile for new assistant threads | Read-only for a first thread; Propose once edit tools exist. |
 | D9 | Reference analysis stance and UI wording | Files you supply only; no downloaders; say so in the UI. |
 | D10 | Telemetry | None. Confirm. |
+| D11 | TLS provider: `rustls-rustcrypto` is alpha and "not for production" | **Accepted in F02 (2026-10-15):** keep it behind `crates/net/src/tls.rs`; swap when a pure-Rust, permissively licensed alternative is production-ready. |
 
 ## 8. Parked and not planned
 
@@ -645,6 +724,12 @@ These shaped the plan and are volatile. Most were checked on 2026-10-11 through 
 |---|---|---|
 | Claude subscription sign-in is not available to third-party apps (blocked since January 2026, written into the consumer terms in February); embedding the unmodified Claude Code and letting the user sign in there is allowed; billing rules for programmatic use changed several times and one change was paused in June | F03 lanes B and D | [Claude Code: legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Claude Code: authentication](https://code.claude.com/docs/en/authentication), [VentureBeat](https://venturebeat.com/technology/anthropic-cracks-down-on-unauthorized-claude-usage-by-third-party-harnesses), [The Register](https://www.theregister.com/2026/02/20/anthropic_clarifies_ban_third_party_claude_access/) |
 | Zed keeps provider keys in the OS keychain, has its own ChatGPT and Copilot sign-in, and runs Claude subscriptions through an external agent (ACP) | F03 design | [Zed: use an existing subscription](https://zed.dev/docs/ai/use-an-existing-subscription.md), [GitHub changelog](https://github.blog/changelog/2026-02-19-github-copilot-support-in-zed-generally-available/) |
+| (Parked lane D) ACP: JSON-RPC over stdio; Zed's official Claude adapter `@zed-industries/claude-agent-acp` bundles the Claude Code CLI, signs in separately ("Log in with Claude Code" for Pro or Max, or an API key), needs Node.js | if lane D is revived | [Zed: external agents](https://zed.dev/docs/ai/external-agents), [Claude Code via ACP](https://zed.dev/blog/claude-code-via-acp) |
+| Timeline-Bench: best editing agent resolved 15 of 56 tasks; 73% of failures were craft only | F03.0, F10 to F13 | [arXiv 2609.35143](https://arxiv.org/abs/2609.35143) |
+| LAVE: LLM agent with direct manipulation for video editing | F03.0 | [arXiv 2402.10294](https://arxiv.org/abs/2402.10294) |
+| Anthropic Messages API: headers, streaming events, tool use, adaptive thinking, models list, caching, refusals | F03.1 | [Anthropic API docs](https://platform.claude.com/docs/en/api/overview) |
+| OpenRouter bills its own credits; a Claude subscription does not apply there | F03.3 | [OpenRouter: Claude Code guide](https://openrouter.ai/blog/tutorials/claude-code-openrouter/) |
+| OpenRouter sign-in: `localhost` on any port, `state` not returned on denial, codes last 10 minutes; chat and models endpoints | F03.3 design | [OAuth PKCE](https://openrouter.ai/docs/use-cases/oauth-pkce), [API overview](https://openrouter.ai/docs/api-reference/overview), [models](https://openrouter.ai/docs/api-reference/models/get-models) |
 | OpenRouter's PKCE flow returns a user-controlled key, needs no registration, and its code is valid for ten minutes | F03.1 lane A | [OpenRouter OAuth PKCE](https://openrouter.ai/docs/use-cases/oauth-pkce) |
 | "Sign in with ChatGPT" launched in early October 2026 for partner apps (scope `chatgpt.tokens.use.direct`); access for a personal app is unconfirmed | F03.5 | [IT Brief](https://itbrief.co.uk/story/openai-launches-chatgpt-sign-in-for-16-partner-tools), [WorkOS](https://workos.com/blog/sign-in-with-chatgpt-plan-usage-scope) |
 | Gemini: an API key is the simple route; OAuth needs a Desktop OAuth client from Google Cloud; check the free-tier limits | F03.5 | [Gemini API OAuth quickstart](https://ai.google.dev/gemini-api/docs/oauth) |

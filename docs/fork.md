@@ -72,6 +72,15 @@ The short version of [section 4.6 of the roadmap](upcoming-features.md#46-fork-h
 
 Alternating `cargo build -p filmcraft` and `cargo build -p filmcraft-cli` rebuilds the engine and about a dozen other crates each time (the CLI after the app took 2 min 51 s). The defaults are not the cause: 29 shared crates (`log`, `indexmap`, `chrono`, …) resolve different features for the two binaries, and Cargo keys the build on that. Build the one you need and run its binary from `target/release/`, rather than switching back and forth.
 
+## Naming: Edith
+
+The whole app is becoming **Edith**; the full rename is not done yet. Until it is, the rule is simple and applies to every stage:
+
+1. **New things are Edith.** Every crate the fork creates is named `edith-*` (`edith-net`, `edith-llm`, `edith-agent`, `edith-ai`, …). Directories keep the repo's convention, the short name (`crates/net`, `crates/llm`, `crates/agent`, `crates/ai`), so nothing moves. New text, docs, HTTP headers (`User-Agent`, `X-Title`), the keychain service and any file the fork writes say Edith. The constants live in one place, `crates/net/src/brand.rs`.
+2. **Code a stage touches that still says FilmCraft is changed to Edith, when that is cheap**: strings, comments, local names and docs inside the function, block or file section the stage is already editing. List the upstream-owned file in the table below.
+3. **When it is not cheap, leave it for the big rename.** That means crate names `filmcraft-*` and the Rust paths `filmcraft_*`, the `.fcproj` extension, the app id, the data directory, and anything that would fan out across many files. A crate cannot be renamed halfway (every dependent `Cargo.toml` and `use` line changes with it, in files upstream edits daily), and the data directory holds downloaded models (about 620 MB), preferences and autosaves, so it needs a migration that moves the folder. After the big rename, merging upstream needs a step first: run the same rename script over upstream's tree, then merge.
+4. **No sweeps.** A stage never renames something it does not otherwise touch, so a merge from upstream stays small.
+
 ## Upstream-owned files this fork changes
 
 Keep this table current. It is the whole list of places a merge can conflict.
@@ -81,14 +90,15 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `apps/filmcraft/Cargo.toml` | `default = ["whisper", "neural-voices"]` (one line, with a trailing comment) | F01.1 |
 | `apps/filmcraft-cli/Cargo.toml` | the same `default`, plus a `neural-voices` feature that forwards to the engine (3 lines), so MCP and CLI clients can transcribe and narrate | F01.1 |
 | `crates/speech/src/whisper/tokenizer.rs` | `expect()` replaced by `filter_map`, plus a test of the byte table: a lint fix the new defaults surface (see the exception under Fork rules) | F01.1 |
-| `Cargo.toml` | one workspace dependency line, `filmcraft-net` | F02.1 |
+| `Cargo.toml` | one workspace dependency line, `edith-net` | F02.1 |
 | `xtask/src/main.rs` | one `LAYERS` entry, `("net", 2)` | F02.1 |
 | `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
 | `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` (variant, `ALL` length, title: 4 lines) | F02.6 |
 | `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;` and one `match` arm | F02.6 |
 | `crates/ui-egui/src/lib.rs` | one line after `job_status`: the status-bar Offline switch | F02.6 |
-| `crates/ui-egui/Cargo.toml` | two dev-dependencies (`filmcraft-engine` with `net`, `filmcraft-net` with `keychain`) so the UI tests use the in-memory secret store | F02.6 |
-| `crates/engine/Cargo.toml` | the `filmcraft-net` dependency and a `net` feature that forwards to it (3 lines) | F02.5 |
+| `crates/ui-egui/src/i18n/{es,ja,zh-cn,pt-br}.tsv` | lines appended at the end for the Connections panel (23 each in es, ja, zh-cn; the panel title in pt-br); the tests insist every `tl!` string is translated in those languages | F02.6 |
+| `crates/ui-egui/Cargo.toml` | two dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`) so the UI tests use the in-memory secret store | F02.6 |
+| `crates/engine/Cargo.toml` | the `edith-net` dependency and a `net` feature that forwards to it (3 lines) | F02.5 |
 | `crates/engine/src/lib.rs` | `pub mod net_commands;` and `mod net_tests;` | F02.5 |
 | `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` in `build()` | F02.5 |
 | `apps/filmcraft/Cargo.toml`, `apps/filmcraft-cli/Cargo.toml` | `net` added to `default`, plus a `net` feature (3 lines each, so the first row above changes too) | F02.5 |
