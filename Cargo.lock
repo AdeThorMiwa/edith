@@ -2275,12 +2275,17 @@ name = "filmcraft-net"
 version = "0.7.2"
 dependencies = [
  "apple-native-keyring-store",
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "httparse",
  "keyring-core",
+ "percent-encoding",
  "rustls",
  "rustls-rustcrypto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "thiserror 2.0.21",
  "ureq",
  "windows-native-keyring-store",

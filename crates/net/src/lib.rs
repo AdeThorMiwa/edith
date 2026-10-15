@@ -19,6 +19,8 @@
 mod cache;
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "oauth")]
+pub mod oauth;
 pub mod redact;
 #[cfg(feature = "keychain")]
 pub mod secrets;

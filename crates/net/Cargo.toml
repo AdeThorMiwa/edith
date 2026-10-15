@@ -15,6 +15,8 @@ default = []
 # The OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service over D-Bus
 # in pure Rust: no libdbus, no OpenSSL).
 keychain = ["dep:keyring-core", "dep:zeroize", "dep:apple-native-keyring-store", "dep:windows-native-keyring-store", "dep:zbus-secret-service-keyring-store"]
+# OAuth building blocks (PKCE, loopback redirect receiver, token exchange). Needs the client.
+oauth = ["http", "dep:base64", "dep:getrandom", "dep:httparse", "dep:subtle", "dep:zeroize", "dep:percent-encoding"]
 http = ["dep:ureq", "dep:rustls", "dep:rustls-rustcrypto", "dep:sha2", "dep:serde_json"]
 
 [dependencies]
@@ -25,6 +27,11 @@ ureq = { version = "3", default-features = false, features = ["rustls-no-provide
 rustls = { version = "0.23", default-features = false, optional = true }
 rustls-rustcrypto = { version = "0.0.2-alpha", optional = true }
 sha2 = { version = "0.10", optional = true }
+base64 = { version = "0.22", optional = true }
+getrandom = { version = "0.4", optional = true }
+httparse = { version = "1", optional = true }
+percent-encoding = { version = "2", optional = true }
+subtle = { version = "2", optional = true }
 keyring-core = { version = "1", optional = true }
 zeroize = { version = "1", optional = true }
 
