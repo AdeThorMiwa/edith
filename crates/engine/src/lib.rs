@@ -12,6 +12,7 @@
 
 pub mod aaf_omf;
 pub mod assistant;
+mod assistant_store;
 mod assistant_tools;
 pub mod autosave;
 pub mod captions;

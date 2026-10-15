@@ -36,6 +36,10 @@ impl Driver {
     fn new() -> Self {
         let mut session = Session::default();
         session.execute("file.openDemoProject", json!({})).expect("demo project");
+        Self::with(session)
+    }
+
+    fn with(session: Session) -> Self {
         let (tx, rx) = channel();
         let app = FilmcraftApp::new(session).with_control(rx);
         // `FILMCRAFT_UI_SNAPSHOT_DIR=<dir>` also renders offscreen with wgpu and writes `assistant-*.png`.
@@ -353,4 +357,58 @@ fn typing_a_slash_offers_the_commands_and_choosing_one_asks_for_it() {
     d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("steady")));
     assert_eq!(d.entries()[0].1, "/pacing", "the conversation shows what was typed");
     assert!(model.requests()[0].messages[0].text().contains("Review the pacing of the whole edit"));
+}
+
+fn data_dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("filmcraft-assistant-ui-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+#[test]
+fn a_conversation_from_an_earlier_run_is_there_when_the_panel_opens() {
+    let _g = guard();
+    let dir = data_dir("restore");
+    // an earlier run of the app: one conversation, saved when it ended
+    let mut earlier = Session::default();
+    earlier.execute("file.openDemoProject", json!({})).unwrap();
+    earlier.assistant.set_dir(&dir);
+    earlier.assistant.use_model(scripted(vec![tool_reply("t1", "project_overview", json!({})), text_reply("It is **26 seconds** long.")]));
+    earlier.execute("assistant.send", json!({"text": "how long is my edit?", "wait": true})).unwrap();
+    // this run
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    d.wait("the old conversation", |d| d.entries().iter().any(|(_, l)| l.contains("26 seconds")));
+    let entries = d.entries();
+    assert_eq!(entries[0].1, "how long is my edit?", "{entries:?}");
+    assert!(entries.iter().any(|(id, _)| id.starts_with("assistant.tool.")), "its tool card is restored too");
+    assert!(d.label("assistant.thread").contains("how long"), "{}", d.label("assistant.thread"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn delete_needs_two_clicks_and_removes_the_conversation_and_its_file() {
+    let _g = guard();
+    let dir = data_dir("delete");
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    session.assistant.use_model(scripted(vec![text_reply("done")]));
+    let id = session.execute("assistant.send", json!({"text": "hello", "wait": true})).unwrap()["thread"].as_u64().unwrap();
+    let file = dir.join("edith-threads").join(format!("{id}.json"));
+    assert!(file.exists());
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    d.wait("the thread", |d| d.has("assistant.delete"));
+    d.click("assistant.delete");
+    assert_eq!(d.label("assistant.delete"), "Click again to delete");
+    assert!(file.exists() && !d.exec("assistant.threads", json!({}))["threads"].as_array().unwrap().is_empty(), "one click only arms it");
+    d.click("assistant.delete");
+    assert!(!file.exists());
+    assert!(d.exec("assistant.threads", json!({}))["threads"].as_array().unwrap().is_empty());
+    assert!(!d.has("assistant.delete"), "with no thread there is nothing to delete");
+    let _ = std::fs::remove_dir_all(&dir);
 }

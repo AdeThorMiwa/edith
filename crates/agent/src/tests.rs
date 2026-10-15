@@ -464,3 +464,52 @@ fn damaged_traces_are_errors_that_never_echo_their_content() {
         .unwrap_err();
     assert!(e.contains("line 2") && !e.contains("SECRET"), "{e}");
 }
+
+#[test]
+fn repair_keeps_a_valid_thread_whole_and_cuts_a_broken_one_back_to_its_valid_part() {
+    // a real thread, ended in several ways, is already valid
+    let m = ScriptedModel::new();
+    push(&m, tool_reply(vec![use_part("a1", "project_inspect", json!({})), use_part("a2", "transcript", json!({}))]));
+    push(&m, text_reply("one"));
+    let e = editor();
+    let mut t = Thread::new();
+    run(&agent(&m, &e, |_| {}), &mut t, "first");
+    let before = t.clone();
+    assert_eq!(t.repair(), 0);
+    assert_eq!(t, before);
+
+    let user = |s: &str| Message::user_text(s);
+    let call = |id: &str| Message { role: Role::Assistant, parts: vec![use_part(id, "project_inspect", json!({}))] };
+    let answer = |ids: &[&str]| {
+        Message::tool_results(ids.iter().map(|i| Part::ToolResult { tool_use_id: (*i).into(), content: "ok".into(), is_error: false }).collect())
+    };
+    let broken: Vec<(Vec<Message>, usize)> = vec![
+        // a call that was never answered: cut back to before it (a trailing question is fine)
+        (vec![user("q"), Message::assistant_text("a"), user("q2"), call("x")], 3),
+        // answered by the wrong call
+        (vec![user("q"), call("x"), answer(&["y"])], 1),
+        // a partial answer
+        (vec![user("q"), Message { role: Role::Assistant, parts: vec![use_part("x", "n", json!({})), use_part("y", "n", json!({}))] }, answer(&["x"])], 1),
+        // an answer with no call at all
+        (vec![user("q"), Message::assistant_text("a"), answer(&["ghost"])], 2),
+        // answers in the wrong order
+        (vec![user("q"), Message { role: Role::Assistant, parts: vec![use_part("x", "n", json!({})), use_part("y", "n", json!({}))] }, answer(&["y", "x"])], 1),
+        // a call inside a user message
+        (vec![user("q"), Message { role: Role::User, parts: vec![use_part("x", "n", json!({}))] }], 1),
+        // an assistant message that is also an answer
+        (
+            vec![user("q"), Message { role: Role::Assistant, parts: vec![Part::ToolResult { tool_use_id: "x".into(), content: "c".into(), is_error: false }] }],
+            1,
+        ),
+    ];
+    for (messages, keep) in broken {
+        let mut t = Thread { messages: messages.clone(), usage: Usage::default() };
+        let dropped = t.repair();
+        assert_eq!(t.messages.len(), keep, "{messages:?}");
+        assert_eq!(dropped, messages.len() - keep);
+        assert_valid(&t);
+        assert_eq!(t.repair(), 0, "repair is idempotent");
+    }
+    let mut empty = Thread::new();
+    assert_eq!(empty.repair(), 0);
+}

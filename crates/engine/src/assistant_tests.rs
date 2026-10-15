@@ -578,3 +578,141 @@ fn a_bad_slash_command_is_refused_and_leaves_no_thread_but_a_path_is_just_text()
     assert_eq!(r["finish"]["kind"], "done");
     assert!(model.requests()[0].messages[0].text().contains("/Users/me/clip.mp4"));
 }
+
+fn saved_file(dir: &std::path::Path, id: u64) -> std::path::PathBuf {
+    dir.join("edith-threads").join(format!("{id}.json"))
+}
+
+#[test]
+fn a_finished_turn_is_saved_and_a_new_session_restores_and_continues_the_conversation() {
+    let dir = tmp("threads-roundtrip");
+    let mut a = demo();
+    a.assistant.set_dir(&dir);
+    a.assistant.use_model(scripted(vec![tool_reply(&[("t1", "project_overview", json!({}))]), text_reply("It is a 26 second edit.")]));
+    let r = a.execute("assistant.send", json!({"text": "how long is it?", "wait": true})).unwrap();
+    let id = r["thread"].as_u64().unwrap();
+    assert!(saved_file(&dir, id).exists(), "the thread is written when the turn ends");
+    assert!(!dir.join("edith-threads").join(format!("{id}.json.tmp")).exists(), "no temporary file is left behind");
+
+    // a later run of the app
+    let mut b = demo();
+    b.assistant.set_dir(&dir);
+    let list = b.execute("assistant.threads", json!({})).unwrap();
+    assert_eq!(list["threads"].as_array().unwrap().len(), 1);
+    assert_eq!((list["threads"][0]["id"].as_u64(), list["threads"][0]["title"].as_str()), (Some(id), Some("how long is it?")));
+    assert_eq!(list["threads"][0]["running"], false);
+    assert_eq!(list["threads"][0]["finish"]["kind"], "done");
+    let view = b.execute("assistant.thread", json!({"thread": id})).unwrap();
+    let kinds: Vec<&str> = view["events"].as_array().unwrap().iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(kinds.first(), Some(&"user_message"));
+    assert!(kinds.contains(&"tool_result") && kinds.contains(&"text"), "{kinds:?}");
+    assert!(view["usageText"].as_str().unwrap().contains("tokens"));
+    // the restored conversation can be continued: the model is sent everything said before
+    let model = scripted(vec![text_reply("About 27 seconds, to be precise.")]);
+    b.assistant.use_model(model.clone());
+    b.execute("assistant.send", json!({"text": "and exactly?", "thread": id, "wait": true})).unwrap();
+    assert_eq!(model.requests()[0].messages.len(), 5, "user, call, results, answer, and the new question");
+    // new threads do not reuse an old id
+    let fresh = b.execute("assistant.newThread", json!({})).unwrap()["thread"].as_u64().unwrap();
+    assert!(fresh > id);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn deleting_a_thread_removes_its_file() {
+    let dir = tmp("threads-delete");
+    let mut s = demo();
+    s.assistant.set_dir(&dir);
+    s.assistant.use_model(scripted(vec![text_reply("hi")]));
+    let id = s.execute("assistant.send", json!({"text": "hello", "wait": true})).unwrap()["thread"].as_u64().unwrap();
+    assert!(saved_file(&dir, id).exists());
+    s.execute("assistant.deleteThread", json!({"thread": id})).unwrap();
+    assert!(!saved_file(&dir, id).exists());
+    let mut again = demo();
+    again.assistant.set_dir(&dir);
+    assert!(again.execute("assistant.threads", json!({})).unwrap()["threads"].as_array().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn record(id: u64, thread: Value) -> Value {
+    json!({"version": 1, "id": id, "title": "saved", "thread": thread, "events": [], "dropped": 0, "finish": {"kind": "done"}, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0}, "meta": {"prompt_version": "2", "model": "m", "profile": "read_only", "started_unix": 0}, "replies": []})
+}
+
+#[test]
+fn damaged_oversize_mislabelled_and_broken_files_are_skipped_or_repaired_never_fatal() {
+    let dir = tmp("threads-hostile");
+    let folder = dir.join("edith-threads");
+    std::fs::create_dir_all(&folder).unwrap();
+    let valid = json!({"messages": [{"role": "user", "parts": [{"type": "text", "text": "q"}]}, {"role": "assistant", "parts": [{"type": "text", "text": "a"}]}], "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}});
+    std::fs::write(folder.join("1.json"), record(1, valid.clone()).to_string()).unwrap();
+    // a conversation ending in a tool call nobody answered: the provider would reject it, so it is cut back
+    let dangling = json!({"messages": [{"role": "user", "parts": [{"type": "text", "text": "q"}]}, {"role": "assistant", "parts": [{"type": "text", "text": "a"}]}, {"role": "user", "parts": [{"type": "text", "text": "q2"}]}, {"role": "assistant", "parts": [{"type": "tool_use", "id": "x", "name": "n", "input": {}}]}], "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}});
+    std::fs::write(folder.join("2.json"), record(2, dangling).to_string()).unwrap();
+    // skipped: not JSON, a file named for a different id, a wrong version, an unreadable shape, an oversize file, a stray file
+    std::fs::write(folder.join("3.json"), "not json at all").unwrap();
+    std::fs::write(folder.join("4.json"), record(99, valid.clone()).to_string()).unwrap();
+    let mut wrong_version = record(5, valid.clone());
+    wrong_version["version"] = json!(99);
+    std::fs::write(folder.join("5.json"), wrong_version.to_string()).unwrap();
+    std::fs::write(folder.join("6.json"), r#"{"id": 6}"#).unwrap();
+    std::fs::write(folder.join("7.json"), vec![b' '; 21 * 1024 * 1024]).unwrap();
+    std::fs::write(folder.join("notes.txt"), "stray").unwrap();
+    std::fs::write(folder.join("x.json"), "{}").unwrap();
+    // a title with control characters and a huge length is cleaned
+    let mut messy = record(8, valid);
+    messy["title"] = json!(format!("bad\u{7} title {}", "x".repeat(500)));
+    std::fs::write(folder.join("8.json"), messy.to_string()).unwrap();
+
+    let mut s = demo();
+    s.assistant.set_dir(&dir);
+    let st = s.execute("assistant.status", json!({})).unwrap();
+    assert_eq!(st["restoreNote"], "5 saved conversations could not be restored.", "{st}");
+    let list = s.execute("assistant.threads", json!({})).unwrap();
+    let ids: Vec<u64> = list["threads"].as_array().unwrap().iter().filter_map(|t| t["id"].as_u64()).collect();
+    assert_eq!(ids, [1, 2, 8]);
+    let title8 = list["threads"][2]["title"].as_str().unwrap();
+    assert!(title8.chars().count() <= 80 && !title8.chars().any(char::is_control), "{title8}");
+    // the dangling one still works: ask something new and the model is sent a valid conversation
+    let model = scripted(vec![text_reply("fine")]);
+    s.assistant.use_model(model.clone());
+    s.execute("assistant.send", json!({"text": "next", "thread": 2, "wait": true})).unwrap();
+    let sent = &model.requests()[0].messages;
+    assert_eq!(sent.len(), 4, "q, a, q2 (the unanswered call was cut), and the new question");
+    assert!(sent.iter().all(|m| !m.tool_uses().any(|_| true)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_the_newest_threads_are_restored() {
+    let dir = tmp("threads-limit");
+    let folder = dir.join("edith-threads");
+    std::fs::create_dir_all(&folder).unwrap();
+    let thread = json!({"messages": [], "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}});
+    for id in 1..=60u64 {
+        std::fs::write(folder.join(format!("{id}.json")), record(id, thread.clone()).to_string()).unwrap();
+    }
+    let mut s = Session::default();
+    s.assistant.set_dir(&dir);
+    let ids: Vec<u64> = s.execute("assistant.threads", json!({})).unwrap()["threads"].as_array().unwrap().iter().filter_map(|t| t["id"].as_u64()).collect();
+    assert_eq!((ids.len(), ids.first().copied(), ids.last().copied()), (50, Some(11), Some(60)));
+    assert!(s.execute("assistant.newThread", json!({})).is_err(), "the limit still applies");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_save_that_fails_is_reported_in_the_conversation_and_never_breaks_the_turn() {
+    let dir = tmp("threads-unwritable");
+    std::fs::create_dir_all(&dir).unwrap();
+    // a plain file where the folder should be, so nothing can be written there
+    std::fs::write(dir.join("edith-threads"), "in the way").unwrap();
+    let mut s = demo();
+    s.assistant.set_dir(&dir);
+    s.assistant.use_model(scripted(vec![text_reply("answer")]));
+    let r = s.execute("assistant.send", json!({"text": "hello", "wait": true})).unwrap();
+    assert_eq!(r["finish"]["kind"], "done");
+    assert_eq!(r["text"], "answer");
+    let view = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap();
+    let notices: Vec<&str> = view["events"].as_array().unwrap().iter().filter(|e| e["type"] == "notice").filter_map(|e| e["text"].as_str()).collect();
+    assert!(notices.iter().any(|n| n.contains("could not be saved")), "{notices:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

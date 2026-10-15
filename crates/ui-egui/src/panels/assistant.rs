@@ -48,6 +48,8 @@ struct Chat {
     polled_at: f64,
     /// The slash commands (`/pacing`, …) as the engine lists them.
     commands: Vec<Value>,
+    /// The thread whose Delete button was pressed once (a second press deletes it).
+    delete_armed: Option<u64>,
     /// The latest thread was picked once at the start; after that "no thread" means "a new one".
     picked_initial: bool,
 }
@@ -69,6 +71,7 @@ impl Chat {
             error: None,
             polled_at: f64::NEG_INFINITY,
             commands: Vec::new(),
+            delete_armed: None,
             picked_initial: false,
         }
     }
@@ -96,11 +99,15 @@ enum Action {
     Settings(Value),
     OpenConnections,
     SetInput(String),
+    Delete(u64),
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
 /// events. Cheap when nothing is going on.
 fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Context) {
+    if chat.delete_armed.is_some() && chat.delete_armed != chat.thread {
+        chat.delete_armed = None;
+    }
     if now - chat.status_at >= STATUS_EVERY || chat.status.is_none() {
         chat.status_at = now;
         if let Ok(v) = app.session.execute("assistant.status", json!({})) {
@@ -260,6 +267,18 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if r.clicked() {
             actions.push(Action::NewThread);
         }
+        if let Some(id) = chat.thread.filter(|id| threads.iter().any(|t| t.0 == *id)) {
+            let armed = chat.delete_armed == Some(id);
+            let r = ui.add_enabled(!running, egui::Button::new(if armed { tl!("Click again to delete") } else { tl!("Delete") }));
+            elems.push(("assistant.delete".into(), r.clone(), if armed { "Click again to delete".into() } else { "Delete thread".into() }));
+            if r.clicked() {
+                if armed {
+                    actions.push(Action::Delete(id));
+                } else {
+                    chat.delete_armed = Some(id);
+                }
+            }
+        }
         ui.menu_button(tl!("Settings"), |ui| {
             let mut thinking = chat.setting("showThinking").as_bool().unwrap_or(true);
             let r = ui.checkbox(&mut thinking, tl!("Show a summary of its thinking"));
@@ -310,6 +329,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.label(RichText::new(tl!("The cost is an estimate from list prices.")).size(11.0).color(t.text_faint));
         });
     });
+    // notes from the engine: a damaged settings file, conversations that could not be restored
+    for key in ["settingsNote", "restoreNote"] {
+        if let Some(note) = chat.status.as_ref().and_then(|st| st[key].as_str()) {
+            ui.label(RichText::new(note).size(11.0).color(WARN));
+        }
+    }
     // the cost meter, on its own line so a narrow panel never overlaps it with the buttons
     if !chat.usage_text.is_empty() {
         let r = ui.label(RichText::new(&chat.usage_text).size(11.0).color(t.text_dim));
@@ -522,6 +547,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 chat.status_at = f64::NEG_INFINITY;
             }
             Action::OpenConnections => app.show_panel(PanelKind::Connections),
+            Action::Delete(id) => {
+                if app.session.execute("assistant.deleteThread", json!({"thread": id})).is_ok() {
+                    chat.logs.remove(&id);
+                    chat.thread = None;
+                    chat.usage_text.clear();
+                }
+                chat.delete_armed = None;
+                chat.status_at = f64::NEG_INFINITY;
+            }
             Action::SetInput(text) => {
                 chat.input = text;
                 ctx.memory_mut(|m| m.request_focus(egui::Id::new("assistant-input-field")));

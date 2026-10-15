@@ -36,6 +36,7 @@ use edith_ai::{
     TraceMeta, Usage, badges, resolve_model, usage_summary,
 };
 
+use crate::assistant_store::{self, SavedThread};
 use crate::assistant_tools;
 use crate::commands::{CommandSpec, always, bad, bool_p, str_p, u64_p};
 use crate::{EngineError, Job, Result, Session};
@@ -132,8 +133,49 @@ pub struct AssistantHub {
     dir: Option<PathBuf>,
     /// A note to show about the settings file (it was damaged), once.
     pub settings_note: Option<String>,
+    /// A note about saved conversations that could not be restored.
+    pub restore_note: Option<String>,
     model_override: Option<Arc<dyn ChatModel>>,
     models: Arc<Mutex<ModelCache>>,
+}
+
+/// A conversation read back from its file, ready to show and to continue.
+fn slot_from_saved(rec: SavedThread) -> ThreadSlot {
+    let events: VecDeque<AgentEvent> = rec.events.into();
+    let mut trace = Trace::new(rec.meta);
+    trace.events = events.iter().cloned().collect();
+    trace.replies = rec.replies;
+    let state = ThreadState {
+        thread: rec.thread,
+        events,
+        dropped: rec.dropped,
+        running: false,
+        finish: rec.finish,
+        trace,
+        usage: rec.usage,
+        profile: Profile::ReadOnly,
+    };
+    ThreadSlot {
+        id: rec.id,
+        title: rec.title,
+        shared: Arc::new(ThreadShared { state: Mutex::new(state), cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)) }),
+        progress: None,
+    }
+}
+
+fn saved_from_state(id: u64, title: &str, st: &ThreadState) -> SavedThread {
+    SavedThread {
+        version: 1,
+        id,
+        title: title.to_string(),
+        thread: st.thread.clone(),
+        events: st.events.iter().cloned().collect(),
+        dropped: st.dropped,
+        finish: st.finish.clone(),
+        usage: st.usage,
+        meta: st.trace.meta.clone(),
+        replies: st.trace.replies.clone(),
+    }
 }
 
 impl Default for AssistantHub {
@@ -147,6 +189,7 @@ impl Default for AssistantHub {
             settings: AiSettings::default(),
             dir: None,
             settings_note: None,
+            restore_note: None,
             model_override: None,
             models: Arc::new(Mutex::new(ModelCache::default())),
         }
@@ -160,6 +203,10 @@ impl AssistantHub {
         self.settings = settings;
         self.settings_note = note;
         self.dir = Some(dir.to_path_buf());
+        let (saved, restore_note) = assistant_store::load_all(dir, MAX_THREADS);
+        self.next_id = saved.iter().map(|r| r.id).max().map_or(self.next_id.max(1), |m| m + 1);
+        self.threads = saved.into_iter().map(slot_from_saved).collect();
+        self.restore_note = restore_note;
     }
 
     /// Uses `model` instead of the provider named in the settings. For tests and tools.
@@ -278,6 +325,7 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
         "ready": available && (s.assistant.model_override.is_some() || connected == Some(true)),
         "settings": settings_json(&s.assistant.settings),
         "settingsNote": s.assistant.settings_note,
+        "restoreNote": s.assistant.restore_note,
         "model": info.as_ref().map(model_json),
         "threads": threads,
     }))
@@ -473,6 +521,9 @@ fn delete_thread(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("assistant.deleteThread", "the thread is running; stop it first"));
     }
     s.assistant.threads.retain(|t| t.id != id);
+    if let Some(dir) = &s.assistant.dir {
+        assistant_store::remove(dir, id);
+    }
     Ok(json!({"deleted": id}))
 }
 
@@ -538,6 +589,8 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         shared.cancel.store(false, Ordering::SeqCst);
     }
     let (worker_shared, progress, result, user_text, shown_text) = (shared.clone(), job.progress.clone(), job.result.clone(), ask, text.to_string());
+    let save_dir = s.assistant.dir.clone();
+    let slot_title = s.assistant.slot(id).map(|t| t.title.clone()).unwrap_or_default();
     let run = crate::export_tools::guard_job(job.progress.clone(), job.result.clone(), move || {
         // However this body ends (even in a panic), the thread stops being "running".
         struct Done(Arc<ThreadShared>);
@@ -569,6 +622,13 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
             st.thread = thread;
             st.finish = Some(report.finish.clone());
             st.running = false;
+        }
+        // The conversation is saved when a turn ends, never in the middle of one.
+        if let Some(dir) = &save_dir {
+            let rec = saved_from_state(id, &slot_title, &lock(&worker_shared.state));
+            if let Err(why) = assistant_store::save(dir, &rec) {
+                push_event(&worker_shared, AgentEvent::Notice { text: format!("This conversation could not be saved: {why}.") });
+            }
         }
         *lock(&progress.status) = format!("{:?}", report.finish);
         if matches!(report.finish, Finish::Failed { .. }) {

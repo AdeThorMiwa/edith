@@ -67,6 +67,41 @@ impl Thread {
         Self::default()
     }
 
+    /// Cuts the conversation back to its longest valid beginning, and says how many messages were
+    /// dropped. A thread read from a file anyone can edit may hold a tool call that was never
+    /// answered, or answers in the wrong place; the provider rejects such a conversation on every
+    /// later request, so only the part that is valid is kept. Valid means: every tool call is
+    /// answered, once, by the very next message (a user message holding all the answers in order),
+    /// and no answer refers to a call that was not made.
+    pub fn repair(&mut self) -> usize {
+        let mut keep = 0usize;
+        let mut i = 0usize;
+        let mut open: Vec<String> = Vec::new();
+        while let Some(m) = self.messages.get(i) {
+            let uses: Vec<&str> = m.parts.iter().filter_map(|p| if let Part::ToolUse { id, .. } = p { Some(id.as_str()) } else { None }).collect();
+            let answers: Vec<&str> =
+                m.parts.iter().filter_map(|p| if let Part::ToolResult { tool_use_id, .. } = p { Some(tool_use_id.as_str()) } else { None }).collect();
+            let ok = if !open.is_empty() {
+                // this message must answer exactly the open calls, in order
+                m.role == edith_llm::Role::User && answers == open.iter().map(String::as_str).collect::<Vec<_>>() && uses.is_empty()
+            } else {
+                answers.is_empty() && (uses.is_empty() || m.role == edith_llm::Role::Assistant)
+            };
+            if !ok {
+                break;
+            }
+            open = uses.iter().map(|s| s.to_string()).collect();
+            i += 1;
+            // a point where nothing is waiting for an answer is a place the thread can end
+            if open.is_empty() {
+                keep = i;
+            }
+        }
+        let dropped = self.messages.len() - keep;
+        self.messages.truncate(keep);
+        dropped
+    }
+
     /// Estimated cost of the thread in US dollars, if the model's price is known.
     pub fn estimated_cost(&self, price: Option<&Price>) -> Option<f64> {
         price.map(|p| p.estimate(&self.usage))
