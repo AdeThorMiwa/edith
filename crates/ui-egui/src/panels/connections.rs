@@ -6,12 +6,18 @@
 //! which is not a command). They are never part of `ui.inspect` state: the field's text lives in
 //! egui's temporary memory only, and no automation label contains it.
 //!
+//! Services that sign in through their own page (OpenRouter) get a **Connect** button: it opens the
+//! provider's page, shows "Waiting for the browser…" with Cancel, and ends with the key in the
+//! keychain (the key never passes through this panel). Pasting a key stays available.
+//!
 //! Automation ids: `connections.offline`, `connections.<service>.key` / `.save` / `.remove` /
-//! `.getKey`, `connections.log`, `connections.log.clear`; status bar: `status.offline`.
+//! `.getKey` / `.connect` / `.cancel` / `.reopen` / `.disconnect`, `connections.log`,
+//! `connections.log.clear`; status bar: `status.offline`.
 
 use std::sync::Arc;
 
 use egui::{Align2, Color32, Rect, RichText, Sense, vec2};
+use filmcraft_engine::net_commands::connect::{self, Attempt};
 use filmcraft_engine::net_commands::{self as net, Kind, Outcome, Service};
 use filmcraft_engine::panels::Level;
 use serde_json::json;
@@ -28,6 +34,8 @@ const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3c);
 
 struct Cache {
     at: f64,
+    /// [`connect::changes`] when this was read: a sign-in starting or ending makes it stale.
+    changes: u64,
     statuses: Vec<(&'static Service, Option<bool>)>,
     problem: Option<String>,
 }
@@ -36,6 +44,10 @@ enum Action {
     Offline(bool),
     Save(&'static Service, String),
     Remove(&'static Service),
+    Connect(&'static Service),
+    CancelConnect(u64),
+    Reopen(String),
+    Disconnect(&'static Service),
     GetKey(&'static str),
     ClearLog,
 }
@@ -51,13 +63,15 @@ fn key_id(service: &str) -> egui::Id {
 /// The stored-state of every service, from the cache while it is fresh (the keychain is asked
 /// once per refresh, never once per frame).
 fn statuses(ui: &egui::Ui, now: f64) -> Arc<Cache> {
+    let changes = connect::changes();
     if let Some(c) = ui.data(|d| d.get_temp::<Arc<Cache>>(cache_id()))
         && now - c.at <= REFRESH_SECS
+        && c.changes == changes
     {
         return c;
     }
     let (list, problem) = net::service_statuses();
-    let c = Arc::new(Cache { at: now, statuses: list.into_iter().map(|s| (s.service, s.stored)).collect(), problem });
+    let c = Arc::new(Cache { at: now, changes, statuses: list.into_iter().map(|s| (s.service, s.stored)).collect(), problem });
     ui.data_mut(|d| d.insert_temp(cache_id(), c.clone()));
     c
 }
@@ -120,8 +134,44 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             });
             ui.label(RichText::new(service.note).size(11.0).color(t.text_faint));
-            let (Some(name), true) = (service.secret, secrets) else { continue };
-            let _ = name;
+            let (Some(_), true) = (service.secret, secrets) else { continue };
+            let attempt = connect::attempt(service.id);
+            if service.kind == Kind::SignIn {
+                ui.horizontal(|ui| match &attempt {
+                    Some(Attempt::Waiting { job, url }) => {
+                        ui.spinner();
+                        ui.label(RichText::new(tl!("Waiting for the browser…")).color(t.text_dim));
+                        let r = ui.button(tl!("Cancel"));
+                        elems.push((format!("connections.{}.cancel", service.id), r.clone(), format!("Cancel signing in to {}", service.label)));
+                        if r.clicked() {
+                            actions.push(Action::CancelConnect(*job));
+                        }
+                        let r = ui.link(tl!("Open the page again"));
+                        elems.push((format!("connections.{}.reopen", service.id), r.clone(), format!("Open the {} page again", service.label)));
+                        if r.clicked() {
+                            actions.push(Action::Reopen(url.clone()));
+                        }
+                    }
+                    other => {
+                        if *stored == Some(true) {
+                            let r = ui.button(tl!("Disconnect"));
+                            elems.push((format!("connections.{}.disconnect", service.id), r.clone(), format!("Disconnect {}", service.label)));
+                            if r.clicked() {
+                                actions.push(Action::Disconnect(service));
+                            }
+                        } else {
+                            let r = ui.button(tl!("Connect"));
+                            elems.push((format!("connections.{}.connect", service.id), r.clone(), format!("Connect {}", service.label)));
+                            if r.clicked() {
+                                actions.push(Action::Connect(service));
+                            }
+                        }
+                        if let Some(Attempt::Failed(why)) = other {
+                            ui.label(RichText::new(tlf!("Sign-in did not finish: {why}", why = why)).size(11.0).color(WARN));
+                        }
+                    }
+                });
+            }
             ui.horizontal(|ui| {
                 let mut buf: String = ui.data(|d| d.get_temp(key_id(service.id))).unwrap_or_default();
                 let r = ui.add(egui::TextEdit::singleline(&mut buf).password(true).hint_text(tl!("Paste a key")).desired_width(240.0));
@@ -132,7 +182,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 if r.clicked() {
                     actions.push(Action::Save(service, buf));
                 }
-                if *stored == Some(true) {
+                if *stored == Some(true) && service.kind != Kind::SignIn {
                     let r = ui.button(tl!("Remove"));
                     elems.push((format!("connections.{}.remove", service.id), r.clone(), format!("Remove {} key", service.label)));
                     if r.clicked() {
@@ -210,13 +260,49 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                 }
             }
+            Action::Connect(service) => match app.session.execute("connections.connect", json!({"service": service.id})) {
+                Ok(v) => {
+                    if let Some(url) = v["url"].as_str() {
+                        crate::links::open(app, &ctx, url);
+                    }
+                    app.ui.status = tlf!("Waiting for {name} in the browser…", name = service.label);
+                }
+                Err(e) => {
+                    app.session.log.push(Level::Warning, "network", format!("Could not start signing in to {}: {e}", service.label));
+                    app.ui.status = tlf!("Could not start the sign-in: {why}", why = e);
+                }
+            },
+            Action::CancelConnect(job) => {
+                let _ = app.session.execute("jobs.cancel", json!({"job": job}));
+            }
+            Action::Reopen(url) => crate::links::open(app, &ctx, &url),
+            Action::Disconnect(service) => match app.session.execute("connections.disconnect", json!({"service": service.id})) {
+                Ok(_) => {
+                    ctx.data_mut(|d| d.remove::<Arc<Cache>>(cache_id()));
+                    app.ui.status = tlf!("Disconnected {name}.", name = service.label);
+                }
+                Err(e) => app.ui.status = e.to_string(),
+            },
             Action::GetKey(url) => crate::links::open(app, &ctx, url),
             Action::ClearLog => {
                 let _ = app.session.execute("net.log", json!({"clear": true}));
             }
         }
     }
-    ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+    // A sign-in that was waiting and is now over with a key stored: say so once.
+    let waiting: Vec<&'static str> =
+        cache.statuses.iter().filter(|(sv, _)| matches!(connect::attempt(sv.id), Some(Attempt::Waiting { .. }))).map(|(sv, _)| sv.id).collect();
+    let before: Vec<&'static str> = ctx.data(|d| d.get_temp(egui::Id::new("connections-waiting"))).unwrap_or_default();
+    for id in before.iter().filter(|id| !waiting.contains(id)) {
+        if let Some((sv, _)) = cache.statuses.iter().find(|(sv, _)| sv.id == *id)
+            && net::connected(id) == Some(true)
+        {
+            app.session.log.push(Level::Info, "network", format!("Connected to {}.", sv.label));
+            app.ui.status = tlf!("Connected to {name}.", name = sv.label);
+        }
+    }
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("connections-waiting"), waiting.clone()));
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(if waiting.is_empty() { 2000 } else { 400 }));
 }
 
 /// The Offline switch at the right of the status bar: dim "Online", or an amber "Offline" while

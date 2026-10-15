@@ -115,7 +115,8 @@ fn hostile_parameters_are_refused_without_changes() {
 #[test]
 fn commands_are_not_journaled() {
     let _g = guard();
-    for id in ["net.status", "net.setOffline", "net.log", "secrets.has", "secrets.delete", "connections.list"] {
+    for id in ["net.status", "net.setOffline", "net.log", "secrets.has", "secrets.delete", "connections.list", "connections.connect", "connections.disconnect"]
+    {
         let spec = crate::commands::command_specs().iter().find(|c| c.id == id).unwrap();
         assert!(!spec.journal, "{id} must not be journaled (it would put parameters in the session log)");
     }
@@ -194,4 +195,172 @@ fn init_remembers_offline_mode_in_the_data_directory() {
     assert!(dir.join(edith_net::OFFLINE_MARKER).exists());
     init(None); // no data dir: nothing happens, nothing panics
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- signing in (F03.3d) ------------------------------------------------------------------
+
+#[cfg(feature = "net")]
+mod sign_in {
+    use super::*;
+    use crate::net_commands::connect::{Attempt, attempt, use_test_provider};
+    use edith_ai::connect::OpenRouter;
+    use edith_net::testserver::{Server, response, serve};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    const KEY: &str = "sk-or-v1-ENGINE0123456789abcdef0123456789";
+    const SLOT: &str = "provider.openrouter.api_key";
+
+    fn provider(exchange: &Server) -> OpenRouter {
+        OpenRouter { auth_url: "https://openrouter.ai/auth".into(), key_url: format!("{}/api/v1/auth/keys", exchange.url) }
+    }
+
+    fn param(url: &str, name: &str) -> String {
+        let q = url.split_once('?').map_or("", |x| x.1);
+        let v = q.split('&').find_map(|p| p.split_once('=').filter(|(k, _)| *k == name).map(|x| x.1)).unwrap_or("");
+        v.replace("%3A", ":").replace("%2F", "/")
+    }
+
+    /// The browser following the redirect back to this computer.
+    fn browser(url: &str, query: impl FnOnce(&str) -> String) -> String {
+        let redirect = param(url, "callback_url");
+        let port: u16 = redirect.rsplit(':').next().unwrap().split('/').next().unwrap().parse().unwrap();
+        let q = query(&param(url, "state"));
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let _ = c.write_all(format!("GET /callback?{q} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes());
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        out
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let started = Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn job_state(s: &mut Session, job: u64) -> Value {
+        s.execute("jobs.list", json!({})).unwrap().as_array().and_then(|a| a.iter().find(|j| j["id"] == job).cloned()).unwrap_or(Value::Null)
+    }
+
+    #[test]
+    fn connecting_stores_the_key_ends_the_job_and_shows_the_key_nowhere() {
+        let _g = guard();
+        let store = secrets();
+        let _ = store.delete(SLOT);
+        let exchange = serve(|_, _| response(200, &[("Content-Type", "application/json")], format!(r#"{{"key":"{KEY}"}}"#).as_bytes()));
+        use_test_provider(Some(provider(&exchange)));
+        let mut s = Session::default();
+        let r = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        let (job, url) = (r["job"].as_u64().unwrap(), r["url"].as_str().unwrap().to_string());
+        assert!(url.starts_with("https://openrouter.ai/auth?") && param(&url, "callback_url").starts_with("http://localhost:"), "{url}");
+        assert_eq!(attempt("openrouter"), Some(Attempt::Waiting { job, url: url.clone() }));
+        assert_eq!(s.execute("connections.list", json!({})).unwrap()["services"][0]["connecting"]["state"], "waiting");
+        // pressing Connect again while waiting gives the same sign-in back
+        let again = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        assert_eq!((again["job"].clone(), again["resumed"].clone()), (json!(job), json!(true)));
+
+        let page = browser(&url, |state| format!("code=THE-CODE&state={state}"));
+        assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+        wait_for("the key to be stored", || store.has(SLOT).unwrap_or(false));
+        wait_for("the job to finish", || job_state(&mut s, job)["finished"] == true);
+        assert_eq!(store.get(SLOT).unwrap().unwrap().as_str(), KEY);
+        assert_eq!(attempt("openrouter"), None);
+        assert_eq!(s.execute("connections.list", json!({})).unwrap()["services"][0]["stored"], true);
+
+        // the key is in no result, job record, log line or request log
+        let (record, listing) = (job_state(&mut s, job), s.execute("connections.list", json!({})).unwrap());
+        let everything = format!("{r} {record} {:?} {:?} {listing}", s.log.entries, edith_net::shared().entries(None));
+        for secret in [KEY, "ENGINE0123456789", "THE-CODE"] {
+            assert!(!everything.contains(secret), "{secret} leaked: {everything}");
+        }
+
+        let d = s.execute("connections.disconnect", json!({"service": "openrouter"})).unwrap();
+        assert_eq!(d["disconnected"], true);
+        assert!(!store.has(SLOT).unwrap());
+        assert!(s.log.entries.iter().any(|e| e.message.contains("Disconnected OpenRouter")));
+        use_test_provider(None);
+    }
+
+    #[test]
+    fn declining_cancelling_and_a_bad_exchange_leave_no_key() {
+        let _g = guard();
+        let store = secrets();
+        let _ = store.delete(SLOT);
+        let exchange = serve(|_, _| response(400, &[], br#"{"error":"invalid_grant"}"#));
+        use_test_provider(Some(provider(&exchange)));
+        let mut s = Session::default();
+
+        // declined in the browser (OpenRouter sends no state back)
+        let r = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        let (job, url) = (r["job"].as_u64().unwrap(), r["url"].as_str().unwrap().to_string());
+        browser(&url, |_| "error=access_denied".to_string());
+        wait_for("the sign-in to fail", || matches!(attempt("openrouter"), Some(Attempt::Failed(_))));
+        let Some(Attempt::Failed(why)) = attempt("openrouter") else { unreachable!() };
+        assert!(why.contains("access_denied"), "{why}");
+        assert!(job_state(&mut s, job)["error"].is_string() || job_state(&mut s, job)["finished"] == true);
+        assert_eq!(s.execute("connections.list", json!({})).unwrap()["services"][0]["connecting"]["state"], "failed");
+        assert!(!store.has(SLOT).unwrap());
+        assert_eq!(exchange.hits(), 0, "a refusal asks for no key");
+
+        // approved, but the provider refuses the exchange
+        let r = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        assert_eq!(r["resumed"], false, "a failed sign-in does not block the next try");
+        browser(r["url"].as_str().unwrap(), |state| format!("code=C&state={state}"));
+        wait_for("the exchange to fail", || exchange.hits() == 1 && matches!(attempt("openrouter"), Some(Attempt::Failed(_))));
+        let Some(Attempt::Failed(why)) = attempt("openrouter") else { unreachable!() };
+        assert!(!why.contains("invalid_grant"), "the provider's answer is not echoed: {why}");
+        assert!(!store.has(SLOT).unwrap());
+
+        // cancelled with the job's own cancel
+        let r = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        let job = r["job"].as_u64().unwrap();
+        s.execute("jobs.cancel", json!({"job": job})).unwrap();
+        wait_for("the sign-in to stop", || attempt("openrouter").is_none());
+        wait_for("the job to finish", || job_state(&mut s, job)["finished"] == true);
+        use_test_provider(None);
+    }
+
+    #[test]
+    fn disconnect_stops_a_sign_in_that_is_waiting() {
+        let _g = guard();
+        let exchange = serve(|_, _| response(200, &[], b"{}"));
+        use_test_provider(Some(provider(&exchange)));
+        let mut s = Session::default();
+        let r = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap();
+        let job = r["job"].as_u64().unwrap();
+        s.execute("connections.disconnect", json!({"service": "openrouter"})).unwrap();
+        wait_for("the job to finish", || job_state(&mut s, job)["finished"] == true);
+        assert_eq!(attempt("openrouter"), None);
+        use_test_provider(None);
+    }
+
+    #[test]
+    fn only_services_with_a_sign_in_connect_and_offline_mode_blocks_it() {
+        let _g = guard();
+        let mut s = Session::default();
+        let before = s.jobs.len();
+        for bad in [
+            json!({}),
+            json!({"service": 5}),
+            json!({"service": "anthropic"}),
+            json!({"service": "ollama"}),
+            json!({"service": "nope"}),
+            json!({"service": "x".repeat(300)}),
+        ] {
+            assert!(s.execute("connections.connect", bad.clone()).is_err(), "{bad}");
+        }
+        for bad in [json!({}), json!({"service": "ollama"}), json!({"service": "nope"}), json!({"service": null})] {
+            assert!(s.execute("connections.disconnect", bad.clone()).is_err(), "{bad}");
+        }
+        s.execute("net.setOffline", json!({"offline": true})).unwrap();
+        let e = s.execute("connections.connect", json!({"service": "openrouter"})).unwrap_err().to_string();
+        assert!(e.contains("Offline"), "{e}");
+        assert_eq!(s.jobs.len(), before, "refused connects start no job");
+        assert_eq!(attempt("openrouter"), None);
+    }
 }

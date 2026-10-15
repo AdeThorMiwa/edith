@@ -177,8 +177,9 @@ fn a_typed_key_goes_to_the_keychain_and_nowhere_else() {
     d.click("connections.openrouter.save");
     assert_eq!(store.get(name).unwrap().as_deref().map(String::as_str), Some(SECRET));
     assert_eq!(d.exec("secrets.has", json!({"name": name}))["stored"], true);
-    // the field is empty again, "Remove" appeared, and the key is in no output
-    assert!(d.has("connections.openrouter.remove"));
+    // the field is empty again, "Disconnect" appeared (OpenRouter signs in through a page, so its
+    // key is disconnected rather than removed), and the key is in no output
+    assert!(d.has("connections.openrouter.disconnect") && !d.has("connections.openrouter.remove"));
     for (what, text) in [
         ("ui.inspect", d.ok("ui.inspect", json!({})).to_string()),
         ("ui.elements", d.ok("ui.elements", json!({})).to_string()),
@@ -191,9 +192,16 @@ fn a_typed_key_goes_to_the_keychain_and_nowhere_else() {
     let rows = d.exec("connections.list", json!({}));
     let or = rows["services"].as_array().unwrap().iter().find(|s| s["id"] == "openrouter").unwrap().clone();
     assert_eq!(or["stored"], true);
-    d.click("connections.openrouter.remove");
+    d.click("connections.openrouter.disconnect");
     assert!(!store.has(name).unwrap());
-    assert!(!d.has("connections.openrouter.remove"));
+    assert!(!d.has("connections.openrouter.disconnect") && d.has("connections.openrouter.connect"));
+    // a service whose key is only pasted still says Remove
+    d.click("connections.anthropic.key");
+    d.ok("ui.type", json!({"text": "anthropic-TYPED-SECRET-456"}));
+    d.click("connections.anthropic.save");
+    assert!(d.has("connections.anthropic.remove") && !d.has("connections.anthropic.disconnect"));
+    d.click("connections.anthropic.remove");
+    assert!(!store.has("provider.anthropic.api_key").unwrap());
 }
 
 #[test]
@@ -237,4 +245,100 @@ fn the_panel_looks_right() {
     d.frames(3);
     d.snapshot("connections-bottom");
     store.delete("provider.gemini.api_key").unwrap();
+}
+
+// ---- signing in (F03.3d) ------------------------------------------------------------------
+
+mod sign_in {
+    use super::*;
+    use edith_ai::connect::OpenRouter;
+    use edith_net::testserver::{response, serve};
+    use filmcraft_engine::net_commands::connect::use_test_provider;
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    const KEY: &str = "sk-or-v1-UITEST0123456789abcdef0123456789";
+    const SLOT: &str = "provider.openrouter.api_key";
+
+    fn param(url: &str, name: &str) -> String {
+        let q = url.split_once('?').map_or("", |x| x.1);
+        let v = q.split('&').find_map(|p| p.split_once('=').filter(|(k, _)| *k == name).map(|x| x.1)).unwrap_or("");
+        v.replace("%3A", ":").replace("%2F", "/")
+    }
+
+    fn browser(url: &str, query: String) {
+        let port: u16 = param(url, "callback_url").rsplit(':').next().unwrap().split('/').next().unwrap().parse().unwrap();
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let _ = c.write_all(format!("GET /callback?{query} HTTP/1.1\r\nHost: localhost:{port}\r\n\r\n").as_bytes());
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+    }
+
+    fn wait(d: &mut Driver, what: &str, mut done: impl FnMut(&mut Driver) -> bool) {
+        let started = Instant::now();
+        while !done(d) {
+            assert!(started.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
+            d.frames(2);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn connect_opens_the_browser_waits_stores_the_key_and_disconnect_removes_it() {
+        let _g = guard();
+        let store = edith_net::secrets::os().unwrap();
+        let _ = store.delete(SLOT);
+        let exchange = serve(|_, _| response(200, &[("Content-Type", "application/json")], format!(r#"{{"key":"{KEY}"}}"#).as_bytes()));
+        use_test_provider(Some(OpenRouter { auth_url: "https://openrouter.ai/auth".into(), key_url: format!("{}/api/v1/auth/keys", exchange.url) }));
+        let mut d = Driver::new();
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = opened.clone();
+        d.app().hooks.open_url = Some(Box::new(move |u| {
+            sink.lock().unwrap().push(u.to_string());
+            Ok(())
+        }));
+        d.open_connections();
+        assert!(d.has("connections.openrouter.connect") && !d.has("connections.openrouter.disconnect"));
+        assert!(!d.has("connections.anthropic.connect"), "only services that sign in through a page get the button");
+
+        // Connect, then Cancel: nothing is left behind
+        d.click("connections.openrouter.connect");
+        wait(&mut d, "the browser to open", |_| !opened.lock().unwrap().is_empty());
+        assert!(opened.lock().unwrap()[0].starts_with("https://openrouter.ai/auth?"));
+        wait(&mut d, "the waiting state", |d| d.has("connections.openrouter.cancel"));
+        assert!(!d.has("connections.openrouter.connect") && d.has("connections.openrouter.reopen"));
+        d.click("connections.openrouter.cancel");
+        wait(&mut d, "the button to come back", |d| d.has("connections.openrouter.connect"));
+        assert!(!store.has(SLOT).unwrap());
+
+        // Connect again and approve in the "browser"
+        opened.lock().unwrap().clear();
+        d.click("connections.openrouter.connect");
+        wait(&mut d, "the browser to open", |_| !opened.lock().unwrap().is_empty());
+        let url = opened.lock().unwrap()[0].clone();
+        let state = param(&url, "state");
+        let page = std::thread::spawn(move || browser(&url, format!("code=THE-CODE&state={state}")));
+        wait(&mut d, "the panel to show Connected", |d| d.has("connections.openrouter.disconnect"));
+        page.join().unwrap();
+        assert_eq!(store.get(SLOT).unwrap().unwrap().as_str(), KEY);
+        // the key is in no label, no inspected state and no log line
+        let everything = format!(
+            "{} {} {}",
+            d.ok("ui.elements", json!({"prefix": ""})),
+            d.ok("ui.inspect", json!({})),
+            d.app().session.log.entries.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("\n")
+        );
+        for secret in [KEY, "UITEST0123456789", "THE-CODE"] {
+            assert!(!everything.contains(secret), "{secret} leaked");
+        }
+        assert!(d.app().session.log.entries.iter().any(|e| e.message.contains("Connected to OpenRouter")));
+
+        d.click("connections.openrouter.disconnect");
+        wait(&mut d, "the key to go", |d| d.has("connections.openrouter.connect"));
+        assert!(!store.has(SLOT).unwrap());
+        use_test_provider(None);
+    }
 }

@@ -8,12 +8,16 @@
 //! | `net.log` | the redacted request log (newest `limit`, default 100), or `clear: true` to empty it |
 //! | `secrets.has` | whether a secret with this name is stored; **never returns the secret** |
 //! | `secrets.delete` | remove a stored secret |
-//! | `connections.list` | every known service with its kind, whether a key is stored, and where to get one |
+//! | `connections.list` | every known service with its kind, whether a key is stored, where to get one, and where a sign-in is (`connecting`) |
+//! | `connections.connect` | sign in to a service through its own page (a job; returns the address to open); see [`connect`] |
+//! | `connections.disconnect` | stop a sign-in and remove the stored key |
 //!
 //! There is deliberately no command that stores or reads a secret: a key can only be typed into
 //! Settings ▸ Connections (or arrive through a sign-in), so it never appears in a command's
 //! parameters, the journal, the session log, `ui.inspect` or an agent's transcript. None of these
 //! commands is journaled.
+
+pub mod connect;
 
 use std::path::Path;
 
@@ -41,7 +45,7 @@ pub fn available() -> Value {
 }
 
 #[cfg(feature = "net")]
-mod keychain {
+pub(super) mod keychain {
     use super::*;
 
     pub fn valid(name: &str) -> bool {
@@ -56,10 +60,16 @@ mod keychain {
     pub fn set(name: &str, value: &str) -> std::result::Result<(), String> {
         net::secrets::os().and_then(|s| s.set(name, value)).map_err(|e| e.to_string())
     }
+    /// Drops the copy kept in memory, so the next read goes to the keychain.
+    pub fn forget(name: &str) {
+        if let Ok(store) = net::secrets::os() {
+            store.forget_cached(name);
+        }
+    }
 }
 
 #[cfg(not(feature = "net"))]
-mod keychain {
+pub(super) mod keychain {
     pub fn valid(name: &str) -> bool {
         !name.is_empty() && name.len() <= 64
     }
@@ -72,6 +82,7 @@ mod keychain {
     pub fn set(_: &str, _: &str) -> std::result::Result<(), String> {
         Err("secrets are not available in this build".to_string())
     }
+    pub fn forget(_: &str) {}
 }
 
 fn can_use_secrets(_: &Session) -> std::result::Result<(), String> {
@@ -204,6 +215,7 @@ fn connections_list(_s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|st| {
             let mut v = serde_json::to_value(st.service).unwrap_or(Value::Null);
             v["stored"] = json!(st.stored);
+            v["connecting"] = connect::attempt(st.service.id).map_or(Value::Null, |a| a.to_json());
             v
         })
         .collect();
@@ -228,5 +240,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("secrets.has", "Is a Secret Stored", r#"{"name":str}"#, can_use_secrets, secrets_has),
         spec("secrets.delete", "Delete a Stored Secret", r#"{"name":str}"#, can_use_secrets, secrets_delete),
         spec("connections.list", "List Connections", "{}", always, connections_list),
+        spec("connections.connect", "Connect a Service", r#"{"service":str}"#, always, connect::connect),
+        spec("connections.disconnect", "Disconnect a Service", r#"{"service":str}"#, can_use_secrets, connect::disconnect),
     ]
 }

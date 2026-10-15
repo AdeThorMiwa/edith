@@ -3652,3 +3652,12 @@
 	Choose a model	Elige un modelo
 	Choose a model from the list above to start.	Elige un modelo de la lista de arriba para empezar.
 	not connected	sin conectar
+	Connect	Conectar
+	Disconnect	Desconectar
+	Waiting for the browser…	Esperando al navegador…
+	Open the page again	Abrir la página de nuevo
+	Sign-in did not finish: {why}	El inicio de sesión no terminó: {why}
+	Waiting for {name} in the browser…	Esperando a {name} en el navegador…
+	Could not start the sign-in: {why}	No se pudo iniciar la sesión: {why}
+	Disconnected {name}.	{name} desconectado.
+	Connected to {name}.	Conectado a {name}.

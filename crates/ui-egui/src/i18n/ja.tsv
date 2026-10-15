@@ -3654,3 +3654,12 @@
 	Choose a model	モデルを選択
 	Choose a model from the list above to start.	始めるには、上の一覧からモデルを選んでください。
 	not connected	未接続
+	Connect	接続
+	Disconnect	切断
+	Waiting for the browser…	ブラウザを待っています…
+	Open the page again	ページをもう一度開く
+	Sign-in did not finish: {why}	サインインが完了しませんでした: {why}
+	Waiting for {name} in the browser…	ブラウザで {name} を待っています…
+	Could not start the sign-in: {why}	サインインを開始できませんでした: {why}
+	Disconnected {name}.	{name} を切断しました。
+	Connected to {name}.	{name} に接続しました。

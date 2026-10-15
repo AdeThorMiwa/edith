@@ -3630,3 +3630,12 @@
 	Choose a model	选择模型
 	Choose a model from the list above to start.	请先从上方列表中选择一个模型。
 	not connected	未连接
+	Connect	连接
+	Disconnect	断开连接
+	Waiting for the browser…	正在等待浏览器…
+	Open the page again	重新打开页面
+	Sign-in did not finish: {why}	登录未完成：{why}
+	Waiting for {name} in the browser…	正在浏览器中等待 {name}…
+	Could not start the sign-in: {why}	无法开始登录：{why}
+	Disconnected {name}.	已断开 {name}。
+	Connected to {name}.	已连接到 {name}。

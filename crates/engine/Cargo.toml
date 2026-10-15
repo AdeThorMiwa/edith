@@ -49,6 +49,7 @@ log = { workspace = true }
 web-time = "1"
 
 [dev-dependencies]
+edith-net = { workspace = true, features = ["testserver"] }
 filmcraft-testkit = { workspace = true }
 filmcraft-dng = { workspace = true, features = ["writer"] }
 filmcraft-isobmff = { workspace = true }

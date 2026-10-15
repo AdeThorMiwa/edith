@@ -98,8 +98,8 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `crates/ui-egui/src/lib.rs` | one line after `job_status` (the status-bar Offline switch) and one in `logic()` (`session.pump_assistant()`, every frame) | F02.6, F03.1 |
 | `crates/ui-egui/src/i18n/{es,ja,zh-cn,pt-br}.tsv` | lines appended at the end for the Connections and Assistant panels (23 each in es, ja, zh-cn for each; the panel titles in pt-br); the tests insist every `tl!` string is translated in those languages | F02.6, F03.1 |
 | `crates/ui-egui/tests/chrome_ui.rs` | the panel-extent helper ignores `status.*` elements (the status bar's own, now including the Offline switch) | F03.1 |
-| `crates/ui-egui/Cargo.toml` | dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`, `edith-ai`) so the UI tests use the in-memory secret store and a scripted model | F02.6, F03.1 |
-| `crates/engine/Cargo.toml` | the `edith-net` and `edith-ai` dependencies and a `net` feature that forwards to them (4 lines) | F02.5, F03.1 |
+| `crates/ui-egui/Cargo.toml` | dev-dependencies (`filmcraft-engine` with `net`, `edith-net` with `keychain`, `edith-ai`) so the UI tests use the in-memory secret store, a scripted model and a mock sign-in server (`testserver`) | F02.6, F03.1, F03.3d |
+| `crates/engine/Cargo.toml` | the `edith-net` and `edith-ai` dependencies and a `net` feature that forwards to them (4 lines), plus a dev-dependency on `edith-net` with `testserver` for the sign-in tests | F02.5, F03.1, F03.3d |
 | `crates/engine/src/lib.rs` | `pub mod net_commands;`, `pub mod assistant;`, `mod assistant_tools;`, the test modules, and one `Session` field (`assistant`) with its initialiser | F02.5, F03.1 |
 | `crates/engine/src/commands.rs` | `v.extend(crate::net_commands::commands());` and `v.extend(crate::assistant::commands());` in `build()` | F02.5, F03.1 |
 | `apps/filmcraft/Cargo.toml`, `apps/filmcraft-cli/Cargo.toml` | `net` added to `default`, plus a `net` feature (3 lines each, so the first row above changes too) | F02.5 |
