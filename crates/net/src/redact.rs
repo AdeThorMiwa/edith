@@ -30,6 +30,15 @@ pub fn host(url: &str) -> Option<String> {
     Some(rest.get(..end)?.to_ascii_lowercase())
 }
 
+/// Words shaped like the API keys providers issue (`sk-ant-…`, `sk-or-…`, `sk-proj-…`, Google's
+/// `AIza…`): a prefix and a long run of key characters. A heuristic, in addition to hiding the
+/// exact key where the caller knows it.
+fn looks_like_a_key(word: &str) -> bool {
+    let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+    let long_enough = w.len() >= 16 && w.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    long_enough && (w.starts_with("sk-") || w.starts_with("AIza") || w.starts_with("pplx-") || w.starts_with("gsk_"))
+}
+
 /// `message` with query strings, `Bearer` tokens and `key=value` credentials blanked out and
 /// control characters replaced, cut to 300 characters. Use for error text from libraries, which
 /// may quote the request URL.
@@ -46,6 +55,10 @@ pub fn message(message: &str) -> String {
         }
         if word.eq_ignore_ascii_case("bearer") || word.eq_ignore_ascii_case("basic") {
             hide_next = true;
+        }
+        if looks_like_a_key(word) {
+            out.push("[hidden]".to_string());
+            continue;
         }
         if let Some(i) = w.find('?') {
             w.truncate(i);
@@ -99,6 +112,16 @@ mod tests {
             assert!(!m.contains(leak), "{m}");
         }
         assert!(m.contains("ok=1"));
+    }
+
+    #[test]
+    fn message_hides_words_shaped_like_keys() {
+        let m = message("invalid x-api-key sk-ant-api03-ABCDEFGHIJKLMNOP, tried (sk-or-v1-0123456789abcdef) and AIzaSyA1234567890abcdefgh.");
+        for leak in ["ABCDEFGHIJKLMNOP", "0123456789abcdef", "AIzaSy"] {
+            assert!(!m.contains(leak), "{m}");
+        }
+        // ordinary words and short tokens survive
+        assert!(message("the sk-1 token and sky-high prices").contains("sky-high"));
     }
 
     #[test]

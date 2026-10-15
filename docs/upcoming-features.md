@@ -242,7 +242,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 ### Phase 1: first-video kit
 
-### F03 Assistant pane: connect, chat, mentor · Must · L · yours · ⬜
+### F03 Assistant pane: connect, chat, mentor · Must · L · yours · 🟡
 
 **Needs:** F02 · **Unlocks:** F15, F21, and a home for every later feature's tools.
 
@@ -256,7 +256,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Steps** (reordered 2026-10-15: the architect's main provider is Claude, used with their own API key; the Claude Code / ACP route was considered and dropped).
 - F03.0 **Research notes** (not a gate): a first pass is in [research/agent-and-editing.md](research/agent-and-editing.md). F03.1 is built now from what is known there, and each later stage reads more and records what it changes. Better research later improves the agent; it does not hold it up.
-- F03.1 The chat panel (threads, streaming view, tool-call cards, thinking summaries, cost meter, Stop) and the **Anthropic client with Edith's own agent loop** (lane B, Claude first).
+- F03.1 The chat panel (threads, streaming view, tool-call cards, thinking summaries, cost meter, Stop) and the **Anthropic client with Edith's own agent loop** (lane B, Claude first). Built in five commits: (a) `edith-llm` (**done 2026-10-15**: the neutral types, the Anthropic request builder, stream assembler, model list and client, a scripted model; 38 tests, key never in a log or error, one `#[ignore]`d real-API test), (b) `edith-agent`, (c) `edith-ai`, (d) engine glue and the read-only tools, (e) the panel.
 - F03.2 Context chips, the read-only tools, mentor prompts.
 - F03.3 Provider abstraction, the OpenAI-compatible client, and the Connect buttons: OpenRouter sign-in (A), other API keys (B), local servers (C).
 - F03.4 Gemini (free tier) and any OpenAI-compatible endpoint.
@@ -699,7 +699,7 @@ Each has a recommendation, so work can start before you answer; a decision here 
 | D5 | Keychain crate (license, maintenance, macOS behavior) | **Decided in F02 (2026-10-15):** `keyring-core` plus one store crate per OS; see F02. |
 | D6 | Point `CLAUDE.md` at this file (one line in an upstream-owned file) | Yes, so every agent session starts from it. **Decided 2026-10-12: yes (done in F01.3).** |
 | D7 | Crate naming | **Decided 2026-10-15:** every crate the fork creates is named `edith-*` (`edith-net`, `edith-llm`, `edith-agent`, `edith-ai`, later `edith-sources`, `edith-analysis`). Directories keep the repo's short names (`crates/net`, `crates/llm`, …) and nothing moves. Upstream's `filmcraft-*` crates keep their names until the big rename (D12). |
-| D13 | Default model for new assistant threads | Haiku 5.5 for chat and quick questions, with Sonnet 5.5 one click away for critique; decide with the measured cost from F03.1. |
+| D13 | Default model for new assistant threads | **Decided 2026-10-15: a user setting**, not a constant in the agent. The shipped default is Haiku 5.5 (about 20 times cheaper than Sonnet 5.5 for plain tokens, about 6 times with heavily cached input), with Sonnet 5.5 one click away for critique; revisit with the measured cost from F03.1. The setting lives in a fork-owned settings file (not upstream's preferences) and is edited in the assistant panel. |
 | D12 | Renaming the product to Edith | **Decided 2026-10-15, incrementally:** new things are Edith from the start; code a stage touches that still says FilmCraft is changed to Edith when that is cheap, and left for the big rename when it is not (crate names, `.fcproj`, the data directory, anything that fans out across files). See [fork.md](fork.md#naming-edith). |
 | D8 | Default profile for new assistant threads | Read-only for a first thread; Propose once edit tools exist. |
 | D9 | Reference analysis stance and UI wording | Files you supply only; no downloaders; say so in the UI. |

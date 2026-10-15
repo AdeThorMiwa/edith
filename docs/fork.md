@@ -90,8 +90,8 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `apps/filmcraft/Cargo.toml` | `default = ["whisper", "neural-voices"]` (one line, with a trailing comment) | F01.1 |
 | `apps/filmcraft-cli/Cargo.toml` | the same `default`, plus a `neural-voices` feature that forwards to the engine (3 lines), so MCP and CLI clients can transcribe and narrate | F01.1 |
 | `crates/speech/src/whisper/tokenizer.rs` | `expect()` replaced by `filter_map`, plus a test of the byte table: a lint fix the new defaults surface (see the exception under Fork rules) | F01.1 |
-| `Cargo.toml` | one workspace dependency line, `edith-net` | F02.1 |
-| `xtask/src/main.rs` | one `LAYERS` entry, `("net", 2)` | F02.1 |
+| `Cargo.toml` | workspace dependency lines for the fork's crates (`edith-net`, `edith-llm`) | F02.1 |
+| `xtask/src/main.rs` | `LAYERS` entries (`("net", 2)`, `("llm", 3)`), and the prefix rule accepts `edith-` next to `filmcraft-` (two lines) | F02.1, F02.7, F03.1 |
 | `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
 | `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` (variant, `ALL` length, title: 4 lines) | F02.6 |
 | `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;` and one `match` arm | F02.6 |

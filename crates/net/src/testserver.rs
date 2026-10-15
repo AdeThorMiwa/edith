@@ -1,4 +1,7 @@
 //! A tiny loopback HTTP server for tests. Nothing here touches the real network.
+//! Compiled for tests, and for other crates' tests through the `testserver` feature.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

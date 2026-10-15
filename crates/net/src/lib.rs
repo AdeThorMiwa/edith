@@ -27,8 +27,8 @@ pub mod redact;
 pub mod secrets;
 pub mod services;
 mod state;
-#[cfg(all(test, feature = "http"))]
-mod testserver;
+#[cfg(all(any(test, feature = "testserver"), feature = "http"))]
+pub mod testserver;
 #[cfg(feature = "http")]
 mod tls;
 

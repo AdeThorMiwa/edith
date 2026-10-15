@@ -1,0 +1,27 @@
+[package]
+name = "edith-llm"
+description = "Edith model providers: one narrow chat interface (messages, tools, streaming events, capabilities) with an Anthropic implementation and a scripted model for tests. Knows nothing about editing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The real clients (HTTPS through edith-net). Off in wasm builds.
+net = ["edith-net/http"]
+# Read the Anthropic key from the OS keychain.
+keychain = ["net", "edith-net/keychain"]
+
+[dependencies]
+edith-net = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+zeroize = "1"
+
+[dev-dependencies]
+edith-net = { workspace = true, features = ["http", "keychain", "testserver"] }
