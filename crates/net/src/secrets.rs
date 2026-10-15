@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use zeroize::Zeroizing;
 
-/// The keychain "service" every FilmCraft entry is filed under.
-pub const SERVICE: &str = "filmcraft";
+/// The keychain "service" every Edith entry is filed under.
+pub const SERVICE: &str = crate::brand::KEYCHAIN_SERVICE;
 const MAX_VALUE: usize = 8 * 1024;
 
 /// Secret names are lower-case words joined by `.`, `_` or `-`, up to 64 characters, such as
@@ -115,7 +115,7 @@ struct NoSearch(Arc<keyring_core::mock::Store>);
 
 impl keyring_core::api::CredentialStoreApi for NoSearch {
     fn vendor(&self) -> String {
-        "filmcraft in-memory store".to_string()
+        "edith in-memory store".to_string()
     }
     fn id(&self) -> String {
         "in-memory".to_string()
@@ -253,7 +253,7 @@ mod tests {
     }
 
     /// Talks to the real login keychain with a throwaway item; macOS may ask for access.
-    /// `cargo test -p filmcraft-net --features keychain -- --ignored real_os_keychain`
+    /// `cargo test -p edith-net --features keychain -- --ignored real_os_keychain`
     #[test]
     #[ignore = "uses the real OS keychain"]
     fn real_os_keychain_round_trip() {

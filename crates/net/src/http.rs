@@ -47,7 +47,7 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            user_agent: format!("FilmCraft/{} (video editor; https://github.com/storytold/filmcraft)", env!("CARGO_PKG_VERSION")),
+            user_agent: crate::brand::user_agent(),
             connect_timeout: Duration::from_secs(10),
             timeout: Duration::from_secs(60),
             max_body: 16 * 1024 * 1024,
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(r.status, 200);
         assert_eq!(r.json::<serde_json::Value>().unwrap()["a"], 1);
         let req_text = s.requests.lock().unwrap()[0].to_ascii_lowercase();
-        assert!(req_text.contains("x-api-key: topsecret") && req_text.contains("user-agent: filmcraft/"));
+        assert!(req_text.contains("x-api-key: topsecret") && req_text.contains("user-agent: edith/"));
         let log = c.state().entries(None);
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].outcome, Outcome::Ok);
@@ -763,7 +763,7 @@ mod tests {
     }
 
     /// Needs the real internet, so it is skipped by default:
-    /// `cargo test -p filmcraft-net --features http -- --ignored real_https`.
+    /// `cargo test -p edith-net --features http -- --ignored real_https`.
     #[test]
     #[ignore = "uses the real network"]
     fn real_https_handshake_with_the_os_certificate_store() {

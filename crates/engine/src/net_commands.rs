@@ -1,4 +1,4 @@
-//! Network, secrets and connections (roadmap F02). The mechanics live in `filmcraft-net`; these
+//! Network, secrets and connections (roadmap F02). The mechanics live in `edith-net`; these
 //! commands let the UI, the CLI, the control channel and MCP see and steer them.
 //!
 //! | command | does |
@@ -19,7 +19,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use filmcraft_net as net;
+use edith_net as net;
 pub use net::services::{Kind, Service};
 pub use net::{LogEntry, Outcome};
 

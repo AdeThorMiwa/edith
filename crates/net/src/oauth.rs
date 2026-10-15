@@ -206,15 +206,15 @@ impl Loopback {
         }
         let state_ok = state.as_deref().is_some_and(|s| bool::from(s.as_bytes().ct_eq(expected_state.as_bytes())));
         if !state_ok {
-            return reply(&mut stream, 400, "This sign-in link does not belong to this session. Start again from FilmCraft.");
+            return reply(&mut stream, 400, &format!("This sign-in link does not belong to this session. Start again from {}.", crate::brand::NAME));
         }
         if let Some(e) = error {
-            let _ = reply(&mut stream, 200, "Sign-in was cancelled. You can close this tab and return to FilmCraft.");
+            let _ = reply(&mut stream, 200, &format!("Sign-in was cancelled. You can close this tab and return to {}.", crate::brand::NAME));
             return Verdict::Denied(redact::message(&e.chars().take(80).collect::<String>()));
         }
         match code {
             Some(c) if !c.is_empty() && c.len() <= MAX_CODE && !c.chars().any(char::is_control) => {
-                let _ = reply(&mut stream, 200, "Signed in. You can close this tab and return to FilmCraft.");
+                let _ = reply(&mut stream, 200, &format!("Signed in. You can close this tab and return to {}.", crate::brand::NAME));
                 Verdict::Code(AuthCode(Zeroizing::new(c)))
             }
             _ => reply(&mut stream, 400, "The sign-in answer had no code."),
@@ -231,7 +231,10 @@ enum Verdict {
 /// Writes a small fixed page and reports the request as unusable (callers return `Verdict::Code`
 /// themselves for the success page). The code is never echoed.
 fn reply(stream: &mut TcpStream, status: u16, text: &str) -> Verdict {
-    let body = format!("<!doctype html><meta charset=utf-8><title>FilmCraft</title><body style=\"font:16px system-ui;margin:3em\"><p>{text}</p>");
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><title>{name}</title><body style=\"font:16px system-ui;margin:3em\"><p>{text}</p>",
+        name = crate::brand::NAME
+    );
     let head = format!(
         "HTTP/1.1 {status} X\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\nConnection: close\r\n\r\n",
         body.len()

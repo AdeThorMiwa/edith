@@ -11,8 +11,8 @@ static LOCK: Mutex<()> = Mutex::new(());
 
 fn guard() -> std::sync::MutexGuard<'static, ()> {
     let g = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-    filmcraft_net::shared().set_offline(false);
-    filmcraft_net::shared().clear_log();
+    edith_net::shared().set_offline(false);
+    edith_net::shared().clear_log();
     g
 }
 
@@ -23,13 +23,13 @@ fn demo() -> Session {
 }
 
 #[cfg(feature = "net")]
-fn secrets() -> &'static filmcraft_net::secrets::SecretStore {
+fn secrets() -> &'static edith_net::secrets::SecretStore {
     static ONCE: std::sync::Once = std::sync::Once::new();
     // Tests never touch the real keychain.
     ONCE.call_once(|| {
-        let _ = filmcraft_net::secrets::install(filmcraft_net::secrets::in_memory().unwrap());
+        let _ = edith_net::secrets::install(edith_net::secrets::in_memory().unwrap());
     });
-    filmcraft_net::secrets::os().unwrap()
+    edith_net::secrets::os().unwrap()
 }
 
 #[test]
@@ -42,22 +42,22 @@ fn status_and_offline_mode() {
     assert_eq!(st["available"]["http"], cfg!(feature = "net"));
     let r = s.execute("net.setOffline", json!({"offline": true})).unwrap();
     assert_eq!(r["offline"], true);
-    assert!(filmcraft_net::shared().check().is_err());
+    assert!(edith_net::shared().check().is_err());
     assert_eq!(s.execute("net.status", json!({})).unwrap()["offline"], true);
     assert!(s.log.entries.iter().any(|e| e.source == "network" && e.message.contains("Offline mode is on")));
     s.execute("net.setOffline", json!({"offline": false})).unwrap();
-    assert!(filmcraft_net::shared().check().is_ok());
+    assert!(edith_net::shared().check().is_ok());
 }
 
 #[test]
 fn the_log_is_redacted_limited_and_clearable() {
     let _g = guard();
     let mut s = Session::default();
-    let st = filmcraft_net::shared();
+    let st = edith_net::shared();
     for i in 0..5 {
-        st.record("GET", &format!("https://user:pw@h{i}.test/v1/x?key=SECRET-{i}&code=ABC"), filmcraft_net::Outcome::Ok, Some(200), 10, 5, None);
+        st.record("GET", &format!("https://user:pw@h{i}.test/v1/x?key=SECRET-{i}&code=ABC"), edith_net::Outcome::Ok, Some(200), 10, 5, None);
     }
-    st.record("POST", "https://h.test/y", filmcraft_net::Outcome::Failed, None, 0, 1, Some("failed with Authorization: Bearer sk-LEAK and token=TOK"));
+    st.record("POST", "https://h.test/y", edith_net::Outcome::Failed, None, 0, 1, Some("failed with Authorization: Bearer sk-LEAK and token=TOK"));
     let all = s.execute("net.log", json!({})).unwrap();
     let text = all.to_string();
     for leak in ["SECRET", "ABC", "pw@", "sk-LEAK", "TOK"] {
@@ -109,7 +109,7 @@ fn hostile_parameters_are_refused_without_changes() {
         assert_eq!(*s.project, snap, "{id} changed the project on {p}");
         assert_eq!(s.history.undo.len(), undo0);
     }
-    assert!(!filmcraft_net::shared().offline());
+    assert!(!edith_net::shared().offline());
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn the_connections_list_names_every_service() {
     let mut s = Session::default();
     let r = s.execute("connections.list", json!({})).unwrap();
     let services = r["services"].as_array().unwrap();
-    assert_eq!(services.len(), filmcraft_net::services::SERVICES.len());
+    assert_eq!(services.len(), edith_net::services::SERVICES.len());
     let ollama = services.iter().find(|x| x["id"] == "ollama").unwrap();
     assert_eq!(ollama["kind"], "local");
     assert!(ollama["stored"].is_null());
@@ -188,10 +188,10 @@ fn init_remembers_offline_mode_in_the_data_directory() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     // `init` binds the process-wide state; use a fresh state to check the same call path.
-    let st = filmcraft_net::NetState::new();
+    let st = edith_net::NetState::new();
     st.persist_in(&dir);
     st.set_offline(true);
-    assert!(dir.join(filmcraft_net::OFFLINE_MARKER).exists());
+    assert!(dir.join(edith_net::OFFLINE_MARKER).exists());
     init(None); // no data dir: nothing happens, nothing panics
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -19,9 +19,9 @@ static LOCK: Mutex<()> = Mutex::new(());
 fn guard() -> MutexGuard<'static, ()> {
     let g = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     // Never the real keychain.
-    let _ = filmcraft_net::secrets::install(filmcraft_net::secrets::in_memory().unwrap());
-    filmcraft_net::shared().set_offline(false);
-    filmcraft_net::shared().clear_log();
+    let _ = edith_net::secrets::install(edith_net::secrets::in_memory().unwrap());
+    edith_net::shared().set_offline(false);
+    edith_net::shared().clear_log();
     g
 }
 
@@ -148,11 +148,11 @@ fn the_offline_switch_works_from_the_panel_and_the_status_bar() {
     d.open_connections();
     assert_eq!(d.label("status.offline"), "Offline mode off");
     d.click("connections.offline");
-    assert!(filmcraft_net::shared().offline());
+    assert!(edith_net::shared().offline());
     assert_eq!(d.label("status.offline"), "Offline mode on");
     assert_eq!(d.exec("net.status", json!({}))["offline"], true);
     d.click("status.offline");
-    assert!(!filmcraft_net::shared().offline());
+    assert!(!edith_net::shared().offline());
     assert_eq!(d.label("status.offline"), "Offline mode off");
 }
 
@@ -163,7 +163,7 @@ fn a_typed_key_goes_to_the_keychain_and_nowhere_else() {
     let name = "provider.openrouter.api_key";
     let mut d = Driver::new();
     d.open_connections();
-    let store = filmcraft_net::secrets::os().unwrap();
+    let store = edith_net::secrets::os().unwrap();
     let _ = store.delete(name);
     d.click("connections.openrouter.key");
     d.ok("ui.type", json!({"text": SECRET}));
@@ -200,7 +200,7 @@ fn a_typed_key_goes_to_the_keychain_and_nowhere_else() {
 fn the_log_shows_redacted_requests_and_can_be_cleared() {
     let _g = guard();
     let mut d = Driver::new();
-    filmcraft_net::shared().record("GET", "https://api.example.test/v1/x?key=URL-SECRET", filmcraft_net::Outcome::Ok, Some(200), 10, 5, None);
+    edith_net::shared().record("GET", "https://api.example.test/v1/x?key=URL-SECRET", edith_net::Outcome::Ok, Some(200), 10, 5, None);
     d.open_connections();
     assert_eq!(d.label("connections.log"), "1 requests");
     assert!(!d.ok("ui.elements", json!({})).to_string().contains("URL-SECRET"));
@@ -211,7 +211,7 @@ fn the_log_shows_redacted_requests_and_can_be_cleared() {
     d.frames(3);
     d.click("connections.log.clear");
     assert_eq!(d.label("connections.log"), "0 requests");
-    assert!(filmcraft_net::shared().entries(None).is_empty());
+    assert!(edith_net::shared().entries(None).is_empty());
 }
 
 /// Looks at the panel (set `FILMCRAFT_UI_SNAPSHOT_DIR` to keep the pictures): a connected service,
@@ -220,12 +220,12 @@ fn the_log_shows_redacted_requests_and_can_be_cleared() {
 fn the_panel_looks_right() {
     let _g = guard();
     let mut d = Driver::new();
-    let store = filmcraft_net::secrets::os().unwrap();
+    let store = edith_net::secrets::os().unwrap();
     store.set("provider.gemini.api_key", "AIza-picture-key").unwrap();
-    let st = filmcraft_net::shared();
-    st.record("GET", "https://openrouter.ai/api/v1/models", filmcraft_net::Outcome::Ok, Some(200), 52_000, 310, None);
-    st.record("POST", "https://api.anthropic.com/v1/messages?key=x", filmcraft_net::Outcome::Failed, Some(401), 120, 95, None);
-    st.record("GET", "https://api.pexels.com/videos/search", filmcraft_net::Outcome::Cached, Some(200), 8_000, 4, None);
+    let st = edith_net::shared();
+    st.record("GET", "https://openrouter.ai/api/v1/models", edith_net::Outcome::Ok, Some(200), 52_000, 310, None);
+    st.record("POST", "https://api.anthropic.com/v1/messages?key=x", edith_net::Outcome::Failed, Some(401), 120, 95, None);
+    st.record("GET", "https://api.pexels.com/videos/search", edith_net::Outcome::Cached, Some(200), 8_000, 4, None);
     d.open_connections();
     d.click("connections.offline");
     d.click("connections.openrouter.key");

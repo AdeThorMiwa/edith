@@ -1,5 +1,5 @@
 //! Connections panel (Window ▸ Connections; fork roadmap F02): the Offline switch, every service
-//! FilmCraft can use with whether a key is stored, a masked field to paste one, and the redacted
+//! Edith can use with whether a key is stored, a masked field to paste one, and the redacted
 //! request log. Also the Offline indicator at the right of the status bar.
 //!
 //! Keys go straight from the masked field to the OS keychain (`engine::net_commands::save_secret`,

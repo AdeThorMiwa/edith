@@ -1431,6 +1431,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "edith-net"
+version = "0.7.2"
+dependencies = [
+ "apple-native-keyring-store",
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "httparse",
+ "keyring-core",
+ "percent-encoding",
+ "rustls",
+ "rustls-rustcrypto",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.21",
+ "ureq",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
+ "zeroize",
+]
+
+[[package]]
 name = "eframe"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2018,6 +2041,7 @@ dependencies = [
 name = "filmcraft-engine"
 version = "0.7.2"
 dependencies = [
+ "edith-net",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-codecs",
@@ -2032,7 +2056,6 @@ dependencies = [
  "filmcraft-isobmff",
  "filmcraft-media",
  "filmcraft-mxf",
- "filmcraft-net",
  "filmcraft-project",
  "filmcraft-render",
  "filmcraft-scopes",
@@ -2272,29 +2295,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "filmcraft-net"
-version = "0.7.2"
-dependencies = [
- "apple-native-keyring-store",
- "base64 0.22.1",
- "getrandom 0.4.3",
- "httparse",
- "keyring-core",
- "percent-encoding",
- "rustls",
- "rustls-rustcrypto",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.21",
- "ureq",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
- "zeroize",
-]
-
-[[package]]
 name = "filmcraft-ogg"
 version = "0.7.2"
 dependencies = [
@@ -2460,6 +2460,7 @@ version = "0.7.2"
 dependencies = [
  "cpu-time",
  "craft-ui",
+ "edith-net",
  "eframe",
  "egui",
  "egui_kittest",
@@ -2474,7 +2475,6 @@ dependencies = [
  "filmcraft-gpu",
  "filmcraft-interchange",
  "filmcraft-media",
- "filmcraft-net",
  "filmcraft-platform",
  "filmcraft-project",
  "filmcraft-render",

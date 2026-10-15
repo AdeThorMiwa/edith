@@ -1,4 +1,4 @@
-//! The services FilmCraft knows how to connect to, and the keychain slot each one uses. The list
+//! The services Edith knows how to connect to, and the keychain slot each one uses. The list
 //! feeds `connections.list` and Settings ▸ Connections. Later features (the assistant, the Source
 //! Hub) add their entries here, so there is one place that says what can hold a credential.
 
@@ -8,7 +8,7 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
-    /// Sign in through the provider's own page (OAuth with PKCE); FilmCraft keeps the key it returns.
+    /// Sign in through the provider's own page (OAuth with PKCE); Edith keeps the key it returns.
     SignIn,
     /// Paste a key from the provider's account page.
     ApiKey,

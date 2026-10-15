@@ -113,7 +113,7 @@ const SAME_LAYER: &[(&str, &str)] = &[
 const UI_ONLY: &[&str] = &["craft-ui", "egui", "eframe", "egui-wgpu", "winit", "rfd", "cpal", "muda"];
 
 fn short(name: &str) -> &str {
-    name.strip_prefix("filmcraft-").unwrap_or(name)
+    name.strip_prefix("filmcraft-").or_else(|| name.strip_prefix("edith-")).unwrap_or(name)
 }
 
 fn layer_of(name: &str) -> Option<u8> {
@@ -159,7 +159,7 @@ fn layers() -> Result<(), String> {
             if l < 5 && UI_ONLY.contains(&d.as_str()) {
                 errors.push(format!("{name} (L{l}) depends on UI/OS crate `{d}`"));
             }
-            if !d.starts_with("filmcraft-") {
+            if !d.starts_with("filmcraft-") && !d.starts_with("edith-") {
                 continue;
             }
             let Some(dl) = layer_of(d) else { continue };

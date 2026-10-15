@@ -1,6 +1,6 @@
-# filmcraft-net
+# edith-net
 
-The one place FilmCraft reaches the internet and holds credentials (L2; roadmap F02 in
+The one place Edith reaches the internet and holds credentials (L2; roadmap F02 in
 [docs/upcoming-features.md](../../docs/upcoming-features.md)).
 
 - `NetState` / `shared()`: the global Offline switch and the request log (500 entries, URLs reduced

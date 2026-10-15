@@ -1,4 +1,4 @@
-//! The one place FilmCraft talks to the internet and keeps credentials (roadmap F02).
+//! The one place Edith talks to the internet and keeps credentials (roadmap F02).
 //!
 //! - [`NetState`]: the global Offline switch and the request log. Every networked feature goes
 //!   through it, so "no silent network calls" holds in exactly one place. [`shared`] is the
@@ -15,6 +15,7 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+pub mod brand;
 #[cfg(feature = "http")]
 mod cache;
 #[cfg(feature = "http")]
