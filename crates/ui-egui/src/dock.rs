@@ -48,10 +48,11 @@ pub enum PanelKind {
     AvScript,
     BeatLane,
     BeatBoard,
+    Storyboard,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 36] = [
+    pub const ALL: [PanelKind; 37] = [
         PanelKind::Project,
         PanelKind::MediaBrowser,
         PanelKind::Libraries,
@@ -88,6 +89,7 @@ impl PanelKind {
         PanelKind::AvScript,
         PanelKind::BeatLane,
         PanelKind::BeatBoard,
+        PanelKind::Storyboard,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -127,6 +129,7 @@ impl PanelKind {
             PanelKind::AvScript => "A/V Script",
             PanelKind::BeatLane => "Beat Lane",
             PanelKind::BeatBoard => "Beat Board",
+            PanelKind::Storyboard => "Storyboard",
         }
     }
     pub fn id(self) -> String {
@@ -400,7 +403,7 @@ pub fn workspace(name: &str) -> DockNode {
                 FixedB(450.0),
                 hsplit(Ratio(0.5), tabs(&[Source, EffectControls, AudioClipMixer, Metadata], 0), tabs(&[Program], 0)),
                 // the Assistant sits in the wide right-hand group, a tab away from Properties
-                tabs(&[Properties, EssentialGraphics, Text, Assistant, Rights, Planner, AvScript, BeatBoard], 0),
+                tabs(&[Properties, EssentialGraphics, Text, Assistant, Rights, Planner, AvScript, BeatBoard, Storyboard], 0),
             ),
             hsplit(
                 Ratio(0.29),

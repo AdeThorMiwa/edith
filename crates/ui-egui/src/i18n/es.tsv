@@ -3868,3 +3868,10 @@
 	Add beat	Añadir tramo
 	New beat	Tramo nuevo
 	Markers rebuilt: {m} markers, {p} placeholders	Marcadores reconstruidos: {m} marcadores, {p} provisionales
+	Storyboard	Guion gráfico
+	Add shot	Añadir plano
+	No shots yet. Add shot	Aún no hay planos. Añadir plano
+	Kind of shot, such as wide or close-up	Tipo de plano, por ejemplo general o primer plano
+	Camera move, such as push in or still	Movimiento de cámara, por ejemplo acercamiento o fijo
+	Length in seconds	Duración en segundos
+	Write a length in seconds, like 3 or 3.5	Escribe una duración en segundos, como 3 o 3.5

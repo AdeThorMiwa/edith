@@ -126,12 +126,14 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::AvScript => av_script::show(app, ui, rect),
         PanelKind::BeatLane => beat_lane::show(app, ui, rect),
         PanelKind::BeatBoard => beat_board::show(app, ui, rect),
+        PanelKind::Storyboard => storyboard::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }
 
 pub mod source_drag;
 pub mod source_range;
+pub mod storyboard;
 
 #[derive(Clone, Debug)]
 enum DragPayload {

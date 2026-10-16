@@ -3870,3 +3870,10 @@
 	Add beat	ビートを追加
 	New beat	新しいビート
 	Markers rebuilt: {m} markers, {p} placeholders	マーカーを作り直しました: マーカー {m} 個、仮クリップ {p} 個
+	Storyboard	ストーリーボード
+	Add shot	ショットを追加
+	No shots yet. Add shot	ショットはまだありません。ショットを追加
+	Kind of shot, such as wide or close-up	ショットの種類(ワイド、クローズアップなど)
+	Camera move, such as push in or still	カメラの動き(プッシュイン、固定など)
+	Length in seconds	長さ(秒)
+	Write a length in seconds, like 3 or 3.5	長さを秒で入力してください(例: 3 または 3.5)

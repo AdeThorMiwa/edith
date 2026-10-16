@@ -3846,3 +3846,10 @@
 	Add beat	添加段落
 	New beat	新段落
 	Markers rebuilt: {m} markers, {p} placeholders	标记已重建:{m} 个标记,{p} 个占位片段
+	Storyboard	分镜
+	Add shot	添加镜头
+	No shots yet. Add shot	还没有镜头。添加镜头
+	Kind of shot, such as wide or close-up	镜头类型,例如远景或特写
+	Camera move, such as push in or still	镜头运动,例如推近或固定
+	Length in seconds	时长(秒)
+	Write a length in seconds, like 3 or 3.5	请以秒为单位输入时长,例如 3 或 3.5
