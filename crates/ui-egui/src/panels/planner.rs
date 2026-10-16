@@ -36,7 +36,7 @@ impl Default for State {
     }
 }
 
-fn status_label(s: &str) -> &'static str {
+pub(crate) fn status_label(s: &str) -> &'static str {
     match s {
         "drafted" => tl!("Drafted"),
         "sourced" => tl!("Sourced"),

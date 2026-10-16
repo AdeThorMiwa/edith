@@ -19,7 +19,7 @@ use crate::theme::Tokens;
 
 /// A beat whose actual length is this much off its planned length is flagged.
 const OFF: f64 = 0.05;
-const SECTION_COLORS: [Color32; 6] = [
+pub(crate) const SECTION_COLORS: [Color32; 6] = [
     Color32::from_rgb(0x3b, 0x6e, 0xa8),
     Color32::from_rgb(0x4f, 0x8f, 0x6a),
     Color32::from_rgb(0x9a, 0x6a, 0x3e),

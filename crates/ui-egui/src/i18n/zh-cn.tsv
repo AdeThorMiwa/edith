@@ -3838,3 +3838,11 @@
 	Plan	计划
 	{name}: planned {planned}. {purpose}	{name}：计划 {planned}。{purpose}
 	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}：计划 {planned}，时间线上 {actual}。{purpose}
+	Beat Board	段落看板
+	Drag a beat to reorder the plan. Clips on the timeline don't move.	拖动段落即可调整计划顺序。时间线上的片段不会移动。
+	The plan changed order; the timeline markers are as before.	计划的顺序已更改;时间线上的标记保持原样。
+	Rebuild markers	重建标记
+	Moves the markers (and the placeholder clips) to follow the plan's order. Clips you have cut are not moved.	让标记(和占位片段)跟随计划的顺序移动。你已剪辑的片段不会移动。
+	Add beat	添加段落
+	New beat	新段落
+	Markers rebuilt: {m} markers, {p} placeholders	标记已重建:{m} 个标记,{p} 个占位片段

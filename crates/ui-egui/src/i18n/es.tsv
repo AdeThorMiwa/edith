@@ -3860,3 +3860,11 @@
 	Plan	Plan
 	{name}: planned {planned}. {purpose}	{name}: previsto {planned}. {purpose}
 	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}: previsto {planned}, en la línea de tiempo {actual}. {purpose}
+	Beat Board	Tablero de tramos
+	Drag a beat to reorder the plan. Clips on the timeline don't move.	Arrastra un tramo para reordenar el plan. Los clips de la línea de tiempo no se mueven.
+	The plan changed order; the timeline markers are as before.	El plan cambió de orden; los marcadores de la línea de tiempo siguen como antes.
+	Rebuild markers	Reconstruir marcadores
+	Moves the markers (and the placeholder clips) to follow the plan's order. Clips you have cut are not moved.	Mueve los marcadores (y los clips provisionales) para seguir el orden del plan. Los clips que ya cortaste no se mueven.
+	Add beat	Añadir tramo
+	New beat	Tramo nuevo
+	Markers rebuilt: {m} markers, {p} placeholders	Marcadores reconstruidos: {m} marcadores, {p} provisionales

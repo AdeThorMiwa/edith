@@ -3862,3 +3862,11 @@
 	Plan	プラン
 	{name}: planned {planned}. {purpose}	{name}：予定 {planned}。{purpose}
 	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}：予定 {planned}、タイムライン上 {actual}。{purpose}
+	Beat Board	ビートボード
+	Drag a beat to reorder the plan. Clips on the timeline don't move.	ビートをドラッグしてプランの順序を変えます。タイムラインのクリップは動きません。
+	The plan changed order; the timeline markers are as before.	プランの順序が変わりました。タイムラインのマーカーは以前のままです。
+	Rebuild markers	マーカーを作り直す
+	Moves the markers (and the placeholder clips) to follow the plan's order. Clips you have cut are not moved.	マーカー(と仮のクリップ)をプランの順序に合わせて移動します。すでにカットしたクリップは動きません。
+	Add beat	ビートを追加
+	New beat	新しいビート
+	Markers rebuilt: {m} markers, {p} placeholders	マーカーを作り直しました: マーカー {m} 個、仮クリップ {p} 個
