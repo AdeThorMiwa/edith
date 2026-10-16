@@ -3620,7 +3620,6 @@
 
 # Assistant panel (fork roadmap F03). Written from the plain meaning of the English text.
 	Ask Edith about your edit…	Pregúntale a Edith sobre tu edición…
-	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	Pregunta sobre tu edición. Puedo mirar el proyecto, los clips, los marcadores y las transcripciones; no puedo cambiar nada.
 	Assistant	Asistente
 	Effort	Esfuerzo
 	Looked at	Consultó
@@ -3650,7 +3649,6 @@
 	with a picture	con una imagen
 	Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up.	Edith necesita un modelo con el que hablar. Conecta un servicio en Conexiones (o elige Ollama o LM Studio para usar un modelo en este equipo) y este panel se activará.
 	Choose a model	Elige un modelo
-	Choose a model from the list above to start.	Elige un modelo de la lista de arriba para empezar.
 	not connected	sin conectar
 	Connect	Conectar
 	Disconnect	Desconectar
@@ -3665,3 +3663,7 @@
 	Checking…	Comprobando…
 	Running · models: {count}	En marcha · modelos: {count}
 	Sent with each question	Enviado con cada pregunta
+	Ask about your edit	Pregunta sobre tu montaje
+	I can look at the project, the clips, the markers and any transcripts. I can't change anything.	Puedo mirar el proyecto, los clips, los marcadores y las transcripciones. No puedo cambiar nada.
+	Delete this thread	Eliminar este hilo
+	Choose a model below to start.	Elige un modelo abajo para empezar.

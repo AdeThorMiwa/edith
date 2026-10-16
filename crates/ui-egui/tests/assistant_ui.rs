@@ -260,6 +260,20 @@ fn a_question_streams_in_with_a_tool_card_an_answer_and_a_cost() {
 }
 
 #[test]
+fn a_long_answer_with_a_table_a_list_and_code_is_laid_out_not_shown_as_raw_marks() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let answer = "The edit is **26 seconds** long and moves quickly.\n\n## Markers\n\n| Time | Name |\n|---|---|\n| 00:00:09:11 | Music hit |\n| 00:00:17:23 | Midpoint |\n\nWhat I would try:\n\n1. Hold the **Desert_Dunes** shot a little longer.\n2. Let the push at `00:00:20:19` breathe.\n- Trim the dip to black.\n\n```\nV1 #38 00:00:13:09-00:00:18:08\n```\n\nSee the pacing note above.";
+    d.app().session.assistant.use_model(scripted(vec![text_reply(answer)]));
+    d.open_assistant();
+    d.type_into_input("how does it look?");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("26 seconds")));
+    d.frames(3);
+    d.snapshot("assistant-markdown");
+}
+
+#[test]
 fn enter_sends_and_the_starter_prompts_ask_for_you() {
     let _g = guard();
     let mut d = Driver::new();

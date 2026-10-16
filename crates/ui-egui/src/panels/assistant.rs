@@ -17,11 +17,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, FontFamily, FontId, Key, Modifiers, Rect, RichText, vec2};
+use egui::{Color32, Key, Modifiers, Rect, RichText, vec2};
 use serde_json::{Value, json};
 
-use super::assistant_view::{ChatLog, Entry, markdown};
+use super::assistant_view::{ChatLog, Entry};
 use crate::FilmcraftApp;
 use crate::dock::PanelKind;
 use crate::theme::Tokens;
@@ -30,7 +29,6 @@ use crate::theme::Tokens;
 const WARN: Color32 = Color32::from_rgb(0xe8, 0xb3, 0x3c);
 /// Seconds between status refreshes while nothing is happening.
 const STATUS_EVERY: f64 = 3.0;
-const INPUT_HEIGHT: f32 = 64.0;
 
 struct Chat {
     thread: Option<u64>,
@@ -200,29 +198,6 @@ fn context_blocks(app: &FilmcraftApp, chips: Chips) -> Vec<Value> {
     out
 }
 
-fn md_job(ui: &egui::Ui, text: &str, color: Color32, size: f32) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    job.wrap.max_width = ui.available_width();
-    let base = FontId::new(size, FontFamily::Proportional);
-    for (n, line) in markdown(text).iter().enumerate() {
-        if n > 0 {
-            job.append("\n", 0.0, TextFormat { font_id: base.clone(), color, ..Default::default() });
-        }
-        for span in line {
-            let font_id = if span.code { FontId::new(size - 1.0, FontFamily::Monospace) } else { base.clone() };
-            let mut f = TextFormat { font_id, color, ..Default::default() };
-            if span.bold {
-                f.font_id = Tokens::semibold(size);
-            }
-            if span.code {
-                f.background = Color32::from_white_alpha(14);
-            }
-            job.append(&span.text, 0.0, f);
-        }
-    }
-    job
-}
-
 fn short(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
@@ -234,8 +209,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut chat = lock(&shared);
     refresh(app, &mut chat, now, ui.ctx());
 
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 6.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(10.0, 8.0))));
     let ui = &mut child;
+    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
     let mut elems: Vec<(String, egui::Response, String)> = Vec::new();
     let mut actions: Vec<Action> = Vec::new();
     let ready = chat.ready();
@@ -248,54 +224,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .and_then(|s| s["threads"].as_array())
         .map(|a| a.iter().filter_map(|t| Some((t["id"].as_u64()?, t["title"].as_str()?.to_string()))).collect())
         .unwrap_or_default();
+    let sees = models
+        .as_ref()
+        .and_then(|m| m["models"].as_array())
+        .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
+        .and_then(|m| m["capabilities"]["images"].as_bool())
+        // until the model list says so, a model is not assumed to see: no picture goes by surprise
+        .unwrap_or(false);
 
-    // ---- header: model, thread, new, delete, settings (wraps in a narrow panel) ----
-    ui.horizontal_wrapped(|ui| {
-        let providers: Vec<Value> = chat.status.as_ref().and_then(|s| s["providers"].as_array()).cloned().unwrap_or_default();
-        let current_service = chat.setting("service").as_str().unwrap_or("").to_string();
-        let service_name = |p: &Value| p["label"].as_str().unwrap_or("").split(" (").next().unwrap_or("").to_string();
-        let shown = providers.iter().find(|p| p["id"] == current_service.as_str()).map_or(current_service.clone(), service_name);
-        let pcombo = egui::ComboBox::from_id_salt("assistant-provider").selected_text(short(&shown, 14)).width(100.0).show_ui(ui, |ui| {
-            for p in &providers {
-                let id = p["id"].as_str().unwrap_or("").to_string();
-                let mut label = service_name(p);
-                if p["ready"] != true {
-                    label = format!("{label} · {}", tl!("not connected"));
-                }
-                let r = ui.selectable_label(id == current_service, &label);
-                elems.push((format!("assistant.provider.{id}"), r.clone(), label));
-                if r.clicked() {
-                    actions.push(Action::Settings(json!({"service": id})));
-                }
-            }
-        });
-        elems.push(("assistant.provider".into(), pcombo.response, format!("Provider {shown}")));
-        let name = models
-            .as_ref()
-            .and_then(|m| m["models"].as_array())
-            .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
-            .and_then(|m| m["name"].as_str())
-            .map_or(current_model.clone(), str::to_string);
-        let shown_model = if current_model.is_empty() { tl!("Choose a model").to_string() } else { short(&name, 22) };
-        let combo = egui::ComboBox::from_id_salt("assistant-model").selected_text(shown_model.clone()).width(140.0).show_ui(ui, |ui| {
-            let list = models.as_ref().and_then(|m| m["models"].as_array()).cloned().unwrap_or_default();
-            if list.is_empty() {
-                ui.label(RichText::new(tl!("No models loaded yet")).color(t.text_faint));
-            }
-            for m in &list {
-                let (id, label) = (m["id"].as_str().unwrap_or("").to_string(), m["name"].as_str().unwrap_or("").to_string());
-                let badges: Vec<&str> = m["badges"].as_array().map(|b| b.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-                let r = ui.selectable_label(id == current_model, &label).on_hover_text(badges.join("  ·  "));
-                elems.push((format!("assistant.model.{id}"), r.clone(), label));
-                if r.clicked() {
-                    actions.push(Action::Settings(json!({"model": id})));
-                }
-            }
-        });
-        elems.push(("assistant.model".into(), combo.response, format!("Model {shown_model}")));
-
+    // ---- top bar: the thread, then New, Delete and Settings as flat icons, as in the monitors ----
+    ui.horizontal(|ui| {
         let title = chat.thread.and_then(|id| threads.iter().find(|t| t.0 == id)).map_or(tl!("New thread").to_string(), |t| t.1.clone());
-        let tcombo = egui::ComboBox::from_id_salt("assistant-thread").selected_text(short(&title, 18)).width(110.0).show_ui(ui, |ui| {
+        let w = (ui.available_width() - 100.0).clamp(80.0, 260.0);
+        let (trect, _) = ui.allocate_exact_size(vec2(w, 24.0), egui::Sense::hover());
+        let tresp = crate::widgets::dropdown_text(ui, trect, &short(&title, 34), &t, egui::Id::new("assistant-thread-dd"));
+        elems.push(("assistant.thread".into(), tresp.clone(), format!("Thread {title}")));
+        egui::Popup::menu(&tresp).show(|ui| {
             for (id, title) in threads.iter().rev() {
                 let r = ui.selectable_label(chat.thread == Some(*id), short(title, 40));
                 elems.push((format!("assistant.thread.{id}"), r.clone(), title.clone()));
@@ -304,25 +248,31 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             }
         });
-        elems.push(("assistant.thread".into(), tcombo.response, format!("Thread {title}")));
-        let r = ui.add_enabled(!running, egui::Button::new(tl!("New")));
+        let r = ui.add_enabled_ui(!running, |ui| crate::icons::button(ui, crate::icons::Icon::Plus, 24.0, false, &t, tl!("New thread"))).inner;
         elems.push(("assistant.new".into(), r.clone(), "New thread".into()));
-        if r.clicked() {
+        if r.clicked() && !running {
             actions.push(Action::NewThread);
         }
         if let Some(id) = chat.thread.filter(|id| threads.iter().any(|t| t.0 == *id)) {
             let armed = chat.delete_armed == Some(id);
-            let r = ui.add_enabled(!running, egui::Button::new(if armed { tl!("Click again to delete") } else { tl!("Delete") }));
+            let tip = if armed { tl!("Click again to delete") } else { tl!("Delete this thread") };
+            let r = ui.add_enabled_ui(!running, |ui| crate::icons::button(ui, crate::icons::Icon::Trash, 24.0, armed, &t, tip)).inner;
             elems.push(("assistant.delete".into(), r.clone(), if armed { "Click again to delete".into() } else { "Delete thread".into() }));
-            if r.clicked() {
+            if r.clicked() && !running {
                 if armed {
                     actions.push(Action::Delete(id));
                 } else {
                     chat.delete_armed = Some(id);
                 }
             }
+            if armed {
+                ui.label(RichText::new(tl!("Click again to delete")).size(11.0).color(WARN));
+            }
         }
-        ui.menu_button(tl!("Settings"), |ui| {
+        let wr = crate::icons::button(ui, crate::icons::Icon::Wrench, 24.0, false, &t, tl!("Settings"));
+        elems.push(("assistant.settings.menu".into(), wr.clone(), "Settings".into()));
+        egui::Popup::menu(&wr).show(|ui| {
+            ui.set_min_width(240.0);
             let mut thinking = chat.setting("showThinking").as_bool().unwrap_or(true);
             let r = ui.checkbox(&mut thinking, tl!("Show a summary of its thinking"));
             elems.push(("assistant.settings.thinking".into(), r.clone(), "Show thinking".into()));
@@ -389,26 +339,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.label(RichText::new(tl!("The cost is an estimate from list prices.")).size(11.0).color(t.text_faint));
         });
     });
+    // the cost meter, under the bar so a narrow panel never overlaps it with the buttons
+    if !chat.usage_text.is_empty() {
+        let r = ui.label(RichText::new(&chat.usage_text).size(11.0).color(t.text_faint));
+        elems.push(("assistant.cost".into(), r, chat.usage_text.clone()));
+    }
     // notes from the engine: a damaged settings file, conversations that could not be restored
     for key in ["settingsNote", "restoreNote"] {
         if let Some(note) = chat.status.as_ref().and_then(|st| st[key].as_str()) {
             ui.label(RichText::new(note).size(11.0).color(WARN));
         }
     }
-    // the cost meter, on its own line so a narrow panel never overlaps it with the buttons
-    if !chat.usage_text.is_empty() {
-        let r = ui.label(RichText::new(&chat.usage_text).size(11.0).color(t.text_dim));
-        elems.push(("assistant.cost".into(), r, chat.usage_text.clone()));
-    }
-    ui.add_space(4.0);
-
-    if ready && chat.needs_model() {
-        ui.label(RichText::new(tl!("Choose a model from the list above to start.")).size(11.0).color(WARN));
-    }
 
     // ---- not connected ----
     if !ready {
-        egui::Frame::new().fill(t.field_bg).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        egui::Frame::new().fill(t.field_bg).stroke(egui::Stroke::new(1.0, t.field_border)).corner_radius(6.0).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.label(
                 RichText::new(tl!(
                     "Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up."
@@ -421,18 +367,26 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 actions.push(Action::OpenConnections);
             }
         });
-        ui.add_space(4.0);
     }
 
-    // ---- the conversation ----
+    // ---- what the composer below will take: its height decides how tall the conversation is ----
+    let composer_h = 112.0;
     let chips_h = 26.0;
-    let transcript_h = (ui.available_height() - INPUT_HEIGHT - chips_h - 14.0).max(40.0);
+    let hint_h = if ready && chat.needs_model() { 18.0 } else { 0.0 };
+    let slash_h = if chat.input.starts_with('/') && !chat.input.contains(char::is_whitespace) && ready { 30.0 } else { 0.0 };
+
+    // ---- the conversation ----
+    let transcript_h = (ui.available_height() - composer_h - chips_h - hint_h - slash_h - 18.0).max(40.0);
     let thread = chat.thread;
     let empty = thread.is_none_or(|id| chat.logs.get(&id).is_none_or(|l| l.entries.is_empty()));
     egui::ScrollArea::vertical().id_salt("assistant-scroll").max_height(transcript_h).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+        ui.set_width(ui.available_width());
         if empty && ready {
+            ui.add_space(14.0);
+            ui.label(RichText::new(tl!("Ask about your edit")).font(Tokens::semibold(15.0)).color(t.text));
             ui.label(
-                RichText::new(tl!("Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything."))
+                RichText::new(tl!("I can look at the project, the clips, the markers and any transcripts. I can't change anything."))
+                    .size(12.0)
                     .color(t.text_dim),
             );
             ui.add_space(6.0);
@@ -440,7 +394,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 .into_iter()
                 .enumerate()
             {
-                let r = ui.button(q);
+                let r = super::assistant_widgets::list_button(ui, q, &t);
                 elems.push((format!("assistant.starter.{n}"), r.clone(), q.to_string()));
                 if r.clicked() {
                     actions.push(Action::Send(q.to_string()));
@@ -448,31 +402,43 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         }
         if let Some(log) = thread.and_then(|id| chat.logs.get(&id)) {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            let last = log.entries.len().saturating_sub(1);
             for (i, e) in log.entries.iter().enumerate() {
                 match e {
                     Entry::User(text) => {
-                        let f = egui::Frame::new().fill(t.field_bg).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8));
+                        if i > 0 {
+                            ui.add_space(10.0);
+                        }
+                        let f = egui::Frame::new()
+                            .fill(t.field_bg)
+                            .stroke(egui::Stroke::new(1.0, t.field_border))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(10, 8));
                         let r = f.show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.label(RichText::new(text).color(t.text));
+                            ui.add(egui::Label::new(RichText::new(text).size(super::assistant_widgets::BODY).color(t.text)).wrap());
                         });
                         elems.push((format!("assistant.entry.{i}"), r.response, text.clone()));
                     }
                     Entry::Assistant(text) => {
-                        let r = ui.label(md_job(ui, text, t.text, 13.0));
+                        let r = ui.scope(|ui| super::assistant_widgets::answer(ui, (thread, i), &super::assistant_view::blocks(text), &t)).response;
                         elems.push((format!("assistant.entry.{i}"), r, text.clone()));
                     }
                     Entry::Thinking(text) => {
-                        let h = egui::CollapsingHeader::new(RichText::new(tl!("Thinking…")).italics().size(12.0).color(t.text_faint))
+                        // open while it streams in, folded once the answer starts
+                        let live = running && i == last;
+                        let h = egui::CollapsingHeader::new(RichText::new(tl!("Thinking…")).italics().size(11.5).color(t.text_faint))
                             .id_salt(("assistant-think", thread, i))
+                            .open(live.then_some(true))
                             .default_open(false)
                             .show(ui, |ui| {
-                                ui.label(RichText::new(text).italics().size(12.0).color(t.text_faint));
+                                ui.add(egui::Label::new(RichText::new(text).italics().size(11.5).color(t.text_faint)).wrap());
                             });
                         elems.push((format!("assistant.entry.{i}"), h.header_response, text.clone()));
                     }
                     Entry::Tool { name, input, result, is_error, pictures, .. } => {
-                        let color = if *is_error { WARN } else { t.text_dim };
+                        let color = if *is_error { WARN } else { t.text_faint };
                         let waiting = if result.is_none() {
                             "  …".to_string()
                         } else if *pictures > 0 {
@@ -485,12 +451,17 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         } else {
                             format!("{} {name}  ({input}){waiting}", tl!("Looked at"))
                         };
-                        let h = egui::CollapsingHeader::new(RichText::new(title).size(12.0).color(color))
+                        let h = egui::CollapsingHeader::new(RichText::new(title).size(11.5).color(color))
                             .id_salt(("assistant-tool", thread, i))
                             .default_open(false)
                             .show(ui, |ui| {
-                                egui::ScrollArea::vertical().max_height(160.0).id_salt(("assistant-tool-body", thread, i)).show(ui, |ui| {
-                                    ui.label(RichText::new(result.as_deref().unwrap_or("")).monospace().size(11.0).color(t.text_dim));
+                                egui::Frame::new().fill(t.field_bg).corner_radius(4.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    egui::ScrollArea::vertical().max_height(160.0).id_salt(("assistant-tool-body", thread, i)).show(ui, |ui| {
+                                        ui.add(
+                                            egui::Label::new(RichText::new(result.as_deref().unwrap_or("")).monospace().size(11.0).color(t.text_dim)).wrap(),
+                                        );
+                                    });
                                 });
                             });
                         elems.push((format!("assistant.tool.{i}"), h.header_response, format!("{name}: {}", short(result.as_deref().unwrap_or(""), 300))));
@@ -501,36 +472,33 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         elems.push((format!("assistant.entry.{i}"), r, text));
                     }
                     Entry::Note { text, warn } => {
-                        let r = ui.label(RichText::new(text).size(12.0).color(if *warn { WARN } else { t.text_faint }));
+                        let r = ui.label(RichText::new(text).size(11.5).color(if *warn { WARN } else { t.text_faint }));
                         elems.push((format!("assistant.entry.{i}"), r, text.clone()));
                     }
                 }
-                ui.add_space(4.0);
             }
         }
         if let Some(e) = &chat.error {
             ui.label(RichText::new(e).size(12.0).color(WARN));
         }
         if running {
-            ui.label(RichText::new(tl!("Working…")).size(12.0).color(t.text_faint));
+            ui.label(RichText::new(tl!("Working…")).size(11.5).color(t.text_faint));
         }
     });
 
-    // ---- chips ----
-    let sees = models
-        .as_ref()
-        .and_then(|m| m["models"].as_array())
-        .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
-        .and_then(|m| m["capabilities"]["images"].as_bool())
-        // until the model list says so, a model is not assumed to see: no picture goes by surprise
-        .unwrap_or(false);
+    if hint_h > 0.0 {
+        ui.label(RichText::new(tl!("Choose a model below to start.")).size(11.0).color(WARN));
+    }
+
+    // ---- what goes along with the question: small pill toggles ----
     ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         ui.label(RichText::new(tl!("Sends along:")).size(11.0).color(t.text_faint));
         let blocks = context_blocks(app, Chips { selection: true, playhead: true, transcript: false, markers: false, frame: false });
         let text_of = |label: &str| blocks.iter().find(|b| b["label"] == label).and_then(|b| b["text"].as_str()).unwrap_or("nothing selected").to_string();
         let mut chip = |ui: &mut egui::Ui, name: &str, label: &str, hover: &str, enabled: bool| {
             let on = chat.chip(name) && enabled;
-            let r = ui.add_enabled_ui(enabled, |ui| ui.selectable_label(on, label)).inner.on_hover_text(hover).on_disabled_hover_text(hover);
+            let r = super::assistant_widgets::pill(ui, label, on, enabled, &t).on_hover_text(hover);
             elems.push((
                 format!("assistant.chip.{name}"),
                 r.clone(),
@@ -546,7 +514,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     if on { "on" } else { "off" }
                 ),
             ));
-            if r.clicked() {
+            if r.clicked() && enabled {
                 actions.push(Action::Settings(json!({"chips": {name: !chat.chip(name)}})));
             }
         };
@@ -566,7 +534,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.horizontal_wrapped(|ui| {
             for c in chat.commands.iter().filter(|c| c["name"].as_str().is_some_and(|n| n.starts_with(&prefix))) {
                 let name = c["name"].as_str().unwrap_or("");
-                let r = ui.button(format!("/{name}")).on_hover_text(c["description"].as_str().unwrap_or(""));
+                let r = super::assistant_widgets::pill(ui, &format!("/{name}"), false, true, &t).on_hover_text(c["description"].as_str().unwrap_or(""));
                 elems.push((format!("assistant.slash.{name}"), r.clone(), format!("/{name}")));
                 if r.clicked() {
                     actions.push(Action::SetInput(format!("/{name} ")));
@@ -575,33 +543,100 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         });
     }
 
-    // ---- input ----
+    // ---- the composer: one dark field holding the text, and under it the provider, the model and Send ----
     let input_id = egui::Id::new("assistant-input-field");
     let focused = ui.memory(|m| m.has_focus(input_id));
     // Enter sends; Shift+Enter makes a new line. Taken before the field sees the key.
     let enter = focused && ready && !running && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-    ui.horizontal(|ui| {
-        let w = (ui.available_width() - 70.0).max(60.0);
+    let border = if focused { t.accent } else { t.field_border };
+    egui::Frame::new().fill(t.field_bg).stroke(egui::Stroke::new(1.0, border)).corner_radius(6.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
         let r = ui.add_enabled(
             ready,
-            egui::TextEdit::multiline(&mut chat.input).id(input_id).desired_rows(2).desired_width(w).hint_text(tl!("Ask Edith about your edit…")),
+            egui::TextEdit::multiline(&mut chat.input)
+                .id(input_id)
+                .frame(egui::Frame::NONE)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY)
+                .font(Tokens::ui(super::assistant_widgets::BODY))
+                .hint_text(RichText::new(tl!("Ask Edith about your edit…")).color(t.text_faint)),
         );
         elems.push(("assistant.input".into(), r, "Message".into()));
-        ui.vertical(|ui| {
-            if running {
-                let r = ui.button(tl!("Stop"));
-                elems.push(("assistant.stop".into(), r.clone(), "Stop".into()));
-                if r.clicked() {
-                    actions.push(Action::Stop);
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            // provider
+            let providers: Vec<Value> = chat.status.as_ref().and_then(|s| s["providers"].as_array()).cloned().unwrap_or_default();
+            let current_service = chat.setting("service").as_str().unwrap_or("").to_string();
+            let service_name = |p: &Value| p["label"].as_str().unwrap_or("").split(" (").next().unwrap_or("").to_string();
+            let shown = providers.iter().find(|p| p["id"] == current_service.as_str()).map_or(current_service.clone(), service_name);
+            let painter = ui.painter().clone();
+            let chip_w = |text: &str| painter.layout_no_wrap(text.to_string(), Tokens::ui(12.0), t.text).size().x + 34.0;
+            let pw = chip_w(&short(&shown, 16));
+            let (prect, _) = ui.allocate_exact_size(vec2(pw, 24.0), egui::Sense::hover());
+            let presp = crate::widgets::dropdown_text(ui, prect, &short(&shown, 16), &t, egui::Id::new("assistant-provider-dd"));
+            elems.push(("assistant.provider".into(), presp.clone(), format!("Provider {shown}")));
+            egui::Popup::menu(&presp).show(|ui| {
+                for p in &providers {
+                    let id = p["id"].as_str().unwrap_or("").to_string();
+                    let mut label = service_name(p);
+                    if p["ready"] != true {
+                        label = format!("{label} · {}", tl!("not connected"));
+                    }
+                    let r = ui.selectable_label(id == current_service, &label);
+                    elems.push((format!("assistant.provider.{id}"), r.clone(), label));
+                    if r.clicked() {
+                        actions.push(Action::Settings(json!({"service": id})));
+                    }
                 }
-            } else {
-                let can = ready && !chat.needs_model() && !chat.input.trim().is_empty();
-                let r = ui.add_enabled(can, egui::Button::new(tl!("Send")));
-                elems.push(("assistant.send".into(), r.clone(), "Send".into()));
-                if r.clicked() || (enter && can) {
-                    actions.push(Action::Send(chat.input.trim().to_string()));
+            });
+            // model
+            let name = models
+                .as_ref()
+                .and_then(|m| m["models"].as_array())
+                .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
+                .and_then(|m| m["name"].as_str())
+                .map_or(current_model.clone(), str::to_string);
+            let shown_model = if current_model.is_empty() { tl!("Choose a model").to_string() } else { short(&name, 24) };
+            let mw = chip_w(&shown_model).min((ui.available_width() - 40.0).max(80.0));
+            let (mrect, _) = ui.allocate_exact_size(vec2(mw, 24.0), egui::Sense::hover());
+            let mresp = crate::widgets::dropdown_text(ui, mrect, &shown_model, &t, egui::Id::new("assistant-model-dd"));
+            elems.push(("assistant.model".into(), mresp.clone(), format!("Model {shown_model}")));
+            egui::Popup::menu(&mresp).show(|ui| {
+                ui.set_min_width(260.0);
+                let list = models.as_ref().and_then(|m| m["models"].as_array()).cloned().unwrap_or_default();
+                if list.is_empty() {
+                    ui.label(RichText::new(tl!("No models loaded yet")).color(t.text_faint));
                 }
-            }
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for m in &list {
+                        let (id, label) = (m["id"].as_str().unwrap_or("").to_string(), m["name"].as_str().unwrap_or("").to_string());
+                        let badges: Vec<&str> = m["badges"].as_array().map(|b| b.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                        let r = ui.selectable_label(id == current_model, &label).on_hover_text(badges.join("  ·  "));
+                        elems.push((format!("assistant.model.{id}"), r.clone(), label));
+                        if r.clicked() {
+                            actions.push(Action::Settings(json!({"model": id})));
+                        }
+                    }
+                });
+            });
+            // Send, or Stop while a turn runs
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if running {
+                    let r = super::assistant_widgets::round_button(ui, true, true, &t).on_hover_text(tl!("Stop"));
+                    elems.push(("assistant.stop".into(), r.clone(), "Stop".into()));
+                    if r.clicked() {
+                        actions.push(Action::Stop);
+                    }
+                } else {
+                    let can = ready && !chat.needs_model() && !chat.input.trim().is_empty();
+                    let r = super::assistant_widgets::round_button(ui, false, can, &t).on_hover_text(tl!("Send"));
+                    elems.push(("assistant.send".into(), r.clone(), "Send".into()));
+                    if (r.clicked() && can) || (enter && can) {
+                        actions.push(Action::Send(chat.input.trim().to_string()));
+                    }
+                }
+            });
         });
     });
 

@@ -161,6 +161,122 @@ pub fn markdown(text: &str) -> Vec<Vec<Span>> {
         .collect()
 }
 
+/// One block of an answer, as the panel draws it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Block {
+    Paragraph(Vec<Span>),
+    Heading(Vec<Span>),
+    /// A list item. `depth` is how far it is indented (0 to 3); `marker` is the bullet or `1.`.
+    Item {
+        depth: usize,
+        marker: String,
+        spans: Vec<Span>,
+    },
+    Code(String),
+    Table {
+        header: Vec<Vec<Span>>,
+        rows: Vec<Vec<Vec<Span>>>,
+    },
+    Rule,
+}
+
+const MAX_BLOCKS: usize = 2000;
+const MAX_TABLE_COLUMNS: usize = 12;
+const MAX_TABLE_ROWS: usize = 200;
+
+fn table_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    t.split('|').take(MAX_TABLE_COLUMNS).map(|c| c.trim().to_string()).collect()
+}
+
+fn is_table_divider(line: &str) -> bool {
+    let cells = table_cells(line);
+    line.contains('-') && !cells.is_empty() && cells.iter().all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':' | ' ')) && c.contains('-'))
+}
+
+fn list_item(line: &str) -> Option<(usize, String, String)> {
+    let indent = line.len() - line.trim_start().len();
+    let depth = (indent / 2).min(3);
+    let t = line.trim_start();
+    for bullet in ["- ", "* ", "• "] {
+        if let Some(rest) = t.strip_prefix(bullet) {
+            return Some((depth, "•".to_string(), rest.to_string()));
+        }
+    }
+    let digits: String = t.chars().take_while(char::is_ascii_digit).collect();
+    if (1..=3).contains(&digits.len())
+        && let Some(rest) = t[digits.len()..].strip_prefix(". ").or_else(|| t[digits.len()..].strip_prefix(") "))
+    {
+        return Some((depth, format!("{digits}."), rest.to_string()));
+    }
+    None
+}
+
+/// The light markdown assistants use, as blocks: paragraphs, headings, bullet and numbered lists,
+/// fenced code, tables and rules, with `**bold**` and `` `code` `` inside text. Nothing else is
+/// interpreted; anything unclear is shown as it was written. Bounded, so a hostile answer cannot
+/// make the panel allocate without limit.
+pub fn blocks(text: &str) -> Vec<Block> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<Block> = Vec::new();
+    let mut para: Vec<&str> = Vec::new();
+    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
+        if !para.is_empty() {
+            out.push(Block::Paragraph(inline(&para.join("\n"))));
+            para.clear();
+        }
+    };
+    let mut i = 0;
+    while i < lines.len() && out.len() < MAX_BLOCKS {
+        let line = lines[i];
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            flush(&mut para, &mut out);
+            let mut code = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim().starts_with("```") {
+                code.push(lines[i]);
+                i += 1;
+            }
+            out.push(Block::Code(code.join("\n")));
+            i += 1;
+            continue;
+        }
+        if trimmed.is_empty() {
+            flush(&mut para, &mut out);
+        } else if trimmed.starts_with('|') && lines.get(i + 1).is_some_and(|n| is_table_divider(n)) {
+            flush(&mut para, &mut out);
+            let header: Vec<Vec<Span>> = table_cells(trimmed).iter().map(|c| inline(c)).collect();
+            let mut rows = Vec::new();
+            i += 2;
+            while i < lines.len() && lines[i].trim().starts_with('|') && rows.len() < MAX_TABLE_ROWS {
+                rows.push(table_cells(lines[i]).iter().map(|c| inline(c)).collect());
+                i += 1;
+            }
+            out.push(Block::Table { header, rows });
+            continue;
+        } else if trimmed.len() >= 3 && trimmed.chars().all(|c| c == '-') || trimmed.len() >= 3 && trimmed.chars().all(|c| c == '*') {
+            flush(&mut para, &mut out);
+            out.push(Block::Rule);
+        } else if trimmed.starts_with('#') {
+            flush(&mut para, &mut out);
+            let mut spans = inline(trimmed.trim_start_matches('#').trim_start());
+            spans.iter_mut().for_each(|s| s.bold = true);
+            out.push(Block::Heading(spans));
+        } else if let Some((depth, marker, rest)) = list_item(line) {
+            flush(&mut para, &mut out);
+            out.push(Block::Item { depth, marker, spans: inline(&rest) });
+        } else {
+            para.push(line);
+        }
+        i += 1;
+    }
+    flush(&mut para, &mut out);
+    out
+}
+
 fn inline(line: &str) -> Vec<Span> {
     let mut out: Vec<Span> = Vec::new();
     let mut rest = line;
@@ -364,5 +480,66 @@ mod tests {
         for odd in ["`", "**", "`**`", "**`**`", "é**é**é", &"*".repeat(10_000), &"`a`".repeat(5_000)] {
             let _ = markdown(odd);
         }
+    }
+
+    fn flat(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    #[test]
+    fn answers_become_paragraphs_lists_code_tables_and_rules() {
+        let b = blocks(
+            "The edit is **26 s** long.\nSecond line.\n\n## Pacing\n- one\n  - nested\n1. first\n2) second\n\n```\nlet x = 1;\n\nlet y = 2;\n```\n---\nafter",
+        );
+        assert_eq!(b.len(), 9, "{b:#?}");
+        assert!(matches!(&b[0], Block::Paragraph(s) if flat(s) == "The edit is 26 s long.\nSecond line."));
+        assert!(matches!(&b[1], Block::Heading(s) if flat(s) == "Pacing" && s.iter().all(|x| x.bold)));
+        assert!(matches!(&b[2], Block::Item { depth: 0, marker, spans } if marker == "•" && flat(spans) == "one"));
+        assert!(matches!(&b[3], Block::Item { depth: 1, .. }));
+        assert!(matches!(&b[4], Block::Item { marker, .. } if marker == "1."));
+        assert!(matches!(&b[5], Block::Item { marker, .. } if marker == "2."));
+        assert!(matches!(&b[6], Block::Code(c) if c == "let x = 1;\n\nlet y = 2;"), "blank lines stay inside code");
+        assert!(matches!(&b[7], Block::Rule));
+        assert!(matches!(&b[8], Block::Paragraph(s) if flat(s) == "after"));
+    }
+
+    #[test]
+    fn a_table_has_a_header_and_rows_and_a_pipe_in_prose_is_just_text() {
+        let b = blocks("| Timecode | Name |\n|---|:--:|\n| 00:00:09:11 | **Music hit** |\n| 00:00:17:23 | Midpoint |\n\nthen text");
+        let Block::Table { header, rows } = &b[0] else { panic!("{b:#?}") };
+        assert_eq!((header.len(), rows.len()), (2, 2));
+        assert_eq!(flat(&header[0]), "Timecode");
+        assert!(rows[0][1][0].bold && flat(&rows[1][1]) == "Midpoint");
+        assert!(matches!(&b[1], Block::Paragraph(_)));
+        assert!(matches!(&blocks("use a | b to pipe")[0], Block::Paragraph(_)));
+        assert!(matches!(&blocks("| not a table\nbecause no divider")[0], Block::Paragraph(_)));
+    }
+
+    #[test]
+    fn hostile_answers_are_bounded_and_never_panic() {
+        for odd in [
+            "```",
+            "```\nunclosed",
+            "|",
+            "|\n|-|",
+            "| a |\n|---|",
+            "#",
+            "-",
+            "---",
+            "1.",
+            "999. x",
+            "- ",
+            &"- x\n".repeat(10_000),
+            &"|a|\n|-|\n".repeat(5_000),
+            &"```\n".repeat(5_000),
+            &"|a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|\n|-|-|\n".repeat(3),
+        ] {
+            let b = blocks(odd);
+            assert!(b.len() <= MAX_BLOCKS + 1);
+            if let Some(Block::Table { header, rows }) = b.first() {
+                assert!(header.len() <= MAX_TABLE_COLUMNS && rows.len() <= MAX_TABLE_ROWS);
+            }
+        }
+        assert!(blocks("").is_empty());
     }
 }

@@ -3598,7 +3598,6 @@
 
 # Assistant panel (fork roadmap F03). Written from the plain meaning of the English text.
 	Ask Edith about your edit…	向 Edith 询问你的剪辑…
-	Ask about your edit. I can look at the project, the clips, the markers and any transcripts; I can't change anything.	询问关于你的剪辑的问题。我可以查看项目、素材片段、标记和转录文本，但不能更改任何内容。
 	Assistant	助手
 	Effort	推理强度
 	Looked at	查看了
@@ -3628,7 +3627,6 @@
 	with a picture	附带图片
 	Edith needs a model to talk to. Connect a service in Connections (or pick Ollama or LM Studio for a model on this computer), and this panel will light up.	Edith 需要一个可对话的模型。在“连接”中连接一个服务（或选择 Ollama 或 LM Studio 使用本机上的模型），此面板就会启用。
 	Choose a model	选择模型
-	Choose a model from the list above to start.	请先从上方列表中选择一个模型。
 	not connected	未连接
 	Connect	连接
 	Disconnect	断开连接
@@ -3643,3 +3641,7 @@
 	Checking…	正在检查…
 	Running · models: {count}	运行中 · 模型数：{count}
 	Sent with each question	随每个问题发送
+	Ask about your edit	询问你的剪辑
+	I can look at the project, the clips, the markers and any transcripts. I can't change anything.	我可以查看项目、片段、标记和转录文本，但不能做任何更改。
+	Delete this thread	删除此对话
+	Choose a model below to start.	请先在下方选择一个模型。

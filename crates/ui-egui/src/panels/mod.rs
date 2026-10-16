@@ -3,6 +3,7 @@
 
 pub mod assistant;
 pub mod assistant_view;
+pub mod assistant_widgets;
 pub mod audio_fx_editor;
 pub mod clip_dialogs;
 pub mod color_dialogs;
