@@ -15,7 +15,7 @@ use super::*;
 use edith_ai::PromptPack;
 use edith_ai::eval::{self, GradeContext, Report, RunInfo, Suite, Task, TaskResult};
 use filmcraft_time::TICKS_PER_SECOND;
-use std::time::Instant;
+use web_time::Instant;
 
 /// The longest one question may take before it is stopped.
 const TASK_TIME: Duration = Duration::from_secs(300);

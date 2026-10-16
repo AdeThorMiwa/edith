@@ -916,7 +916,8 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
             st.trace.finish(&report);
             st.thread = thread;
             st.finish = Some(report.finish.clone());
-            st.running = false;
+            // `running` stays true until the title and the saved file are done, so a caller that
+            // waits for the turn (`wait: true`) finds the conversation saved and named.
         }
         // After the first answer, the model names the thread (once; a rename by the person stops it).
         if let Some((model, model_id)) = &title_model
@@ -947,6 +948,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
                 push_event(&worker_shared, AgentEvent::Notice { text: format!("This conversation could not be saved: {why}.") });
             }
         }
+        lock(&worker_shared.state).running = false;
         *lock(&progress.status) = format!("{:?}", report.finish);
         if matches!(report.finish, Finish::Failed { .. }) {
             *lock(&progress.error) = Some("the assistant could not finish".into());
