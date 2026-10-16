@@ -9,7 +9,8 @@
 //!
 //! Automation ids: `find.query`, `find.search`, `find.kind.video|image|audio`, `find.shortlist`,
 //! `find.source.<id>` (each site's state), `find.card.<result id>`, `find.star.<result id>`,
-//! `find.get.<result id>`, `find.connections`.
+//! `find.get.<result id>`, `find.connections`, `find.folders` (shows your folders),
+//! `find.folder.add.own|licensed`, `find.folder.remove.<n>`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -31,6 +32,8 @@ struct State {
     query: String,
     kinds: [bool; 3],
     shortlist_only: bool,
+    /// Whether the list of your own folders is showing.
+    folders_open: bool,
     /// The latest `hub.results` and `hub.shortlist`, and when they were read.
     results: Value,
     shortlist: Value,
@@ -45,6 +48,7 @@ impl Default for State {
             query: String::new(),
             kinds: [true, false, false],
             shortlist_only: false,
+            folders_open: false,
             results: Value::Null,
             shortlist: Value::Null,
             read_at: f64::NEG_INFINITY,
@@ -109,9 +113,14 @@ fn texture(app: &mut FilmcraftApp, ctx: &egui::Context, st: &mut State, id: &str
     }
     let c = app.session.hub.candidate(id)?;
     let bytes = app.session.hub.thumbnail(&c)?;
-    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let mut img = image::load_from_memory(&bytes).ok()?;
+    // a photo from your own folders can be far bigger than a card needs
+    if img.width() > 640 || img.height() > 640 {
+        img = img.thumbnail(640, 640);
+    }
+    let img = img.to_rgba8();
     let (w, h) = (img.width() as usize, img.height() as usize);
-    if w == 0 || h == 0 || w > 4096 || h > 4096 {
+    if w == 0 || h == 0 {
         return None;
     }
     if st.textures.len() > 300 {
@@ -147,6 +156,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut commands: Vec<(&'static str, Value)> = Vec::new();
     let mut open_connections = false;
     let mut open_url: Option<String> = None;
+    let mut add_folder: Option<&'static str> = None;
+    let folders: Vec<Value> = app.session.execute("hub.folders", json!({})).ok().and_then(|v| v["folders"].as_array().cloned()).unwrap_or_default();
 
     // ---- the request: words, what kind, and Search ----
     ui.horizontal(|ui| {
@@ -190,11 +201,69 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if r.clicked() {
             st.shortlist_only = !st.shortlist_only;
         }
+        let n = folders.len();
+        let r = crate::panels::assistant_widgets::pill(ui, &tlf!("Folders ({n})", n = n), st.folders_open, true, &t);
+        elems.push(("find.folders".into(), r.clone(), format!("Your folders, {n} added")));
+        if r.clicked() {
+            st.folders_open = !st.folders_open;
+        }
     });
+    if st.folders_open {
+        ui.add(
+            egui::Label::new(
+                RichText::new(tl!("Folders are searched by file and folder names. Files stay where they are until you add one."))
+                    .size(11.0)
+                    .color(t.text_faint),
+            )
+            .wrap(),
+        );
+        for (n, f) in folders.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let own = f["tag"].as_str() == Some("own");
+                let tag = if own { tl!("Your footage") } else { tl!("Licensed") };
+                let missing = f["exists"].as_bool() == Some(false);
+                let (rc, rm) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                if rm.hovered() {
+                    ui.painter().rect_filled(rc, 4.0, t.hover);
+                }
+                crate::icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(rc.center(), vec2(10.0, 10.0)),
+                    crate::icons::Icon::Close,
+                    if rm.hovered() { t.text } else { t.text_dim },
+                );
+                let rm = rm.on_hover_text(tl!("Stop searching this folder. Nothing on disk is deleted."));
+                elems.push((format!("find.folder.remove.{n}"), rm.clone(), format!("Remove folder {}", f["path"].as_str().unwrap_or(""))));
+                if rm.clicked() {
+                    commands.push(("hub.removeFolder", json!({"path": f["path"]})));
+                    st.read_at = f64::NEG_INFINITY;
+                }
+                ui.label(RichText::new(tag).size(11.0).color(t.text_dim));
+                let path = f["path"].as_str().unwrap_or("");
+                let color = if missing { rights::color(Status::Credit) } else { t.text };
+                ui.add(egui::Label::new(RichText::new(path).size(11.5).color(color)).truncate());
+            });
+        }
+        if folders.is_empty() {
+            ui.label(RichText::new(tl!("No folders yet.")).size(11.5).color(t.text_dim));
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (tag, label, id) in
+                [("own", tl!("Add your footage folder…"), "find.folder.add.own"), ("licensed", tl!("Add a licensed folder…"), "find.folder.add.licensed")]
+            {
+                let r = crate::panels::assistant_widgets::pill(ui, label, false, true, &t);
+                elems.push((id.into(), r.clone(), label.to_string()));
+                if r.clicked() {
+                    add_folder = Some(tag);
+                }
+            }
+        });
+    }
 
     // ---- what each site said ----
     let sources: Vec<Value> = st.results["sources"].as_array().cloned().unwrap_or_default();
-    let missing_key = providers["providers"].as_array().is_some_and(|p| p.iter().any(|x| x["connected"].as_bool() == Some(false)));
+    let missing_key = providers["providers"].as_array().is_some_and(|p| p.iter().any(|x| x["connected"].as_bool() == Some(false) && x["id"] != "local"));
     ui.horizontal_wrapped(|ui| {
         for sv in &sources {
             let id = sv["id"].as_str().unwrap_or("");
@@ -412,6 +481,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             app.ui.status = e.to_string();
         }
         shared.lock().unwrap_or_else(PoisonError::into_inner).read_at = f64::NEG_INFINITY;
+    }
+    if let Some(tag) = add_folder {
+        app.pick_ui(crate::native_dialogs::FileDialog::Folder { at: None }, move |app, paths| {
+            if let Some(path) = paths.into_iter().next()
+                && let Err(e) = app.session.execute("hub.addFolder", json!({"path": path, "tag": tag}))
+            {
+                app.ui.status = e.to_string();
+            }
+        });
     }
     if open_connections {
         app.show_panel(PanelKind::Connections);

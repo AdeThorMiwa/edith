@@ -25,6 +25,7 @@ pub mod export_tools;
 pub mod graphic_templates;
 pub mod graphics;
 pub mod hub;
+pub mod hub_local;
 pub mod interchange;
 pub mod keyboard;
 mod keyframe_move;

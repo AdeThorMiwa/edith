@@ -219,3 +219,39 @@ fn without_a_search_the_panel_explains_what_to_do_and_a_missing_key_points_to_co
     d.click("find.connections");
     assert!(d.ok("ui.inspect", json!({})).to_string().contains("Connections"));
 }
+
+#[test]
+fn your_own_folders_are_added_searched_and_removed_from_the_panel() {
+    let _g = guard();
+    let dir = std::env::temp_dir().join(format!("edith-find-folders-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Iceland")).unwrap();
+    std::fs::write(dir.join("Iceland/fog over valley.mp4"), b"x").unwrap();
+    let dir = dir.canonicalize().unwrap();
+    let (_rig, sources) = rig();
+    let mut d = Driver::new(sources);
+    let chosen = dir.to_string_lossy().into_owned();
+    d.harness.state_mut().hooks.pick_folder = Some(Box::new(move || Some(chosen.clone())));
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.FindMedia"}));
+    d.frames(4);
+    assert!(!d.has("find.folder.add.own"), "the folder list starts closed");
+    assert_eq!(d.label("find.folders"), "Your folders, 0 added");
+    d.click("find.folders");
+    assert!(d.has("find.folder.add.own") && d.has("find.folder.add.licensed"));
+    d.click("find.folder.add.licensed");
+    d.wait("the chosen folder to be listed", |d| d.has("find.folder.remove.0"));
+    assert_eq!(d.label("find.folders"), "Your folders, 1 added");
+    let listed = d.exec("hub.folders", json!({}));
+    assert_eq!((listed["folders"][0]["path"].clone(), listed["folders"][0]["tag"].clone()), (json!(dir.to_string_lossy()), json!("licensed")));
+    // a search in the panel's words finds the file by its name, with its licence
+    d.exec("hub.search", json!({"text": "fog valley", "kinds": ["video"], "sources": ["local"], "wait": true}));
+    d.wait("the card for the file", |d| d.ok("ui.elements", json!({"prefix": "find.card.local:"})).as_array().is_some_and(|a| !a.is_empty()));
+    let cards = d.ok("ui.elements", json!({"prefix": "find.card.local:"}));
+    assert!(cards[0]["label"].as_str().unwrap().contains("Licensed to you"), "{cards}");
+    d.snapshot("find-media-folders");
+    // removing it stops the search and touches nothing on disk
+    d.click("find.folder.remove.0");
+    d.wait("the folder to be gone", |d| !d.has("find.folder.remove.0"));
+    assert!(dir.join("Iceland/fog over valley.mp4").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

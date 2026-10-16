@@ -98,7 +98,7 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `crates/engine/src/lib.rs`, `commands.rs` | `pub mod provenance;`, `pub mod rights;` and their test modules; `v.extend(...::commands())` for each (6 lines) | F04.1, F04.2 |
 | `crates/engine/src/project_tools.rs` (`project_subset`) | one line: a saved subset keeps only the provenance records of the items it keeps | F04.1 |
 | `crates/ui-egui/src/panels/mod.rs`, `project_views.rs` | `pub mod rights;`, `pub mod rights_panel;` and `pub mod find_media;` (and their dispatch lines); three call sites in the Project panel: the rights badge on a card and in a list row, and the Rights submenu in an item's menu | F04.1 |
-| `crates/engine/src/lib.rs`, `commands.rs`, `Cargo.toml` | F05: `pub mod hub;` and its test module, `pub hub: hub::Hub` on `Session` (with its initialiser), `v.extend(crate::hub::commands())`, the `edith-sources` dependency and `edith-sources/keychain` in the `net` feature | F05.2 |
+| `crates/engine/src/lib.rs`, `commands.rs`, `Cargo.toml` | F05: `pub mod hub;` and its test module, `pub hub: hub::Hub` on `Session` (with its initialiser), `v.extend(crate::hub::commands())`, the `edith-sources` dependency and `edith-sources/keychain` in the `net` feature; F05.5 adds `pub mod hub_local;` and `v.extend(crate::hub_local::commands())` (2 lines) | F05.2, F05.5 |
 | `crates/ui-egui/src/lib.rs` (`logic`) | one line: `self.session.pump_hub()` finishes media downloads every frame | F05.2 |
 | `Cargo.toml`, `xtask/src/main.rs` | the `edith-sources` workspace dependency and its layer (`sources`, L3) | F05.1 |
 | `crates/net/src/http.rs`, `services.rs` | `Client::download` (stream a body to a file, hashed, renamed only when whole) and the `freesound` service | F05.1 |

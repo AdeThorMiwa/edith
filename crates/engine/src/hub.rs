@@ -99,6 +99,8 @@ pub struct Hub {
     pending: Vec<Pending>,
     acquired: BTreeMap<String, Acquired>,
     thumbs: Arc<Mutex<BTreeMap<String, Thumb>>>,
+    pub(crate) folders: Vec<crate::hub_local::Folder>,
+    pub(crate) folders_loaded: bool,
     #[cfg(feature = "net")]
     sources: Option<Arc<edith_sources::Sources>>,
 }
@@ -145,6 +147,9 @@ impl Hub {
         if c.thumb.is_empty() {
             return None;
         }
+        if let Some(path) = c.thumb.strip_prefix("file://") {
+            return self.local_thumbnail(&c.id, path);
+        }
         {
             let mut map = lock(&self.thumbs);
             match map.get(&c.id) {
@@ -183,9 +188,48 @@ impl Hub {
 }
 
 impl Hub {
-    /// Without the network there are no pictures to fetch.
+    /// Without the network only pictures from your own folders can be shown.
     #[cfg(not(feature = "net"))]
-    pub fn thumbnail(&mut self, _c: &Candidate) -> Option<Arc<Vec<u8>>> {
+    pub fn thumbnail(&mut self, c: &Candidate) -> Option<Arc<Vec<u8>>> {
+        let path = c.thumb.strip_prefix("file://")?.to_string();
+        self.local_thumbnail(&c.id, &path)
+    }
+
+    /// The bytes of a picture in one of your folders (at most 12 MB), read in the background.
+    fn local_thumbnail(&mut self, id: &str, path: &str) -> Option<Arc<Vec<u8>>> {
+        {
+            let mut map = lock(&self.thumbs);
+            match map.get(id) {
+                Some(Thumb::Ready(b)) => return Some(b.clone()),
+                Some(_) => return None,
+                None => {}
+            }
+            if map.values().filter(|t| matches!(t, Thumb::Loading)).count() >= 4 {
+                return None;
+            }
+            if map.len() >= MAX_THUMBS {
+                map.clear();
+            }
+            map.insert(id.to_string(), Thumb::Loading);
+        }
+        let (thumbs, key, path) = (self.thumbs.clone(), id.to_string(), std::path::PathBuf::from(path));
+        let spawned = std::thread::Builder::new().name("hub-thumb".into()).spawn({
+            let (thumbs, key) = (thumbs.clone(), key.clone());
+            move || {
+                let read = || -> Option<Vec<u8>> {
+                    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+                    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp") || std::fs::metadata(&path).ok()?.len() > 12 * 1024 * 1024 {
+                        return None;
+                    }
+                    std::fs::read(&path).ok()
+                };
+                let bytes = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).ok().flatten();
+                lock(&thumbs).insert(key, bytes.map_or(Thumb::Failed, |b| Thumb::Ready(Arc::new(b))));
+            }
+        });
+        if spawned.is_err() {
+            lock(&thumbs).insert(key, Thumb::Failed);
+        }
         None
     }
 }
@@ -237,9 +281,9 @@ fn request_from(p: &Value, cmd: &str) -> Result<Request> {
 }
 
 /// The sources a request should go to: those named (default all) that offer one of the kinds asked.
-fn sources_for(p: &Value, req: &Request, cmd: &str) -> Result<Vec<String>> {
+fn sources_for(p: &Value, req: &Request, cmd: &str, has_folders: bool) -> Result<Vec<String>> {
     let named: Vec<String> = match p.get("sources").filter(|v| !v.is_null()) {
-        None => edith_sources::SOURCES.iter().map(|s| s.to_string()).collect(),
+        None => edith_sources::SOURCES.iter().map(|s| s.to_string()).chain(has_folders.then(|| "local".to_string())).collect(),
         Some(v) => v
             .as_array()
             .filter(|a| !a.is_empty() && a.len() <= 8)
@@ -247,20 +291,21 @@ fn sources_for(p: &Value, req: &Request, cmd: &str) -> Result<Vec<String>> {
             .iter()
             .map(|s| {
                 s.as_str()
-                    .filter(|s| edith_sources::SOURCES.contains(s))
+                    .filter(|s| edith_sources::SOURCES.contains(s) || *s == "local")
                     .map(str::to_string)
-                    .ok_or_else(|| bad(cmd, "unknown source in `sources`; use pexels, pixabay or freesound"))
+                    .ok_or_else(|| bad(cmd, "unknown source in `sources`; use pexels, pixabay, wikimedia, archive, freesound or local"))
             })
             .collect::<Result<_>>()?,
     };
-    let out: Vec<String> = named.into_iter().filter(|id| edith_sources::info(id).is_some_and(|i| i.kinds.iter().any(|k| req.wants(*k)))).collect();
+    let out: Vec<String> =
+        named.into_iter().filter(|id| id == "local" || edith_sources::info(id).is_some_and(|i| i.kinds.iter().any(|k| req.wants(*k)))).collect();
     if out.is_empty() {
         return Err(bad(cmd, "none of those sources offers the kinds asked for"));
     }
     Ok(out)
 }
 
-fn providers(_s: &mut Session, _p: &Value) -> Result<Value> {
+fn providers(s: &mut Session, _p: &Value) -> Result<Value> {
     let list: Vec<Value> = edith_sources::SOURCES
         .iter()
         .filter_map(|id| edith_sources::info(id))
@@ -273,6 +318,12 @@ fn providers(_s: &mut Session, _p: &Value) -> Result<Value> {
             })
         })
         .collect();
+    let mut list = list;
+    let folders = s.hub_folders();
+    list.push(json!({
+        "id": "local", "label": "My folders", "kinds": ["video", "image", "audio"], "connected": !folders.is_empty(), "needsKey": false,
+        "keyUrl": null, "credit": "", "creditUrl": "", "folders": folders.len(),
+    }));
     Ok(json!({"providers": list, "available": cfg!(feature = "net")}))
 }
 
@@ -281,14 +332,22 @@ fn search(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "hub.search";
     s.pump_hub();
     let req = request_from(p, cmd)?;
-    let ids = sources_for(p, &req, cmd)?;
+    let folders = s.hub_folders();
+    let mut ids = sources_for(p, &req, cmd, !folders.is_empty())?;
+    if ids.iter().any(|i| i == "local") && folders.is_empty() {
+        return Err(bad(cmd, "you have not added a folder yet (hub.addFolder)"));
+    }
     let wait = match p.get("wait") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`wait` must be true or false")),
     };
+    // Offline mode stops the sites, but your own folders are on this computer
     if edith_net::shared().offline() {
-        return Err(EngineError::Other("Offline mode is on; turn it off to search for media.".to_string()));
+        ids.retain(|i| i == "local");
+        if ids.is_empty() {
+            return Err(EngineError::Other("Offline mode is on; turn it off to search for media.".to_string()));
+        }
     }
     // a new search replaces the old one
     if let Some(old) = &s.hub.search {
@@ -305,17 +364,21 @@ fn search(s: &mut Session, p: &Value) -> Result<Value> {
     s.hub.search = Some(state.clone());
     let sources = s.hub.sources();
     for (n, id) in ids.iter().enumerate() {
-        let (shared, sources, cache, req, id, cancel) = (state.clone(), sources.clone(), s.hub.cache.clone(), req.clone(), id.clone(), cancel.clone());
+        let (shared, sources, cache, req, id, cancel, folders) =
+            (state.clone(), sources.clone(), s.hub.cache.clone(), req.clone(), id.clone(), cancel.clone(), folders.clone());
         let key = format!("{id}|{}", serde_json::to_string(&req).unwrap_or_default());
         let work = move || {
             let now = crate::autosave::unix_now().max(0) as u64;
             let cached = lock(&cache).get(&key).filter(|(at, _)| now.saturating_sub(*at) < CACHE_SECS).map(|(_, p)| p.clone());
             let result = match cached {
+                _ if id == "local" => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::hub_local::find(&folders, &req)))
+                    .map_err(|_| edith_sources::SourceError::Unavailable("looking through the folders failed internally".into())),
                 Some(page) => Ok(page),
                 None => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sources.search(&id, &req, &cancel)))
                     .unwrap_or_else(|_| Err(edith_sources::SourceError::Unavailable("the search failed internally".into()))),
             };
-            if let Ok(page) = &result {
+            // answers from a site are kept for a day; your folders are looked at afresh each time
+            if let Some(page) = result.as_ref().ok().filter(|_| id != "local") {
                 let mut c = lock(&cache);
                 if c.len() >= MAX_CACHE {
                     c.clear();
@@ -496,6 +559,9 @@ fn acquire(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let c = s.hub.candidate(id).ok_or_else(|| bad(cmd, "no result with that id in this session; search first"))?;
     let download = c.download.clone().ok_or_else(|| bad(cmd, "this result has no file to download"))?;
+    if c.source == "local" {
+        return acquire_local(s, &c, bin);
+    }
     if matches!(s.hub.acquired.get(id), Some(Acquired::Downloading)) {
         return Err(bad(cmd, "this is already downloading"));
     }
@@ -548,6 +614,27 @@ fn acquire(s: &mut Session, p: &Value) -> Result<Value> {
         Acquired::Done { item } => json!({"state": "done", "item": item}),
         Acquired::Failed(m) => json!({"state": "failed", "message": m}),
     })}))
+}
+
+/// A file from one of your own folders is imported where it is: nothing is copied or downloaded.
+fn acquire_local(s: &mut Session, c: &Candidate, bin: Option<u64>) -> Result<Value> {
+    let cmd = "hub.acquire";
+    let path = c.download.as_ref().map(|d| d.url.clone()).unwrap_or_default();
+    let folders = s.hub_folders();
+    if !crate::hub_local::inside(&folders, &path) {
+        return Err(bad(cmd, "that file is not in one of your folders any more"));
+    }
+    match s.import_with_record(&path, bin, "My folders", c, "") {
+        Ok(item) => {
+            s.log.push(Level::Info, "sources", format!("Added \"{}\" from your folders to the project.", c.title));
+            s.hub.acquired.insert(c.id.clone(), Acquired::Done { item });
+            Ok(json!({"id": c.id, "job": null, "path": path, "acquired": {"state": "done", "item": item}}))
+        }
+        Err(e) => {
+            s.hub.acquired.insert(c.id.clone(), Acquired::Failed(e.to_string()));
+            Err(e)
+        }
+    }
 }
 
 #[cfg(not(feature = "net"))]
@@ -603,24 +690,29 @@ impl Session {
 
     /// Imports the downloaded file into `Sources/<site>` and records its provenance.
     fn bring_in(&mut self, p: &Pending, label: &str, sha256: &str) -> Result<u64> {
-        let bin = match p.bin {
+        self.import_with_record(&p.path, p.bin, label, &p.candidate, sha256)
+    }
+
+    /// Imports `path` into `bin` (default `Sources/<label>`) and records where it came from.
+    fn import_with_record(&mut self, path: &str, bin: Option<u64>, label: &str, c: &Candidate, sha256: &str) -> Result<u64> {
+        let bin = match bin {
             Some(b) => filmcraft_project::BinId(b),
             None => ensure_bin(self, &["Sources", label])?,
         };
-        let r = self.execute("file.import", json!({"paths": [p.path], "bin": bin.0}))?;
+        let r = self.execute("file.import", json!({"paths": [path], "bin": bin.0}))?;
         let item = r["items"][0].as_u64().ok_or_else(|| {
             EngineError::Other(format!("the downloaded file could not be imported{}", r["errors"][0].as_str().map(|e| format!(": {e}")).unwrap_or_default()))
         })?;
-        let c = &p.candidate;
         let mut note = c.download.as_ref().map(|d| d.note.clone()).unwrap_or_default();
         if !note.is_empty() {
             note.push(' ');
         }
-        note.push_str("Found with the Source Hub.");
+        note.push_str(if c.source == "local" { "Imported from a folder you added." } else { "Found with the Source Hub." });
+        let source = if c.source == "local" { crate::hub_local::record_source(c).to_string() } else { c.source.clone() };
         self.execute(
             "provenance.set",
             json!({
-                "item": item, "source": c.source, "author": c.author, "sourceUrl": c.source_url, "hash": sha256, "note": note,
+                "item": item, "source": source, "author": c.author, "sourceUrl": c.source_url, "hash": sha256, "note": note,
                 "license": {"name": c.rights.name, "url": c.rights.url, "commercial": c.rights.commercial, "attributionRequired": c.rights.attribution_required, "creditText": credit_text(c)},
             }),
         )?;
