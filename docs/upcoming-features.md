@@ -363,7 +363,9 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Decided 2026-10-15.** (1) Claude comes first, through your own API key (F03.1); OpenRouter stays the first *sign-in* because it is the only one with a documented flow that needs no app registration. A Claude *subscription* cannot be used through OpenRouter: OpenRouter bills its own credits, and its guide for Claude Code says no Anthropic plan is needed. Claude models are available there, pay-as-you-go. (2) The model picker **shows** capabilities (tools, images, context size, price, free) as badges and hides nothing: a model that cannot call tools still brainstorms well. The editing features simply stay unavailable in a thread whose model lacks tools, and say why. (3) Requests identify the app as Edith (`X-Title: Edith`; `HTTP-Referer` is the project's address once it has one). See the naming rule in [fork.md](fork.md#naming-edith).
 
-### F04 Provenance and license ledger · Must · M · ⬜
+### F04 Provenance and license ledger · Must · M · 🟡
+
+**Built so far (2026-10-16, F04.1):** the records and the badge. `provenance.get|set|list` (`crates/engine/src/provenance.rs`), a record per media item inside the project (`Project::ext["edith.provenance"]`: undoable, autosaved, recovered; no schema bump), a rights status worked out one way everywhere (green free to use, amber credit needed, red check the terms, violet AI-generated), a round badge on each item in the Project panel with the record in its tooltip, and a Rights submenu (My footage, Licensed to me, Clear the record). Hostile files and parameters are refused or ignored, with tests. **Not yet:** the project policy, the credits block, the audit and the Credits and Rights dialog (F04.2), and importers that write records on their own (the Source Hub, F05, will).
 
 **Needs:** F01 · **Unlocks:** F05, F20, F25.
 

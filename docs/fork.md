@@ -94,6 +94,10 @@ Keep this table current. It is the whole list of places a merge can conflict.
 | `xtask/src/main.rs` | `LAYERS` entries (`("net", 2)`, `("llm", 3)`, `("agent", 3)`, `("ai", 3)`), `SAME_LAYER` edges (`agent`/`ai` to `llm`, `ai` to `agent`), and the prefix rule accepts `edith-` next to `filmcraft-` (two lines) | F02.1, F02.7, F03.1 |
 | `docs/architecture.md` | `net` in the L2 line and the crate table | F02.5 |
 | `crates/ui-egui/src/dock.rs` | `PanelKind::Connections` and `PanelKind::Assistant` (variant, `ALL` length, title: 4 lines each); `Assistant` in the right-hand tab group of the default Editing layout, and its Window-menu shortcut Shift+0 (2 lines) | F02.6, F03.1, F03.7b |
+| `crates/project/src/lib.rs` | one field on `Project`, `ext` (an open map for the fork's undoable data, empty and unwritten when unused, so no schema bump), and its initialiser (D1) | F04.1 |
+| `crates/engine/src/lib.rs`, `commands.rs` | `pub mod provenance;` and its test module; `v.extend(crate::provenance::commands())` (3 lines) | F04.1 |
+| `crates/engine/src/project_tools.rs` (`project_subset`) | one line: a saved subset keeps only the provenance records of the items it keeps | F04.1 |
+| `crates/ui-egui/src/panels/mod.rs`, `project_views.rs` | `pub mod rights;`; three call sites in the Project panel: the rights badge on a card and in a list row, and the Rights submenu in an item's menu | F04.1 |
 | `xtask/src/main.rs` (`ci`) | the test step runs with `FILMCRAFT_DATA_DIR` pointing at an empty folder under `target/`, so downloaded models and saved preferences on the developer's machine cannot change test results (the two `tts_ui` tests failed on a machine with the Kokoro voices installed) | F03.7g |
 | `crates/ui-egui/src/lib.rs` (`show_panel`) | the Assistant opens beside a side panel (Properties, Essential Sound or Graphics, Lumetri Color) in a workspace that lacks it (one match arm) | F03.7b |
 | `crates/ui-egui/src/panels/mod.rs` | `pub mod connections;`, `pub mod assistant;`, `pub mod assistant_view;` and one `match` arm each for the two panels | F02.6, F03.1 |

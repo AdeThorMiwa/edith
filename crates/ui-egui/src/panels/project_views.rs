@@ -291,6 +291,7 @@ fn item_menu(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: ItemId, kind: &ItemK
         }
     });
     app.auto.add("project.itemMenu.label", r.response.rect, tl!("Label"));
+    crate::panels::rights::menu(app, ui, id, kind, actions);
     let can_reveal = app.session.project.resolve_media(id).is_some_and(|(_, m, _)| matches!(m.media, filmcraft_project::MediaRef::File { .. }));
     let b = ui.add_enabled(can_reveal, egui::Button::new(tl!("Reveal in Finder")));
     app.auto.add("project.itemMenu.file.reveal", b.rect, "Reveal in Finder");
@@ -761,6 +762,8 @@ fn list_bin(app: &mut FilmcraftApp, ui: &mut egui::Ui, bin: &Bin, depth: usize, 
             );
             if nr.max.x + 40.0 < name_r.max.x {
                 paint_badges(ui, &badge, pos2(nr.max.x + 6.0, r.center().y), &t);
+                let after = nr.max.x + 6.0 + if badge.offline { 18.0 } else { 0.0 } + if badge.proxy { 20.0 } else { 0.0 };
+                crate::panels::rights::badge(app, ui, id, pos2(after + 8.0, r.center().y), &format!("{}.item.{}.rights", v.prefix, id.0));
             }
         }
         x += name_w;
@@ -881,6 +884,7 @@ fn card(app: &mut FilmcraftApp, ui: &mut egui::Ui, r: Rect, id: ItemId, pre: &st
         ui.painter().text(pr.center(), Align2::CENTER_CENTER, "P", Tokens::ui(10.0), Color32::WHITE);
         app.auto.add(&format!("{pre}.item.{}.proxy", id.0), pr, "Proxy attached");
     }
+    crate::panels::rights::badge(app, ui, id, pos2(th.min.x + 11.0, th.min.y + 11.0), &format!("{pre}.item.{}.rights", id.0));
     let f = font(app);
     let ty = th.max.y + 11.0;
     let mut dw = 0.0;

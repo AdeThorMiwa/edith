@@ -1257,6 +1257,11 @@ pub struct Project {
     /// instructions for whoever opens it next, frame numbers and the like. Schema v15.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
+    /// Fork data kept with the project and undone with it, by name (`edith.provenance`, …): one
+    /// open map so a feature of the fork adds data without a schema bump. Readers treat every
+    /// value as untrusted. Unknown keys are kept as they are.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ext: BTreeMap<String, serde_json::Value>,
 }
 
 /// How a sequence is shown in the Timeline panel: its zoom, scroll position and track heights.
@@ -1353,6 +1358,7 @@ impl Project {
             source_graphics: BTreeMap::new(),
             narrations: BTreeMap::new(),
             notes: String::new(),
+            ext: BTreeMap::new(),
         }
     }
 
