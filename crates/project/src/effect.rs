@@ -17,7 +17,7 @@ use crate::mask::Mask;
 pub use audio::{GEQ10_LABELS, GEQ20_LABELS, GEQ30_LABELS, PREMIERE_AUDIO_EFFECTS};
 
 mod film;
-pub use film::{GRAIN_STOCK_VALUES, GRAIN_STOCKS};
+pub use film::{GRAIN_STOCK_VALUES, GRAIN_STOCKS, LETTERBOX_RATIOS, LETTERBOXES};
 
 mod vfx;
 pub use vfx::{EASINGS, ECHO_OPERATORS, FRAME_LAYOUTS, LIGHT_IDS, SIMPLE_BLEND, TRACK_CHOICES, auto_point, ultra_key_setting};

@@ -222,7 +222,9 @@ pub fn builtin_presets() -> Vec<EffectPreset> {
         effect("tint", &[("black", ParamValue::Color([0.08, 0.04, 0.02, 1.0])), ("white", ParamValue::Color([1.0, 0.93, 0.8, 1.0])), ("amount", f(35.0))]);
     let mut pip = effect("motion", &[("scale", f(35.0)), ("position", ParamValue::Vec2(Vec2::new(1530.0, 270.0)))]);
     pip.enabled = true;
+    let cinema = effect("cinema_look", &[("film_look", f(60.0))]);
     vec![
+        preset("Cinema Look", "Film grain, halation, soft bloom and gate flutter from one Film Look slider", KeyframeMode::Scale, 10.0, vec![cinema]),
         preset("Blur In", "Gaussian Blur from 60 to 0 over the first second", KeyframeMode::AnchorToIn, 10.0, vec![blur_in]),
         preset("Blur Out", "Gaussian Blur from 0 to 60 over the last second", KeyframeMode::AnchorToOut, 10.0, vec![blur_out]),
         preset("Fade In", "Opacity 0 → 100 % over the first second", KeyframeMode::AnchorToIn, 10.0, vec![fade_in]),

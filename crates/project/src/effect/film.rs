@@ -9,6 +9,9 @@ pub(super) const FILM: &[&str] = &["Video Effects", "Film Look"];
 
 /// Grain stocks: choice 0 uses the controls; the others set size, softness and the brightness
 /// response (all in the same units as the controls): (size, softness, shadows, midtones, highlights).
+/// Letterbox choices of Cinema Look and their width-to-height ratios (None is 0).
+pub const LETTERBOXES: &[&str] = &["None", "2.39:1", "1.85:1"];
+pub const LETTERBOX_RATIOS: [f64; 3] = [0.0, 2.39, 1.85];
 pub const GRAIN_STOCKS: &[&str] = &["Custom", "Fine", "Medium", "Heavy"];
 pub const GRAIN_STOCK_VALUES: [(f64, f64, f64, f64, f64); 3] = [(1.0, 25.0, 60.0, 100.0, 40.0), (1.8, 35.0, 70.0, 100.0, 55.0), (3.2, 45.0, 85.0, 100.0, 70.0)];
 
@@ -39,6 +42,19 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 fs("radius", "Radius", 30.0, (1.0, 300.0), (1.0, 120.0), "px", 0),
                 pctf("highlight_bias", "Highlight Bias", 50.0),
                 pctf("black_lift", "Black Lift", 14.0),
+            ],
+        ),
+        video(
+            "cinema_look",
+            "Cinema Look",
+            FILM,
+            vec![
+                pctf("film_look", "Film Look", 60.0),
+                grp(f("grain", "Grain", 100.0, 0.0, 200.0, "%"), "Mix"),
+                grp(f("halation", "Halation", 100.0, 0.0, 200.0, "%"), "Mix"),
+                grp(f("diffusion", "Diffusion", 100.0, 0.0, 200.0, "%"), "Mix"),
+                grp(f("gate", "Film Gate", 100.0, 0.0, 200.0, "%"), "Mix"),
+                ch("letterbox", "Letterbox", LETTERBOXES, 0),
             ],
         ),
         video(

@@ -6,7 +6,7 @@ use filmcraft_time::Tick;
 use crate::effects::{FxCtx, dec, enc};
 use crate::image::Image;
 
-const IDS: &[&str] = &["film_grain", "halation", "diffusion", "film_gate", "anamorphic_streak", "lens_fringing"];
+const IDS: &[&str] = &["film_grain", "halation", "diffusion", "film_gate", "anamorphic_streak", "lens_fringing", "cinema_look"];
 
 fn cx_at(t: i64) -> FxCtx<'static> {
     FxCtx {
@@ -643,5 +643,102 @@ fn hostile_values_cannot_break_gate_streak_or_fringing() {
                 assert!(o.px.iter().all(|x| x.is_finite() && *x >= -1e-3), "{id} {v} {scale}");
             }
         }
+    }
+}
+
+// ------------------------------------------------------------------------------ cinema look
+
+fn look(film_look: f64) -> EffectInstance {
+    let mut e = inst("cinema_look");
+    setf(&mut e, "film_look", film_look);
+    e
+}
+
+#[test]
+fn cinema_look_at_zero_is_exactly_the_original_picture() {
+    let img = picture(80, 48);
+    for t in [0, secs(1.7)] {
+        assert_eq!(run(&look(0.0), &img, &cx_at(t)).px, img.px);
+    }
+}
+
+#[test]
+fn cinema_look_grows_with_the_slider_and_each_mix_control_turns_its_part_off() {
+    let img = spot(160, 96, 0.08, 6);
+    let dist = |o: &Image| o.px.iter().zip(&img.px).map(|(a, b)| f64::from((a - b).abs())).sum::<f64>();
+    let (low, mid, high) = (dist(&run(&look(20.0), &img, &cx_at(0))), dist(&run(&look(60.0), &img, &cx_at(0))), dist(&run(&look(100.0), &img, &cx_at(0))));
+    assert!(low > 0.0 && low < mid && mid < high, "{low} {mid} {high}");
+    // with every mix control at zero the slider does nothing
+    let mut none = look(100.0);
+    for k in ["grain", "halation", "diffusion", "gate"] {
+        setf(&mut none, k, 0.0);
+    }
+    // (lens fringing is part of the slider itself and is far from the centre of a flat picture)
+    let flat_img = flat(64, 48, 0.4);
+    let o = run(&none, &flat_img, &cx_at(0));
+    assert!(o.px.iter().zip(&flat_img.px).all(|(a, b)| (a - b).abs() < 1e-5), "only the fringing is left, which a flat picture cannot show");
+    // grain off removes the texture of a flat picture; grain on gives it
+    let mut only_grain = look(100.0);
+    for k in ["halation", "diffusion", "gate"] {
+        setf(&mut only_grain, k, 0.0);
+    }
+    assert!(std(&display_luma(&run(&only_grain, &flat_img, &cx_at(0)))) > 0.01);
+    setf(&mut only_grain, "grain", 0.0);
+    assert!(std(&display_luma(&run(&only_grain, &flat_img, &cx_at(0)))) < 1e-4);
+}
+
+#[test]
+fn cinema_look_keeps_the_picture_recognisable() {
+    // the finished look stays close to the original in overall brightness and tone
+    let img = picture(120, 80);
+    let o = run(&look(100.0), &img, &cx_at(secs(0.5)));
+    let (a, b) = (mean(&display_luma(&img)), mean(&display_luma(&o)));
+    assert!((a - b).abs() < 0.06, "brightness {a} vs {b}");
+    assert!(o.px.iter().all(|v| v.is_finite() && *v >= -1e-3));
+    assert!(o.px.as_chunks::<4>().0.iter().all(|p| (p[3] - 1.0).abs() < 1e-4), "stays opaque");
+}
+
+#[test]
+fn letterbox_bars_are_the_right_height_and_black_and_leave_the_picture_alone() {
+    let img = flat(1920, 1080, 0.5);
+    let bars = |choice: u32| {
+        let mut e = look(0.0);
+        e.params.get_mut("letterbox").unwrap().value = ParamValue::Choice(choice);
+        run(&e, &img, &cx_at(0))
+    };
+    assert_eq!(bars(0).px, img.px, "None leaves the frame alone");
+    for (choice, picture_h) in [(1u32, 803usize), (2, 1038)] {
+        let o = bars(choice);
+        let black = |y: usize| px(&o, 960, y)[0] == 0.0 && px(&o, 960, y)[3] == 1.0;
+        let rows = (0..1080).filter(|y| !black(*y)).count();
+        assert_eq!(rows, picture_h, "picture height for choice {choice}");
+        // centred: equal bars (within one row) above and below
+        let top = (0..1080).take_while(|y| black(*y)).count();
+        let bottom = (0..1080).rev().take_while(|y| black(*y)).count();
+        assert!(top.abs_diff(bottom) <= 1, "{top} vs {bottom}");
+        // the picture inside is untouched
+        assert_eq!(px(&o, 100, 540), px(&img, 100, 540));
+    }
+    // a frame wider than the ratio gets bars at the sides instead
+    let wide = flat(2100, 900, 0.5);
+    let mut e = look(0.0);
+    e.params.get_mut("letterbox").unwrap().value = ParamValue::Choice(2);
+    let o = run(&e, &wide, &cx_at(0));
+    assert_eq!(px(&o, 5, 450)[0], 0.0);
+    assert!(px(&o, 1050, 450)[0] > 0.1);
+    assert_eq!(px(&o, 1050, 0)[0], px(&wide, 1050, 0)[0], "no bars above or below");
+}
+
+#[test]
+fn hostile_values_cannot_break_cinema_look() {
+    let img = spot(48, 32, 0.1, 5);
+    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -5.0, 1e30] {
+        let mut e = inst("cinema_look");
+        for k in ["film_look", "grain", "halation", "diffusion", "gate"] {
+            setf(&mut e, k, v);
+        }
+        e.params.get_mut("letterbox").unwrap().value = ParamValue::Choice(u32::MAX);
+        let o = run(&e, &img, &cx_at(i64::MAX));
+        assert!(o.px.iter().all(|x| x.is_finite() && *x >= -1e-3), "{v}");
     }
 }

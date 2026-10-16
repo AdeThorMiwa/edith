@@ -7,15 +7,15 @@
 //! full-resolution clip pixels and are scaled by `FxCtx::px_scale`.
 
 use filmcraft_project::EffectInstance;
-use filmcraft_project::effect::{GRAIN_STOCK_VALUES, GRAIN_STOCKS};
+use filmcraft_project::effect::{GRAIN_STOCK_VALUES, GRAIN_STOCKS, LETTERBOX_RATIOS, LETTERBOXES};
 use rayon::prelude::*;
 
 use super::*;
-use crate::effects::{dec, enc, gaussian, hash3, noise_frame_seed};
+use crate::effects::{choice, dec, enc, gaussian, hash3, noise_frame_seed};
 
 /// The ids this module implements.
 pub(super) fn handles(id: &str) -> bool {
-    matches!(id, "film_grain" | "halation" | "diffusion" | "film_gate" | "anamorphic_streak" | "lens_fringing")
+    matches!(id, "film_grain" | "halation" | "diffusion" | "film_gate" | "anamorphic_streak" | "lens_fringing" | "cinema_look")
 }
 
 pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
@@ -26,6 +26,7 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         "film_gate" => film_gate(img, e, cx),
         "anamorphic_streak" => anamorphic_streak(img, e, cx),
         "lens_fringing" => lens_fringing(img, e, cx),
+        "cinema_look" => cinema_look(img, e, cx),
         _ => {}
     }
 }
@@ -410,4 +411,64 @@ pub fn lens_fringing(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             row[x * 4 + 2] = blue;
         }
     });
+}
+
+// ------------------------------------------------------------------------------ cinema look
+
+/// An instance of the film effect `id` with these settings (the rest at their defaults).
+fn part(id: &str, set: &[(&str, f64)]) -> Option<EffectInstance> {
+    let mut e = filmcraft_project::find_effect(id)?.instance();
+    for (k, v) in set {
+        if let Some(p) = e.params.get_mut(*k) {
+            p.value = filmcraft_project::ParamValue::Float(*v);
+        }
+    }
+    Some(e)
+}
+
+/// Bars that crop the picture to the ratio `ratio` (width over height): above and below it for a
+/// frame less wide than that, at the sides for one wider.
+fn letterbox(img: &mut Image, ratio: f64) {
+    if !(ratio.is_finite() && ratio > 0.1) || img.w == 0 || img.h == 0 {
+        return;
+    }
+    let (w, h) = (img.w, img.h);
+    let (pw, ph) = if (w as f64 / h as f64) > ratio { (((h as f64) * ratio).round() as usize, h) } else { (w, ((w as f64) / ratio).round() as usize) };
+    let (pw, ph) = (pw.clamp(1, w), ph.clamp(1, h));
+    let (x0, y0) = ((w - pw) / 2, (h - ph) / 2);
+    for y in 0..h {
+        for x in 0..w {
+            if y < y0 || y >= y0 + ph || x < x0 || x >= x0 + pw {
+                img.px[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[0.0, 0.0, 0.0, 1.0]);
+            }
+        }
+    }
+}
+
+/// Cinema Look: one slider that lays the whole film finish on the picture (lens fringing, diffusion,
+/// halation, gate weave and flicker, then grain), each part scaled by the slider and by its own mix
+/// control, plus an optional letterbox. At 0 the picture is exactly what it was (without letterbox).
+pub fn cinema_look(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    if img.w == 0 || img.h == 0 {
+        return;
+    }
+    let k = f64::from(frac(fv(e, "film_look", cx)));
+    let mix = |id: &str| f64::from(num(fv(e, id, cx), 100.0).clamp(0.0, 200.0)) / 100.0;
+    if k > 0.0 {
+        let (grain, halo, soft, gate) = (mix("grain") * k, mix("halation") * k, mix("diffusion") * k, mix("gate") * k);
+        let parts = [
+            part("lens_fringing", &[("amount", 2.5 * k)]),
+            part("diffusion", &[("strength", 40.0 * soft), ("black_lift", 8.0 * soft), ("radius", 30.0)]),
+            part("halation", &[("strength", 55.0 * halo), ("radius", 55.0)]),
+            part("film_gate", &[("weave", 2.0 * gate), ("flicker", 6.0 * gate), ("dust", 20.0 * gate), ("scratches", 10.0 * gate)]),
+            part("film_grain", &[("amount", 28.0 * grain), ("size", 1.6)]),
+        ];
+        for p in parts.iter().flatten() {
+            apply(img, p, cx);
+        }
+    }
+    let lb = (choice(e, "letterbox") as usize).min(LETTERBOXES.len() - 1);
+    if let Some(r) = LETTERBOX_RATIOS.get(lb).filter(|r| **r > 0.0) {
+        letterbox(img, *r);
+    }
 }

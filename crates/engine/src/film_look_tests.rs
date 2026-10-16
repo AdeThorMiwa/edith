@@ -126,3 +126,31 @@ fn film_gate_streak_and_fringing_apply_by_name_change_the_frame_and_turn_off_exa
         assert_eq!(before, frame(&mut s, &format!("23-{id}-undone")));
     }
 }
+
+#[test]
+fn the_cinema_look_preset_adds_one_effect_with_one_click_and_undoes_in_one_step() {
+    let (mut s, clip) = session_with(DemoScene::OceanSunset);
+    let list = s.execute("presets.list", json!({})).unwrap();
+    assert!(list.to_string().contains("Cinema Look"), "{list}");
+    let before = frame(&mut s, "30-cinema-original");
+    let undo0 = s.history.undo.len();
+    s.execute("presets.apply", json!({"preset": "Cinema Look", "clips": [clip]})).unwrap();
+    assert_eq!(s.history.undo.len(), undo0 + 1, "one undo step");
+    let n = s.active_sequence().unwrap().find_item(filmcraft_project::ClipId(clip)).unwrap().1.effects.iter().filter(|e| e.effect == "cinema_look").count();
+    assert_eq!(n, 1);
+    let with = frame(&mut s, "31-cinema-look");
+    assert_ne!(before, with);
+    // the slider at zero is the original again
+    s.execute("effects.setParam", json!({"clip": clip, "effect": "cinema_look", "param": "film_look", "value": 0.0})).unwrap();
+    assert_eq!(before, frame(&mut s, "32-cinema-look-zero"));
+    // the letterbox choice crops to 2.39:1: 960x540 becomes a 960x402 picture
+    s.execute("effects.setParam", json!({"clip": clip, "effect": "cinema_look", "param": "letterbox", "value": 1})).unwrap();
+    let boxed = frame(&mut s, "33-cinema-look-239");
+    let row_black = |y: usize| boxed[(y * W as usize + 480) * 4..(y * W as usize + 480) * 4 + 3] == [0, 0, 0];
+    let picture_rows = (0..H as usize).filter(|y| !row_black(*y)).count();
+    assert!((400..=404).contains(&picture_rows), "{picture_rows} rows of picture");
+    while s.history.undo.len() > undo0 {
+        s.undo().unwrap();
+    }
+    assert_eq!(before, frame(&mut s, "34-cinema-look-undone"));
+}
