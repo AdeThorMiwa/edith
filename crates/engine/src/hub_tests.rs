@@ -42,6 +42,16 @@ fn pixabay_hits(files: &str) -> String {
     )
 }
 
+/// One picture from Commons, only when images were asked for (the answer to a video or sound
+/// search is empty, as Commons's would be for a search with no match).
+fn commons_pages(files: &str) -> String {
+    format!(
+        r#"{{"batchcomplete":true,"query":{{"pages":[{{"pageid":300,"title":"File:Misty pier.jpg","index":1,"imageinfo":[{{"size":5000,"width":3000,"height":2000,
+        "url":"{files}/orig.jpg","thumburl":"{files}/thumb/1920px-Misty_pier.jpg","thumbwidth":1920,"thumbheight":1280,"descriptionurl":"https://commons.wikimedia.org/wiki/File:Misty_pier.jpg",
+        "mime":"image/jpeg","mediatype":"BITMAP","extmetadata":{{"LicenseShortName":{{"value":"CC BY 4.0"}},"LicenseUrl":{{"value":"https://creativecommons.org/licenses/by/4.0/"}},"Artist":{{"value":"<a href=\"x\">Wiki Person</a>"}},"AttributionRequired":{{"value":"true"}}}}}}]}}]}}}}"#
+    )
+}
+
 fn freesound_results(files: &str) -> String {
     format!(
         r#"{{"count":1,"results":[{{"id":77,"name":"Fog horn","username":"sound man","license":"https://creativecommons.org/licenses/by/4.0/","url":"https://freesound.org/s/77/","duration":8,"tags":["fog"],"previews":{{"preview-hq-mp3":"{files}/horn.mp3"}}}}]}}"#
@@ -70,6 +80,14 @@ fn rig(broken: Option<&'static str>) -> (Session, Rig) {
                 return response(401, &[], format!("bad key {KEY}").as_bytes());
             }
             json(pixabay_hits(&furl))
+        } else if req.starts_with("GET /w/api.php") {
+            if broken == Some("wikimedia") {
+                return response(500, &[], b"");
+            }
+            // only a search for pictures finds the picture
+            json(if req.contains("bitmap") { commons_pages(&furl) } else { r#"{"batchcomplete":true}"#.to_string() })
+        } else if req.starts_with("GET /advancedsearch.php") {
+            json(r#"{"response":{"numFound":0,"docs":[]}}"#.to_string())
         } else if req.starts_with("GET /apiv2/search") {
             if broken == Some("freesound") {
                 return response(401, &[], b"");
@@ -104,8 +122,11 @@ fn the_providers_are_listed_with_what_each_offers() {
     let mut s = Session::default();
     let p = s.execute("hub.providers", json!({})).unwrap();
     let list = p["providers"].as_array().unwrap();
-    assert_eq!(list.iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay", "freesound"]);
-    assert_eq!(list[2]["kinds"], json!(["audio"]));
+    assert_eq!(list.iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay", "wikimedia", "archive", "freesound"]);
+    assert_eq!(list[4]["kinds"], json!(["audio"]));
+    // the open sources need no key and are always ready; the others say whether a key is stored
+    assert_eq!((list[2]["needsKey"].clone(), list[2]["connected"].clone(), list[3]["connected"].clone()), (json!(false), json!(true), json!(true)));
+    assert_eq!(list[0]["needsKey"], true);
     assert!(list[0]["credit"].as_str().unwrap().contains("Pexels") && list[0]["keyUrl"].as_str().unwrap().starts_with("https://"));
 }
 
@@ -114,14 +135,14 @@ fn a_search_asks_every_source_that_offers_the_kinds_and_interleaves_the_answers(
     let (mut s, rig) = rig(None);
     let r = search(&mut s, json!({"text": "a pier at dawn", "kinds": ["image", "audio"]}));
     assert_eq!(r["running"], false);
-    assert_eq!(ids(&r), ["pexels:photo-1", "pixabay:image-9", "freesound:77", "pexels:photo-2"], "one from each source in turn: {r}");
+    assert_eq!(ids(&r), ["pexels:photo-1", "pixabay:image-9", "wikimedia:300", "freesound:77", "pexels:photo-2"], "one from each source in turn: {r}");
     let states: Vec<&str> = r["sources"].as_array().unwrap().iter().map(|x| x["state"].as_str().unwrap()).collect();
-    assert_eq!(states, ["done", "done", "done"]);
+    assert_eq!(states, ["done", "done", "done", "done", "done"], "the open sources answered too, and the Archive had nothing");
     let first = &r["candidates"][0];
     assert_eq!((first["rights"]["name"].clone(), first["author"].clone()), (json!("Pexels License"), json!("Sam")));
     // a search for video only skips the audio site
     let v = search(&mut s, json!({"text": "fog", "kinds": ["video"]}));
-    assert_eq!(v["sources"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay"]);
+    assert_eq!(v["sources"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay", "wikimedia", "archive"]);
     // naming one source asks only it
     let hits = rig.sites.hits();
     let one = search(&mut s, json!({"text": "pier", "kinds": ["image"], "sources": ["pixabay"]}));
@@ -137,7 +158,7 @@ fn a_search_asks_every_source_that_offers_the_kinds_and_interleaves_the_answers(
 fn one_source_failing_does_not_hide_the_others() {
     let (mut s, rig) = rig(Some("pixabay"));
     let r = search(&mut s, json!({"text": "pier", "kinds": ["image"]}));
-    assert_eq!(ids(&r), ["pexels:photo-1", "pexels:photo-2"]);
+    assert_eq!(ids(&r), ["pexels:photo-1", "wikimedia:300", "pexels:photo-2"]);
     let pixabay = &r["sources"][1];
     assert_eq!(pixabay["state"], "failed");
     assert!(pixabay["message"].as_str().unwrap().contains("refused the key"), "{pixabay}");

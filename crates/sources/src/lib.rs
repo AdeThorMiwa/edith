@@ -14,7 +14,9 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+pub mod archive;
 pub mod catalog;
+mod cc;
 #[cfg(feature = "net")]
 pub mod client;
 pub mod freesound;
@@ -23,6 +25,7 @@ pub mod pixabay;
 pub mod query;
 pub mod types;
 mod util;
+pub mod wikimedia;
 
 pub use catalog::{SOURCES, SourceInfo, info};
 pub use types::{Candidate, Download, Kind, Orientation, Page, Request, Rights, SourceError};

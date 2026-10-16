@@ -44,7 +44,7 @@ pub fn encode(s: &str) -> String {
 
 /// `base` with `params` as a query string.
 pub fn with_query(base: &str, params: &[(&str, String)]) -> String {
-    let q: Vec<String> = params.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
+    let q: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", encode(k), encode(v))).collect();
     format!("{base}?{}", q.join("&"))
 }
 
@@ -74,6 +74,18 @@ pub fn apply_request(page: &mut Page, req: &Request) {
             (Some(h), Some(min)) => h >= min,
             _ => true,
         };
-        long_enough && short_enough && wide && tall
+        // a shape is judged only when both sides are known
+        let shaped = match (req.orientation, c.width, c.height) {
+            (Some(o), Some(w), Some(h)) => {
+                let (w, h) = (i64::from(w), i64::from(h));
+                match o {
+                    crate::types::Orientation::Landscape => w > h,
+                    crate::types::Orientation::Portrait => h > w,
+                    crate::types::Orientation::Square => (w - h).abs() * 10 <= w.max(h),
+                }
+            }
+            _ => true,
+        };
+        long_enough && short_enough && wide && tall && shaped
     });
 }

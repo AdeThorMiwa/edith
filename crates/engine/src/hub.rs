@@ -268,7 +268,7 @@ fn providers(_s: &mut Session, _p: &Value) -> Result<Value> {
             let service = edith_net::services::find(i.id);
             json!({
                 "id": i.id, "label": i.label, "kinds": i.kinds.iter().map(|k| k.name()).collect::<Vec<_>>(),
-                "connected": crate::net_commands::connected(i.id), "keyUrl": service.and_then(|s| s.key_url),
+                "connected": if i.needs_key { crate::net_commands::connected(i.id) } else { Some(true) }, "needsKey": i.needs_key, "keyUrl": service.and_then(|s| s.key_url),
                 "credit": i.credit, "creditUrl": i.credit_url,
             })
         })

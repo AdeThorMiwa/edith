@@ -10,28 +10,9 @@ use serde_json::Value;
 
 pub const ID: &str = "freesound";
 
-/// What a Creative Commons licence (as Freesound writes it, a name or an address) allows.
+/// What a Freesound licence (a name or a Creative Commons address) allows.
 pub fn rights_of(license: &str) -> Rights {
-    let l = license.trim().to_ascii_lowercase();
-    let url = if l.starts_with("http") { license.trim().to_string() } else { String::new() };
-    let (name, commercial, credit) = if l.contains("publicdomain/zero") || l.contains("/zero/") || l == "creative commons 0" || l == "cc0" {
-        ("CC0 1.0", Some(true), Some(false))
-    } else if l.contains("/by-nc-") || l.contains("/by-nc/") || l.contains("noncommercial") {
-        ("CC BY-NC", Some(false), Some(true))
-    } else if l.contains("/by/") || l == "attribution" {
-        ("CC BY", Some(true), Some(true))
-    } else {
-        // sampling+, ShareAlike variants we do not model, or anything new: not claimed
-        ("", None, None)
-    };
-    // the version is in the address: .../by/4.0/ → "CC BY 4.0"
-    let version = url.split('/').rfind(|p| p.chars().next().is_some_and(|c| c.is_ascii_digit()) && p.contains('.')).unwrap_or("");
-    let name = if name.is_empty() || version.is_empty() || name.ends_with(version) { name.to_string() } else { format!("{name} {version}") };
-    Rights { name: if name.is_empty() { text_name(license) } else { name }, url, commercial, attribution_required: credit }
-}
-
-fn text_name(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).take(80).collect()
+    crate::cc::rights(license)
 }
 
 /// The address to ask for sounds; `None` when the request does not want audio.
@@ -88,6 +69,7 @@ fn one(v: &Value) -> Option<Candidate> {
             height: None,
             bytes: None,
             note: "Preview quality (MP3). The original file needs a Freesound sign-in.".into(),
+            resolve: false,
         }),
     })
 }

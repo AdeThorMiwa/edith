@@ -138,6 +138,10 @@ pub struct Download {
     pub bytes: Option<u64>,
     /// What this file is when it is not the original (`preview quality`), shown to the person.
     pub note: String,
+    /// `url` is not the file but a description of the item (Internet Archive): the best file is
+    /// looked up and chosen when the person adds it.
+    #[serde(default)]
+    pub resolve: bool,
 }
 
 /// One result: enough to show it, decide on it, and (once chosen) fetch it and record where it

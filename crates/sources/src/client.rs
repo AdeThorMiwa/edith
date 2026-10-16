@@ -2,8 +2,9 @@
 //! chosen file, all through `edith-net` (Offline mode, the redacted request log, timeouts, size caps,
 //! per-site rate limits). A site's key is read from a [`Keys`] source on every request and never kept.
 
+use crate::catalog::info;
 use crate::types::{Candidate, Kind, Page, Request, SourceError};
-use crate::{freesound, pexels, pixabay};
+use crate::{archive, freesound, pexels, pixabay, wikimedia};
 use edith_net::NetError;
 use edith_net::http::{Client, Downloaded, Request as NetRequest};
 use std::path::Path;
@@ -71,11 +72,15 @@ impl Sources {
     }
 
     fn get(&self, source: &str, url: &str, headers: &[(&str, &str)], cancel: &Cancel) -> Result<Vec<u8>, SourceError> {
+        self.get_up_to(source, url, headers, cancel, 4 * 1024 * 1024)
+    }
+
+    fn get_up_to(&self, source: &str, url: &str, headers: &[(&str, &str)], cancel: &Cancel, max: u64) -> Result<Vec<u8>, SourceError> {
         let mut req = NetRequest::get(url).cancel_with(cancel.clone());
         for (k, v) in headers {
             req = req.header(k, v);
         }
-        req.max_bytes = Some(4 * 1024 * 1024);
+        req.max_bytes = Some(max);
         let resp = self.client.send(&req).map_err(|e| if e == NetError::Cancelled { SourceError::Cancelled } else { SourceError::Net(e) })?;
         if !resp.ok() {
             return Err(status_error(source, resp.status));
@@ -86,7 +91,8 @@ impl Sources {
     /// One source's answer to `req` for every kind it has that was asked for, as one page.
     pub fn search(&self, source: &str, req: &Request, cancel: &Cancel) -> Result<Page, SourceError> {
         let req = req.clone().sanitized();
-        let key = (self.keys)(source)?;
+        // the open sources (Wikimedia Commons, the Internet Archive) need no key
+        let key = if info(source).is_some_and(|i| i.needs_key) { (self.keys)(source)? } else { Zeroizing::new(String::new()) };
         let mut page = Page::default();
         match source {
             "pexels" => {
@@ -116,6 +122,23 @@ impl Sources {
                     page.candidates.extend(p.candidates);
                 }
             }
+            "wikimedia" => {
+                for kind in [Kind::Image, Kind::Video, Kind::Audio].into_iter().filter(|k| req.wants(*k)) {
+                    let Some(url) = wikimedia::search_url(&req, kind) else { continue };
+                    let body = self.get(source, &self.at(url), &[], cancel)?;
+                    let p = wikimedia::parse(&body)?;
+                    page.total += p.total;
+                    page.candidates.extend(p.candidates);
+                }
+            }
+            "archive" => {
+                if let Some(url) = archive::search_url(&req) {
+                    let body = self.get(source, &self.at(url), &[], cancel)?;
+                    let p = archive::parse(&body)?;
+                    page.total += p.total;
+                    page.candidates.extend(p.candidates);
+                }
+            }
             other => return Err(SourceError::Unavailable(format!("`{}` is not a media source", other.chars().take(30).collect::<String>()))),
         }
         crate::apply_request(&mut page, &req);
@@ -137,8 +160,17 @@ impl Sources {
     pub fn download(&self, c: &Candidate, path: &Path, cancel: &Cancel, progress: impl FnMut(u64, Option<u64>)) -> Result<Downloaded, SourceError> {
         let d = c.download.as_ref().ok_or_else(|| SourceError::Unavailable("this result has no file to download".to_string()))?;
         let max = MAX_BYTES.iter().find(|(k, _)| *k == c.kind).map_or(100 * 1024 * 1024, |(_, m)| *m);
-        let mut req = NetRequest::get(&d.url).cancel_with(cancel.clone());
-        // Freesound's preview files are on its own file server and need no key
+        // An Internet Archive result names the item, not a file: pick the best file now.
+        let url = if d.resolve {
+            let id = c.id.strip_prefix("archive:").unwrap_or("");
+            let body = self.get_up_to(&c.source, &self.at(d.url.clone()), &[], cancel, 16 * 1024 * 1024)?;
+            let (name, _) = archive::pick_file(&body, c.kind, max)?;
+            self.at(archive::file_url(id, &name).ok_or_else(|| SourceError::Unavailable("the Internet Archive item has an unusable name".to_string()))?)
+        } else {
+            d.url.clone()
+        };
+        let mut req = NetRequest::get(&url).cancel_with(cancel.clone());
+        // the files of every source are fetched without the site's key
         req.timeout = Some(std::time::Duration::from_secs(1800));
         let done =
             self.client.download(&req, path, max, progress).map_err(|e| if e == NetError::Cancelled { SourceError::Cancelled } else { SourceError::Net(e) })?;
@@ -293,13 +325,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn the_open_sources_need_no_key_and_send_none() {
+        let wiki = r#"{"query":{"pages":[{"pageid":5,"title":"File:Fog.jpg","index":1,"imageinfo":[{"url":"https://upload.wikimedia.org/a/Fog.jpg","thumburl":"https://upload.wikimedia.org/thumb/a/Fog.jpg/1920px-Fog.jpg","mediatype":"BITMAP","descriptionurl":"https://commons.wikimedia.org/wiki/File:Fog.jpg","extmetadata":{"LicenseShortName":{"value":"Public domain"}}}]}]}}"#;
+        let archive = r#"{"response":{"numFound":1,"docs":[{"identifier":"fog_film","title":"Fog","licenseurl":"http://creativecommons.org/licenses/publicdomain/","runtime":"10:00","mediatype":"movies"}]}}"#;
+        let s = serve(move |_, req| response(200, &[], if req.starts_with("GET /w/api.php") { wiki } else { archive }.as_bytes()));
+        let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
+        let sources = Sources::new(client(), no_key).with_origin(&s.url);
+        let w = sources.search("wikimedia", &ask(&[Kind::Image]), &cancel()).unwrap();
+        assert_eq!(w.candidates.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["wikimedia:5"]);
+        let a = sources.search("archive", &ask(&[Kind::Video]), &cancel()).unwrap();
+        assert_eq!(a.candidates.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["archive:fog_film"]);
+        assert!(s.requests.lock().unwrap().iter().all(|r| !r.to_ascii_lowercase().contains("authorization")), "no key was sent");
+        assert!(s.requests.lock().unwrap()[0].starts_with("GET /w/api.php?action=query"), "{}", s.requests.lock().unwrap()[0]);
+    }
+
+    #[test]
+    fn an_archive_item_is_resolved_to_its_best_file_when_it_is_added() {
+        let item = r#"{"files":[{"name":"Fog_512kb.mp4","format":"512Kb MPEG4","size":"5000"},{"name":"Fog.mp4","format":"h.264","size":"9000"},{"name":"Fog.ogv","format":"Ogg Video","size":"99999"}]}"#;
+        let s = serve(move |_, req| {
+            if req.starts_with("GET /metadata/fog_film") {
+                response(200, &[], item.as_bytes())
+            } else if req.starts_with("GET /download/fog_film/Fog.mp4") {
+                response(200, &[], &[1u8; 9000])
+            } else {
+                response(404, &[], b"")
+            }
+        });
+        let sources = Sources::new(client(), keys()).with_origin(&s.url);
+        let doc = r#"{"response":{"numFound":1,"docs":[{"identifier":"fog_film","title":"Fog","licenseurl":"http://creativecommons.org/licenses/publicdomain/","mediatype":"movies"}]}}"#;
+        let c = crate::archive::parse(doc.as_bytes()).unwrap().candidates.remove(0);
+        let dir = std::env::temp_dir().join(format!("edith-archive-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = sources.download(&c, &dir.join("fog.mp4"), &cancel(), |_, _| {}).unwrap();
+        assert_eq!(d.bytes, 9000, "the h.264 copy, not the small or the ogv");
+        let seen: Vec<String> = s.requests.lock().unwrap().iter().map(|r| r.lines().next().unwrap_or("").to_string()).collect();
+        assert!(seen[0].starts_with("GET /metadata/fog_film") && seen[1].starts_with("GET /download/fog_film/Fog.mp4"), "{seen:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Searches each site with the keys stored in the keychain (one request each, nothing downloaded).
     /// `cargo test -p edith-sources --features keychain -- --ignored real_sites`
     #[test]
     #[ignore = "uses the real network and the stored Pexels, Pixabay and Freesound keys"]
     fn real_sites_answer_a_search_in_the_shape_we_read() {
         let sources = Sources::new(Arc::new(Client::new(ClientConfig::default(), Arc::new(NetState::new()))), keychain_keys());
-        for (id, kinds) in [("pexels", vec![Kind::Video, Kind::Image]), ("pixabay", vec![Kind::Video, Kind::Image]), ("freesound", vec![Kind::Audio])] {
+        for (id, kinds) in [
+            ("pexels", vec![Kind::Video, Kind::Image]),
+            ("pixabay", vec![Kind::Video, Kind::Image]),
+            ("wikimedia", vec![Kind::Image, Kind::Video, Kind::Audio]),
+            ("archive", vec![Kind::Video, Kind::Audio]),
+            ("freesound", vec![Kind::Audio]),
+        ] {
             let req = Request { text: "fog over a valley".into(), kinds: kinds.clone(), count: 5, ..Request::default() };
             match sources.search(id, &req, &cancel()) {
                 Ok(p) => {

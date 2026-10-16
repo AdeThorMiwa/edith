@@ -87,6 +87,7 @@ fn video(v: &Value) -> Option<Candidate> {
             height: dim(f, "height"),
             bytes: None,
             note: String::new(),
+            resolve: false,
         }),
     })
 }
@@ -109,7 +110,7 @@ fn photo(v: &Value) -> Option<Candidate> {
         seconds: None,
         tags: Vec::new(),
         rights: rights(),
-        download: big.map(|u| Download { url: u, ext: "jpg".into(), width: None, height: None, bytes: None, note: String::new() }),
+        download: big.map(|u| Download { url: u, ext: "jpg".into(), width: None, height: None, bytes: None, note: String::new(), resolve: false }),
     })
 }
 
