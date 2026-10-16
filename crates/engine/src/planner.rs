@@ -16,6 +16,7 @@
 //! | `planner.move {beat\|section\|shot, to?, at}` | reorder, or move a beat to another section or a shot to another beat |
 //! | `planner.delete {section\|beat\|shot}` | remove one |
 //! | `planner.link {beat, start, duration \| clear}` | tie a beat to a range of the timeline |
+//! | `planner.buildSkeleton {start?, track?}` | lay the plan on the timeline: a range marker for every beat and an offline placeholder clip for every shot that has no source yet |
 //! | `planner.export {path?}`, `planner.import {path\|plan}` | the plan as JSON, and back |
 //!
 //! Every change is one undo step. Everything from a parameter, a pack file, an import or a project
@@ -30,7 +31,7 @@ use std::path::PathBuf;
 
 use edith_planner::model::{MAX_INTENSITY, MAX_NAME, MAX_NARRATION, MAX_NOTE, MAX_PURPOSE, MAX_TARGET, MAX_TITLE};
 use edith_planner::{Beat, FormatPack, Link, Planner, Section, Shot, Status, builtin_packs};
-use filmcraft_project::Project;
+use filmcraft_project::{ClipId, Label, Marker, MarkerId, MarkerKind, Project};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
 
@@ -306,6 +307,145 @@ fn packs_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
         })
         .collect();
     Ok(json!({"packs": rows, "problems": problems, "folder": packs_dir(s).map(|d| d.to_string_lossy().into_owned())}))
+}
+
+// ---------------------------------------------------------------------------- skeleton
+
+/// Where each beat and each shot without a source goes, from `start`, end to end.
+struct Layout {
+    beats: Vec<(u64, Tick, Tick)>,
+    /// (shot id, start, length) for shots with no source.
+    shots: Vec<(u64, Tick, Tick)>,
+}
+
+fn layout(plan: &Planner, start: Tick) -> Option<Layout> {
+    let mut at = start.0;
+    let mut out = Layout { beats: Vec::new(), shots: Vec::new() };
+    for b in plan.beats() {
+        let len = b.target.0.max(0);
+        out.beats.push((b.id, Tick(at), Tick(len)));
+        if len > 0 && !b.shots.is_empty() {
+            // shots share the beat: by their own lengths when every one has one, else equally
+            let all_set = b.shots.iter().all(|x| x.target.0 > 0);
+            let weights: Vec<u64> = b.shots.iter().map(|x| if all_set { x.target.0 as u64 } else { 1 }).collect();
+            let parts = edith_planner::split(len, &weights);
+            let mut cursor = at;
+            for (x, part) in b.shots.iter().zip(parts) {
+                if x.source.is_none() && part > 0 {
+                    out.shots.push((x.id, Tick(cursor), Tick(part)));
+                }
+                cursor = cursor.checked_add(part)?;
+            }
+        }
+        at = at.checked_add(len)?;
+    }
+    Some(out)
+}
+
+fn build_skeleton(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.buildSkeleton";
+    let plan = plan_of(s, cmd)?;
+    if plan.beat_count() == 0 {
+        return Err(bad(cmd, "the plan has no beats yet"));
+    }
+    let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
+    let start = length(p, "start", cmd)?.unwrap_or(Tick::ZERO);
+    if start > MAX_TARGET {
+        return Err(bad(cmd, "`start` is too far along the timeline"));
+    }
+    let lay = layout(&plan, start)
+        .filter(|l| l.beats.last().is_none_or(|(_, st, len)| st.0.saturating_add(len.0) <= 2 * MAX_TARGET.0))
+        .ok_or_else(|| bad(cmd, "the plan is longer than the timeline can hold"))?;
+    // the placeholders go on one video track that is free where they land
+    let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    // shots that already have a placeholder still on the timeline are left where they are
+    let missing: Vec<(u64, Tick, Tick)> = lay
+        .shots
+        .iter()
+        .copied()
+        .filter(|(id, _, _)| {
+            let clip = plan.find_shot(*id).and_then(|(a, b, c)| plan.sections.get(a)?.beats.get(b)?.shots.get(c)?.clip);
+            !clip.is_some_and(|c| seq.find_item(ClipId(c)).is_some())
+        })
+        .collect();
+    let free = |t: &filmcraft_project::Track| {
+        !t.locked && !t.items.iter().any(|it| missing.iter().any(|(_, st, len)| it.start < Tick(st.0.saturating_add(len.0)) && *st < it.end()))
+    };
+    let chosen: Option<String> = match p.get("track").filter(|v| !v.is_null()) {
+        Some(v) => {
+            let name = v.as_str().ok_or_else(|| bad(cmd, "`track` must be a video track name such as \"V2\""))?;
+            let i = (1..=seq.video_tracks.len()).find(|n| format!("V{n}").eq_ignore_ascii_case(name.trim()));
+            let t = i.and_then(|n| seq.video_tracks.get(n - 1)).ok_or_else(|| bad(cmd, format!("no video track {name}")))?;
+            if t.locked {
+                return Err(bad(cmd, format!("{name} is locked")));
+            }
+            if !missing.is_empty() && !free(t) {
+                return Err(bad(cmd, format!("{name} already has clips where the placeholders would go; choose another track, or leave `track` out")));
+            }
+            Some(format!("V{}", i.unwrap_or(1)))
+        }
+        None => seq.video_tracks.iter().position(&free).map(|i| format!("V{}", i + 1)),
+    };
+    let old_markers: Vec<u64> = plan.beats().filter_map(|b| b.link.and_then(|l| l.marker)).collect();
+    let beats = lay.beats.clone();
+    let shots = lay.shots.clone();
+    let made = s.edit_group("Build Plan Skeleton", |s| {
+        // 1. one range marker per beat: the ones made last time are moved (replaced), not doubled
+        let ids: Vec<u64> = s.edit_sequence("Plan Markers", |q, ctx, _| {
+            q.markers.retain(|m| !old_markers.contains(&m.id.0));
+            let mut ids = Vec::new();
+            for (bid, st, len) in &beats {
+                let id = MarkerId(ctx.alloc());
+                let (name, comment) = plan.beat_ref(*bid).map(|b| (format!("Beat: {}", b.name), b.purpose.clone())).unwrap_or_default();
+                q.markers.push(Marker { id, start: *st, duration: *len, name, comment, kind: MarkerKind::Comment, color: Label::Green });
+                ids.push(id.0);
+            }
+            q.markers.sort_by_key(|m| m.start);
+            Ok(ids)
+        })?;
+        // 2. an offline placeholder for each shot that has none on the timeline
+        let mut clips: Vec<(u64, u64)> = Vec::new();
+        if !missing.is_empty() {
+            let track = match &chosen {
+                Some(t) => t.clone(),
+                None => {
+                    let before = s.active_sequence().map_or(0, |q| q.video_tracks.len());
+                    s.execute("sequence.addTracks", json!({"video": 1, "audio": 0}))?;
+                    format!("V{}", before + 1)
+                }
+            };
+            for (sid, st, len) in shots.iter().filter(|(id, _, _)| missing.iter().any(|(m, _, _)| m == id)) {
+                let intent =
+                    plan.find_shot(*sid).and_then(|(a, b, c)| plan.sections.get(a)?.beats.get(b)?.shots.get(c)).map(|x| x.intent.clone()).unwrap_or_default();
+                let name: String = if intent.trim().is_empty() { "Shot".into() } else { intent.chars().take(60).collect() };
+                let item =
+                    s.execute("file.newOfflineFile", json!({"fileName": format!("plan-shot-{sid}.mov"), "name": name, "seconds": secs(*len), "audio": false}))?;
+                let item = item["item"].as_u64().ok_or_else(|| EngineError::Other("the placeholder was not made".into()))?;
+                let placed = s.execute("timeline.place", json!({"item": item, "track": track, "time": st.0, "audio": false}))?;
+                let clip = placed["clips"][0].as_u64().ok_or_else(|| EngineError::Other("the placeholder was not placed".into()))?;
+                clips.push((*sid, clip));
+            }
+        }
+        // 3. the plan remembers what was made
+        edit(s, cmd, "Plan Skeleton Links", |pl| {
+            for ((bid, st, len), mid) in beats.iter().zip(&ids) {
+                if let Some(b) = pl.beat_mut(*bid) {
+                    b.link = Some(Link { start: *st, duration: *len, marker: Some(*mid) });
+                }
+            }
+            for (sid, clip) in &clips {
+                if let Some((a, b, c)) = pl.find_shot(*sid)
+                    && let Some(x) = pl.sections.get_mut(a).and_then(|s| s.beats.get_mut(b)).and_then(|b| b.shots.get_mut(c))
+                {
+                    x.clip = Some(*clip);
+                }
+            }
+            Ok(())
+        })?;
+        Ok((ids.len(), clips.len()))
+    })?;
+    let _ = seq_id;
+    Ok(json!({"markers": made.0, "placeholders": made.1, "start": start.0, "end": lay.beats.last().map(|(_, st, len)| st.0 + len.0), "track": chosen}))
 }
 
 // ---------------------------------------------------------------------------- commands
@@ -701,6 +841,7 @@ pub fn commands() -> Vec<CommandSpec> {
             link,
             true,
         ),
+        spec("planner.buildSkeleton", "Build Plan Skeleton", r#"{"startSeconds"|"startTicks":n?,"track":"V2"?}"#, build_skeleton, true),
         spec("planner.export", "Export Plan", r#"{"path":str?}"#, export, false),
         spec("planner.import", "Import Plan", r#"{"path":str?,"plan":object?}"#, import, true),
     ]

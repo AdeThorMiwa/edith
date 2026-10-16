@@ -392,3 +392,182 @@ fn the_plan_cannot_grow_past_its_limits() {
     }
     assert!(s.execute("planner.addShot", json!({"beat": b})).is_err());
 }
+
+// ---------------------------------------------------------------------------- the skeleton
+
+fn sequence() -> Session {
+    let mut s = Session::default();
+    s.execute("file.newSequence", json!({"width": 320, "height": 180, "fps": 24})).unwrap();
+    s
+}
+
+fn markers(s: &Session) -> Vec<(i64, i64, String, String, u64)> {
+    s.active_sequence().unwrap().markers.iter().map(|m| (m.start.0, m.duration.0, m.name.clone(), m.comment.clone(), m.id.0)).collect()
+}
+
+fn clips(s: &Session) -> Vec<(usize, u64, i64, i64)> {
+    s.active_sequence().unwrap().video_tracks.iter().enumerate().flat_map(|(i, t)| t.items.iter().map(move |c| (i, c.id.0, c.start.0, c.duration.0))).collect()
+}
+
+#[test]
+fn the_skeleton_puts_one_range_marker_per_beat_at_the_exact_ticks_and_building_again_moves_them() {
+    let mut s = sequence();
+    mystery(&mut s, 10.0);
+    let undo = s.history.undo.len();
+    let r = s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!((r["markers"].clone(), r["placeholders"].clone()), (json!(12), json!(0)));
+    assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
+    // every beat's marker starts where the beats before it end, and lasts its length
+    let p = plan(&s);
+    let m = markers(&s);
+    assert_eq!(m.len(), 12);
+    let mut at = 0i64;
+    for (b, (start, dur, name, comment, _)) in p.beats().zip(&m) {
+        assert_eq!((*start, *dur), (at, b.target.0), "{}", b.name);
+        assert_eq!(name, &format!("Beat: {}", b.name));
+        assert_eq!(comment, &b.purpose);
+        let l = b.link.unwrap();
+        assert_eq!((l.start.0, l.duration.0), (at, b.target.0));
+        assert!(l.marker.is_some());
+        at += b.target.0;
+    }
+    assert_eq!(at, 10 * 60 * TICKS_PER_SECOND, "the markers cover the whole video, to the tick");
+    // building again moves them: the same number of markers, none doubled
+    s.execute("planner.buildSkeleton", json!({"startSeconds": 30})).unwrap();
+    let m2 = markers(&s);
+    assert_eq!(m2.len(), 12);
+    assert_eq!(m2[0].0, 30 * TICKS_PER_SECOND);
+    assert_eq!(m2[1].0, 30 * TICKS_PER_SECOND + m[0].1);
+    // markers you added yourself are not touched
+    s.execute("markers.add", json!({"seconds": 2.0, "name": "Mine"})).unwrap();
+    s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!(markers(&s).len(), 13);
+    assert!(markers(&s).iter().any(|x| x.2 == "Mine"));
+    // undo takes the last build away, redo brings it back
+    s.undo().unwrap();
+    assert_eq!(markers(&s).len(), 13);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(markers(&s).len(), 12);
+}
+
+#[test]
+fn placeholders_are_made_for_shots_without_a_source_once_and_left_alone_after() {
+    let mut s = sequence();
+    mystery(&mut s, 2.0);
+    let cold = beat_id(&s, "Cold open");
+    let a = s.execute("planner.addShot", json!({"beat": cold, "intent": "A bell in the fog"})).unwrap()["shot"].as_u64().unwrap();
+    let b = s.execute("planner.addShot", json!({"beat": cold, "intent": "A hand on the rope"})).unwrap()["shot"].as_u64().unwrap();
+    let sourced = s.execute("planner.addShot", json!({"beat": cold, "intent": "Already have this", "source": 7})).unwrap()["shot"].as_u64().unwrap();
+    let r = s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!(r["placeholders"], 2, "the shot with a source gets none");
+    let c = clips(&s);
+    assert_eq!(c.len(), 2);
+    assert!(c.iter().all(|x| x.0 == 0), "on the first free video track");
+    // inside the beat, one after the other
+    let beat_len = plan(&s).beat_ref(cold).unwrap().target.0;
+    assert!(c.iter().all(|x| x.2 >= 0 && x.2 + x.3 <= beat_len + TICKS_PER_SECOND), "{c:?} within {beat_len}");
+    assert!(c[0].2 < c[1].2);
+    let names: Vec<String> = s.project.items.values().map(|i| i.name.clone()).collect();
+    assert!(names.iter().any(|n| n == "A bell in the fog") && names.iter().any(|n| n == "A hand on the rope"));
+    assert!(!names.iter().any(|n| n == "Already have this"));
+    let p = plan(&s);
+    let (xa, xb) = (p.beat_ref(cold).unwrap().shots[0].clone(), p.beat_ref(cold).unwrap().shots[1].clone());
+    assert_eq!((xa.id, xb.id), (a, b));
+    assert!(xa.clip.is_some() && xb.clip.is_some() && p.beat_ref(cold).unwrap().shots[2].clip.is_none());
+    assert_eq!(p.beat_ref(cold).unwrap().shots[2].id, sourced);
+    // building again makes nothing new and leaves the clips where they are
+    s.execute("planner.buildSkeleton", json!({"startSeconds": 5})).unwrap();
+    assert_eq!(clips(&s), c, "the placeholders were not touched or doubled");
+    // a placeholder you deleted comes back
+    let gone = xa.clip.unwrap();
+    s.execute("edit.clear", json!({"clips": [gone]})).unwrap();
+    assert_eq!(clips(&s).len(), 1);
+    let r = s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!(r["placeholders"], 1);
+    assert_eq!(clips(&s).len(), 2);
+}
+
+#[test]
+fn one_build_is_one_undo_step_that_takes_back_markers_placeholders_and_links() {
+    let mut s = sequence();
+    mystery(&mut s, 2.0);
+    s.execute("planner.addShot", json!({"beat": beat_id(&s, "Cold open"), "intent": "A bell"})).unwrap();
+    let before = (*s.project).clone();
+    let undo = s.history.undo.len();
+    s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!(s.history.undo.len(), undo + 1);
+    assert!(!clips(&s).is_empty() && !markers(&s).is_empty());
+    s.undo().unwrap();
+    assert!(clips(&s).is_empty() && markers(&s).is_empty());
+    assert_eq!(plan(&s), edith_planner::Planner { ..get(&before).unwrap() }, "the plan has no links again");
+    s.redo().unwrap();
+    assert!(!clips(&s).is_empty() && !markers(&s).is_empty());
+}
+
+#[test]
+fn placeholders_never_overwrite_your_clips_and_a_named_busy_or_locked_track_is_refused() {
+    let mut s = sequence();
+    mystery(&mut s, 2.0);
+    s.execute("planner.addShot", json!({"beat": beat_id(&s, "Cold open"), "intent": "A bell"})).unwrap();
+    // something of yours on V1 where the placeholder would go
+    let item = s.execute("file.newOfflineFile", json!({"seconds": 20, "audio": false, "name": "Mine"})).unwrap()["item"].as_u64().unwrap();
+    s.execute("timeline.place", json!({"item": item, "track": "V1", "time": 0, "audio": false})).unwrap();
+    let mine = clips(&s);
+    assert_eq!(mine.len(), 1);
+    let r = s.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!(r["track"], "V2", "a new track, not V1");
+    let c = clips(&s);
+    assert_eq!(c.len(), 2);
+    assert!(c.contains(&mine[0]), "your clip is untouched");
+    assert!(c.iter().any(|x| x.0 == 1));
+    // asking for the busy track by name is refused
+    let mut t = sequence();
+    mystery(&mut t, 2.0);
+    t.execute("planner.addShot", json!({"beat": beat_id(&t, "Cold open"), "intent": "A bell"})).unwrap();
+    let item = t.execute("file.newOfflineFile", json!({"seconds": 20, "audio": false})).unwrap()["item"].as_u64().unwrap();
+    t.execute("timeline.place", json!({"item": item, "track": "V1", "time": 0, "audio": false})).unwrap();
+    let before = (*t.project).clone();
+    assert!(t.execute("planner.buildSkeleton", json!({"track": "V1"})).is_err());
+    assert!(t.execute("planner.buildSkeleton", json!({"track": "V9"})).is_err());
+    assert!(t.execute("planner.buildSkeleton", json!({"track": 5})).is_err());
+    assert_eq!(*t.project, before, "nothing changed");
+    // a locked track
+    let seq_id = t.state.active_sequence.unwrap();
+    std::sync::Arc::make_mut(&mut t.project).sequence_mut(seq_id).unwrap().video_tracks[0].locked = true;
+    assert!(t.execute("planner.buildSkeleton", json!({"track": "V1"})).is_err());
+}
+
+#[test]
+fn the_skeleton_refuses_what_it_cannot_do_and_changes_nothing() {
+    let mut empty = Session::default();
+    assert!(empty.execute("planner.buildSkeleton", json!({})).is_err(), "no plan");
+    let mut s = sequence();
+    s.execute("planner.create", json!({"title": "Blank"})).unwrap();
+    assert!(s.execute("planner.buildSkeleton", json!({})).is_err(), "no beats");
+    mystery_replace(&mut s);
+    let before = (*s.project).clone();
+    for p in
+        [json!({"startSeconds": -1}), json!({"startSeconds": "soon"}), json!({"startTicks": u64::MAX}), json!({"startSeconds": 1e30}), json!({"track": ["V1"]})]
+    {
+        assert!(s.execute("planner.buildSkeleton", p.clone()).is_err(), "accepted {p}");
+    }
+    assert_eq!(*s.project, before);
+    // no sequence open
+    let mut none = demo();
+    mystery(&mut none, 5.0);
+    none.state.active_sequence = None;
+    assert!(none.execute("planner.buildSkeleton", json!({})).is_err());
+    // a zero-length beat still gets a marker but no placeholders
+    let mut z = sequence();
+    z.execute("planner.create", json!({"title": "Z"})).unwrap();
+    let sec = z.execute("planner.addSection", json!({"name": "S"})).unwrap()["section"].as_u64().unwrap();
+    let b = z.execute("planner.addBeat", json!({"section": sec, "name": "Instant", "seconds": 0})).unwrap()["beat"].as_u64().unwrap();
+    z.execute("planner.addShot", json!({"beat": b, "intent": "x"})).unwrap();
+    let r = z.execute("planner.buildSkeleton", json!({})).unwrap();
+    assert_eq!((r["markers"].clone(), r["placeholders"].clone()), (json!(1), json!(0)));
+}
+
+fn mystery_replace(s: &mut Session) {
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 3, "replace": true})).unwrap();
+}
