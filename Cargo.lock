@@ -1489,6 +1489,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "edith-sources"
+version = "0.7.2"
+dependencies = [
+ "edith-net",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "eframe"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
