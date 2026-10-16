@@ -1201,3 +1201,204 @@ mod eval {
         assert!(r["total"].as_u64().unwrap_or(0) >= 8);
     }
 }
+
+// ---- titles, rename, branching (F03.7d) ----------------------------------------------------
+
+fn title_of(s: &mut Session, thread: u64) -> String {
+    s.execute("assistant.threads", json!({})).unwrap()["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == thread)
+        .and_then(|t| t["title"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn ask(s: &mut Session, text: &str, thread: Option<u64>) -> u64 {
+    let mut p = json!({"text": text, "wait": true});
+    if let Some(t) = thread {
+        p["thread"] = json!(t);
+    }
+    s.execute("assistant.send", p).unwrap()["thread"].as_u64().unwrap()
+}
+
+#[test]
+fn the_model_names_a_thread_after_its_first_answer_once() {
+    let mut s = Session::default();
+    let model = scripted(vec![text_reply("The cut is abrupt."), text_reply("\"Why the cut feels abrupt.\"\nextra line"), text_reply("Second answer.")]);
+    s.assistant.use_model(model.clone());
+    s.assistant.allow_titles_with_test_model();
+    let t = ask(&mut s, "why does the cut at 00:42 feel abrupt, I would like to know", None);
+    assert_eq!(title_of(&mut s, t), "Why the cut feels abrupt");
+    let reqs = model.requests();
+    assert_eq!(reqs.len(), 2);
+    assert!(reqs[1].tools.is_empty() && reqs[1].max_output_tokens <= 64, "the title request is small and has no tools");
+    // a second turn does not rename it, and asks for no title
+    ask(&mut s, "and the next one?", Some(t));
+    assert_eq!((title_of(&mut s, t), model.requests().len()), ("Why the cut feels abrupt".to_string(), 3));
+}
+
+#[test]
+fn a_failed_title_or_the_setting_off_or_a_rename_keeps_the_name() {
+    // the title request fails (no reply left for it)
+    let mut s = Session::default();
+    s.assistant.use_model(scripted(vec![text_reply("Answer.")]));
+    s.assistant.allow_titles_with_test_model();
+    let t = ask(&mut s, "first question here", None);
+    assert_eq!(title_of(&mut s, t), "first question here");
+    // the setting is off: only one request is made
+    let mut s = Session::default();
+    let model = scripted(vec![text_reply("Answer."), text_reply("A Title")]);
+    s.assistant.use_model(model.clone());
+    s.assistant.allow_titles_with_test_model();
+    s.execute("assistant.settings", json!({"autoTitle": false})).unwrap();
+    let t = ask(&mut s, "plain question", None);
+    assert_eq!((title_of(&mut s, t), model.requests().len()), ("plain question".to_string(), 1));
+    // a nonsense title is no title
+    for junk in ["", "   ", "\"\"", "...", "\n\n"] {
+        assert_eq!(crate::assistant::clean_title_for_tests(junk), None, "{junk:?}");
+    }
+    assert_eq!(crate::assistant::clean_title_for_tests(&"x".repeat(200)).map(|t| t.len()), Some(60));
+}
+
+#[test]
+fn a_rename_is_validated_kept_saved_and_stops_the_model_renaming() {
+    let dir = tmp("rename");
+    let mut s = Session::default();
+    s.assistant.set_dir(&dir);
+    let model = scripted(vec![text_reply("Answer.")]);
+    s.assistant.use_model(model.clone());
+    s.assistant.allow_titles_with_test_model();
+    let t = s.execute("assistant.newThread", json!({})).unwrap()["thread"].as_u64().unwrap();
+    s.execute("assistant.renameThread", json!({"thread": t, "title": "  My own name  "})).unwrap();
+    ask(&mut s, "hello there", Some(t));
+    assert_eq!((title_of(&mut s, t), model.requests().len()), ("My own name".to_string(), 1), "no title request after a rename");
+    let mut again = Session::default();
+    again.assistant.set_dir(&dir);
+    assert_eq!(title_of(&mut again, t), "My own name");
+    for bad in [
+        json!({}),
+        json!({"thread": t}),
+        json!({"thread": t, "title": ""}),
+        json!({"thread": t, "title": "   "}),
+        json!({"thread": t, "title": 5}),
+        json!({"thread": t, "title": "a\nb"}),
+        json!({"thread": t, "title": "x".repeat(81)}),
+        json!({"thread": 999, "title": "ok"}),
+    ] {
+        assert!(s.execute("assistant.renameThread", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(title_of(&mut s, t), "My own name");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn branching_makes_a_new_thread_up_to_a_question_and_leaves_the_old_one_alone() {
+    let dir = tmp("branch");
+    let mut s = demo();
+    s.assistant.set_dir(&dir);
+    let model = scripted(vec![
+        tool_reply(&[("t1", "sequence_view", json!({}))]),
+        text_reply("It has six clips."),
+        text_reply("It is 26 seconds."),
+        text_reply("Retried answer."),
+        text_reply("Edited answer."),
+    ]);
+    s.assistant.use_model(model.clone());
+    let t = ask(&mut s, "how many clips?", None);
+    ask(&mut s, "how long is it?", Some(t));
+    let before = s.execute("assistant.thread", json!({"thread": t})).unwrap();
+    let old_events = before["events"].as_array().unwrap().len();
+
+    // retry the second question: a new thread with the first exchange, then the same question again
+    let r = s.execute("assistant.branch", json!({"thread": t, "turn": 1, "wait": true})).unwrap();
+    let b = r["thread"].as_u64().unwrap();
+    assert_ne!(b, t);
+    assert_eq!((r["branchedFrom"].clone(), r["text"].clone()), (json!(t), json!("Retried answer.")));
+    let sent = &model.requests()[3];
+    let texts: Vec<String> = sent.messages.iter().map(|m| m.text()).collect();
+    assert!(texts[0].contains("how many clips?") && texts.iter().any(|t| t.contains("six clips")) && texts.last().unwrap().contains("how long is it?"));
+    assert!(!texts.iter().any(|t| t.contains("26 seconds")), "the branch does not carry what came after the cut");
+    let view = s.execute("assistant.thread", json!({"thread": b})).unwrap();
+    let kinds: Vec<&str> = view["events"].as_array().unwrap().iter().filter_map(|e| e["type"].as_str()).collect();
+    assert_eq!(kinds.iter().filter(|k| **k == "user_message").count(), 2, "the shown conversation is the first exchange plus the retried question");
+    // the old thread is exactly as it was
+    let after = s.execute("assistant.thread", json!({"thread": t})).unwrap();
+    assert_eq!(after["events"].as_array().unwrap().len(), old_events);
+    assert_eq!(after["usage"], before["usage"]);
+
+    // edit the first question: a new thread with nothing before it
+    let r = s.execute("assistant.branch", json!({"thread": t, "turn": 0, "text": "how many tracks?", "wait": true})).unwrap();
+    assert_eq!(r["text"], "Edited answer.");
+    assert_eq!(model.requests()[4].messages.len(), 1);
+    assert!(model.requests()[4].messages[0].text().contains("how many tracks?"));
+
+    // a branched thread is saved, and reloads and continues
+    let mut again = Session::default();
+    again.assistant.set_dir(&dir);
+    let listed = again.execute("assistant.threads", json!({})).unwrap();
+    assert_eq!(listed["threads"].as_array().unwrap().len(), 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn branching_refuses_what_it_cannot_do_and_leaves_nothing_behind() {
+    let mut s = demo();
+    s.assistant.use_model(scripted(vec![text_reply("one")]));
+    let t = ask(&mut s, "first", None);
+    let threads = s.assistant.threads.len();
+    for bad in [
+        json!({"thread": t}),
+        json!({"thread": t, "turn": 1}),
+        json!({"thread": t, "turn": -1}),
+        json!({"thread": t, "turn": "x"}),
+        json!({"thread": t, "turn": 0, "text": ""}),
+        json!({"thread": t, "turn": 0, "text": 5}),
+        json!({"thread": 999, "turn": 0}),
+    ] {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.execute("assistant.branch", bad.clone())));
+        assert!(r.is_ok() && r.unwrap().is_err(), "{bad}");
+    }
+    assert_eq!(s.assistant.threads.len(), threads, "a refused branch leaves no thread behind");
+    // one that is still running cannot be branched
+    let mut s2 = demo();
+    s2.assistant.use_model(scripted(vec![text_reply("a")]));
+    let id = ask(&mut s2, "q", None);
+    s2.assistant.force_state_for_tests(id, true, 0);
+    assert!(s2.execute("assistant.branch", json!({"thread": id, "turn": 0})).unwrap_err().to_string().contains("still answering"));
+    // a conversation whose earliest events were dropped is refused
+    s2.assistant.force_state_for_tests(id, false, 5);
+    assert!(s2.execute("assistant.branch", json!({"thread": id, "turn": 0})).unwrap_err().to_string().contains("too long"));
+}
+
+#[test]
+fn the_token_count_grows_while_a_reply_streams_and_never_goes_down() {
+    let mut s = Session::default();
+    let m = Arc::new(ScriptedModel::new());
+    m.push_reply(
+        vec![
+            StreamEvent::Usage(Usage { input_tokens: 100, output_tokens: 1, ..Default::default() }),
+            StreamEvent::Text("hi".into()),
+            StreamEvent::Usage(Usage { input_tokens: 100, output_tokens: 20, ..Default::default() }),
+        ],
+        Response {
+            message: Message::assistant_text("hi"),
+            stop_reason: StopReason::EndTurn,
+            usage: Usage { input_tokens: 100, output_tokens: 25, ..Default::default() },
+            model: "m".into(),
+        },
+    );
+    s.assistant.use_model(m);
+    let t = ask(&mut s, "q", None);
+    let events = s.execute("assistant.thread", json!({"thread": t})).unwrap()["events"].clone();
+    let totals: Vec<u64> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "usage")
+        .map(|e| e["total"]["output_tokens"].as_u64().unwrap() + e["total"]["input_tokens"].as_u64().unwrap())
+        .collect();
+    assert!(totals.len() >= 3, "{totals:?}");
+    assert!(totals.windows(2).all(|w| w[0] <= w[1]), "never goes down: {totals:?}");
+    assert_eq!(*totals.last().unwrap(), 125, "the last count is the exact one");
+}

@@ -16,6 +16,8 @@
 //! | `assistant.send` | add your message to a thread and run the agent (`wait: true` blocks until it is done) |
 //! | `assistant.thread` | a thread's state and the events since an index (the stream the panel draws) |
 //! | `assistant.cancel` | Stop the running turn |
+//! | `assistant.renameThread` | give a thread a name of your own (the model then no longer renames it) |
+//! | `assistant.branch` | a new thread with the conversation up to one of your questions, asking again (retry) or asking something else (edit); the old thread is untouched |
 //! | `assistant.trace` | a thread's run as JSON lines (replayable, for evaluation and bug reports) |
 //! | `assistant.commands` | the slash commands (`/pacing`, `/glossary term`, …); `assistant.send` expands them |
 //!
@@ -114,11 +116,28 @@ struct ThreadState {
 struct ThreadShared {
     state: Mutex<ThreadState>,
     cancel: Cancel,
+    title: Mutex<String>,
+    /// The title is still the first question; the model may name the thread after its first answer.
+    title_auto: std::sync::atomic::AtomicBool,
+}
+
+impl ThreadShared {
+    fn new(state: ThreadState, title: &str, auto: bool) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(state),
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            title: Mutex::new(title.chars().take(80).collect()),
+            title_auto: std::sync::atomic::AtomicBool::new(auto),
+        })
+    }
+
+    fn title(&self) -> String {
+        lock(&self.title).clone()
+    }
 }
 
 pub(crate) struct ThreadSlot {
     pub(crate) id: u64,
-    title: String,
     shared: Arc<ThreadShared>,
     progress: Option<Arc<filmcraft_export::Progress>>,
 }
@@ -146,6 +165,8 @@ pub struct AssistantHub {
     /// A note about saved conversations that could not be restored.
     pub restore_note: Option<String>,
     model_override: Option<Arc<dyn ChatModel>>,
+    /// Titles are normally not asked of a plugged-in model (tests script exact replies); this allows it.
+    titles_with_override: bool,
     /// A prompt pack to use instead of the built-in one (the evaluation suite compares packs).
     pack_override: Option<edith_ai::PromptPack>,
     models: Arc<Mutex<ModelCache>>,
@@ -167,12 +188,8 @@ fn slot_from_saved(rec: SavedThread) -> ThreadSlot {
         usage: rec.usage,
         profile: Profile::ReadOnly,
     };
-    ThreadSlot {
-        id: rec.id,
-        title: rec.title,
-        shared: Arc::new(ThreadShared { state: Mutex::new(state), cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)) }),
-        progress: None,
-    }
+    // A restored thread keeps the title it had: it is not renamed again.
+    ThreadSlot { id: rec.id, shared: ThreadShared::new(state, &rec.title, false), progress: None }
 }
 
 fn saved_from_state(id: u64, title: &str, st: &ThreadState) -> SavedThread {
@@ -203,6 +220,7 @@ impl Default for AssistantHub {
             settings_note: None,
             restore_note: None,
             model_override: None,
+            titles_with_override: false,
             pack_override: None,
             models: Arc::new(Mutex::new(ModelCache::default())),
         }
@@ -227,6 +245,11 @@ impl AssistantHub {
         self.model_override = Some(model);
     }
 
+    /// Lets a plugged-in model also be asked for thread titles. For tests.
+    pub fn allow_titles_with_test_model(&mut self) {
+        self.titles_with_override = true;
+    }
+
     /// Uses `pack` instead of the built-in prompt pack. For the evaluation suite and tools.
     pub fn use_prompt_pack(&mut self, pack: edith_ai::PromptPack) {
         self.pack_override = Some(pack);
@@ -235,6 +258,16 @@ impl AssistantHub {
     /// The prompt pack in use.
     pub fn pack(&self) -> edith_ai::PromptPack {
         self.pack_override.clone().unwrap_or_else(edith_ai::PromptPack::builtin)
+    }
+
+    /// Sets a thread's running flag and dropped-event count directly. For tests.
+    #[cfg(test)]
+    pub(crate) fn force_state_for_tests(&self, id: u64, running: bool, dropped: u64) {
+        if let Some(t) = self.slot(id) {
+            let mut st = lock(&t.shared.state);
+            st.running = running;
+            st.dropped = dropped;
+        }
     }
 
     fn slot(&self, id: u64) -> Option<&ThreadSlot> {
@@ -332,7 +365,7 @@ fn thread_arg(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
 
 fn thread_summary(t: &ThreadSlot, settings: &AiSettings, price: Option<&edith_ai::Price>) -> Value {
     let st = lock(&t.shared.state);
-    json!({"id": t.id, "title": t.title, "running": st.running, "finish": st.finish.as_ref().map(finish_json), "events": st.dropped + st.events.len() as u64, "usage": st.usage, "usageText": usage_summary(&st.usage, price), "model": settings.model})
+    json!({"id": t.id, "title": t.shared.title(), "running": st.running, "finish": st.finish.as_ref().map(finish_json), "events": st.dropped + st.events.len() as u64, "usage": st.usage, "usageText": usage_summary(&st.usage, price), "model": settings.model})
 }
 
 fn status(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -373,7 +406,7 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 fn settings_json(st: &AiSettings) -> Value {
-    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "chips": st.chips, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens})
+    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "autoTitle": st.auto_title, "chips": st.chips, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens})
 }
 
 fn model_json(m: &ModelInfo) -> Value {
@@ -422,6 +455,9 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("showThinking") {
         next.show_thinking = v.as_bool().ok_or_else(|| bad(cmd, "`showThinking` must be true or false"))?;
+    }
+    if let Some(v) = p.get("autoTitle") {
+        next.auto_title = v.as_bool().ok_or_else(|| bad(cmd, "`autoTitle` must be true or false"))?;
     }
     if let Some(v) = p.get("chips") {
         let o = v.as_object().ok_or_else(|| bad(cmd, "`chips` must be an object such as {\"frame\": false}"))?;
@@ -583,12 +619,7 @@ fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
         usage: Usage::default(),
         profile: Profile::ReadOnly,
     };
-    s.assistant.threads.push(ThreadSlot {
-        id,
-        title: title.chars().take(80).collect(),
-        shared: Arc::new(ThreadShared { state: Mutex::new(state), cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)) }),
-        progress: None,
-    });
+    s.assistant.threads.push(ThreadSlot { id, shared: ThreadShared::new(state, title, true), progress: None });
     Ok(id)
 }
 
@@ -609,6 +640,118 @@ fn threads(s: &mut Session, _p: &Value) -> Result<Value> {
     s.pump_assistant();
     let price = s.model_info().and_then(|i| i.price);
     Ok(json!({"threads": s.assistant.threads.iter().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect::<Vec<_>>()}))
+}
+
+fn rename_thread(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "assistant.renameThread";
+    let id = thread_arg(s, p, cmd)?;
+    let raw = str_p(p, "title").ok_or_else(|| bad(cmd, "`title` is required"))?;
+    let title = raw.trim();
+    if title.is_empty() || title.chars().count() > 80 || title.chars().any(char::is_control) {
+        return Err(bad(cmd, "`title` must be 1 to 80 characters on one line"));
+    }
+    let slot = s.assistant.slot(id).ok_or_else(|| bad(cmd, "no such thread"))?;
+    *lock(&slot.shared.title) = title.to_string();
+    // The person chose this name: the model must not replace it.
+    slot.shared.title_auto.store(false, Ordering::SeqCst);
+    let mut saved = true;
+    if let Some(dir) = &s.assistant.dir {
+        let st = lock(&slot.shared.state);
+        // A thread that is mid-turn is saved when the turn ends, with this title.
+        if !st.running {
+            saved = assistant_store::save(dir, &saved_from_state(id, title, &st)).is_ok();
+        }
+    }
+    Ok(json!({"thread": id, "title": title, "saved": saved}))
+}
+
+/// The positions of the person's own messages (those with words or a picture; a message holding only
+/// tool answers is not a turn).
+fn turn_starts(messages: &[edith_ai::Message]) -> Vec<usize> {
+    messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.role == edith_ai::Role::User && m.parts.iter().any(|p| matches!(p, edith_ai::Part::Text { .. } | edith_ai::Part::Image { .. })))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// `assistant.branch`: a new thread holding a conversation up to the start of one of the person's
+/// turns, then asking again (the same question, or `text`). The old thread is left as it was.
+fn branch(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "assistant.branch";
+    s.pump_assistant();
+    let id = thread_arg(s, p, cmd)?;
+    let turn = p
+        .get("turn")
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| bad(cmd, "`turn` must be a whole number (0 is the first question)"))?;
+    let (messages, events, replies, original, meta, model_title) = {
+        let slot = s.assistant.slot(id).ok_or_else(|| bad(cmd, "no such thread"))?;
+        let st = lock(&slot.shared.state);
+        if st.running {
+            return Err(bad(cmd, "this thread is still answering; wait for it or stop it"));
+        }
+        if st.dropped > 0 {
+            return Err(bad(cmd, "this conversation is too long to branch: its earliest messages are no longer kept"));
+        }
+        let starts = turn_starts(&st.thread.messages);
+        let cut = *starts.get(turn).ok_or_else(|| bad(cmd, format!("there is no turn {turn}; this thread has {}", starts.len())))?;
+        let shown: Vec<usize> = st.events.iter().enumerate().filter(|(_, e)| matches!(e, AgentEvent::UserMessage { .. })).map(|(i, _)| i).collect();
+        let at = *shown.get(turn).ok_or_else(|| bad(cmd, "that turn's record is missing"))?;
+        let original = match st.events.get(at) {
+            Some(AgentEvent::UserMessage { text, .. }) => text.clone(),
+            _ => String::new(),
+        };
+        let kept: Vec<edith_ai::Message> = st.thread.messages.iter().take(cut).cloned().collect();
+        let replies_kept = kept.iter().filter(|m| m.role == edith_ai::Role::Assistant).count();
+        (
+            kept,
+            st.events.iter().take(at).cloned().collect::<Vec<_>>(),
+            st.trace.replies.iter().take(replies_kept).cloned().collect::<Vec<_>>(),
+            original,
+            st.trace.meta.clone(),
+            slot.shared.title(),
+        )
+    };
+    let text = match p.get("text").filter(|v| !v.is_null()) {
+        Some(v) => v.as_str().map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "`text` must be the question to ask"))?.to_string(),
+        None if !original.trim().is_empty() => original,
+        None => return Err(bad(cmd, "`text` is required: the original question is not known")),
+    };
+    let new_id = new_slot(s, &model_title)?;
+    if let Some(slot) = s.assistant.slot(new_id) {
+        let mut st = lock(&slot.shared.state);
+        let mut usage = Usage::default();
+        replies.iter().for_each(|r| usage.add(&r.usage));
+        st.thread = Thread { messages, usage };
+        st.usage = usage;
+        let mut trace = Trace::new(meta);
+        trace.events = events.clone();
+        trace.replies = replies;
+        st.trace = trace;
+        st.events = events.into();
+        // the title was already chosen for this conversation
+        slot.shared.title_auto.store(false, Ordering::SeqCst);
+    }
+    let mut params = json!({"text": text, "thread": new_id});
+    for key in ["context", "wait"] {
+        if let Some(v) = p.get(key) {
+            params[key] = v.clone();
+        }
+    }
+    match send(s, &params) {
+        Ok(mut v) => {
+            v["branchedFrom"] = json!(id);
+            Ok(v)
+        }
+        Err(e) => {
+            // nothing was asked, so no thread is left behind
+            s.assistant.threads.retain(|t| t.id != new_id);
+            Err(e)
+        }
+    }
 }
 
 fn delete_thread(s: &mut Session, p: &Value) -> Result<Value> {
@@ -653,6 +796,36 @@ fn context_blocks(s: &Session, p: &Value, cmd: &str, can_see: bool) -> Result<Ve
             }
         })
         .collect()
+}
+
+/// A thread title as one short plain line: the first line, without quotes, marks or control characters.
+pub(crate) fn clean_title(raw: &str) -> Option<String> {
+    let line = raw.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let t: String = line.chars().filter(|c| !c.is_control()).collect();
+    let t = t.trim_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '.' | '*' | '#'));
+    let t: String = t.chars().take(60).collect();
+    let t = t.trim().to_string();
+    (!t.is_empty()).then_some(t)
+}
+
+#[cfg(test)]
+pub(crate) fn clean_title_for_tests(raw: &str) -> Option<String> {
+    clean_title(raw)
+}
+
+/// Asks the model to name a conversation from its first question and answer: one small request, no
+/// tools. Any failure is just no title.
+fn ask_for_title(model: &dyn ChatModel, model_id: &str, question: &str, answer: &str, cancel: &Cancel) -> Option<String> {
+    let cut = |t: &str| -> String { t.chars().take(600).collect() };
+    let mut req = edith_ai::Request::new(model_id);
+    req.system = vec![edith_ai::SystemPart {
+        text: "Name this conversation in at most six words. Reply with the title only: no quotes, no full stop.".into(),
+        cache: false,
+    }];
+    req.messages = vec![edith_ai::Message::user_text(format!("Question:\n{}\n\nAnswer:\n{}", cut(question), cut(answer)))];
+    req.max_output_tokens = 32;
+    let reply = model.stream(&req, cancel, &mut |_| {}).ok()?;
+    clean_title(&reply.message.text())
 }
 
 fn send(s: &mut Session, p: &Value) -> Result<Value> {
@@ -709,8 +882,10 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
         shared.cancel.store(false, Ordering::SeqCst);
     }
     let (worker_shared, progress, result, user_text, shown_text) = (shared.clone(), job.progress.clone(), job.result.clone(), ask, text.to_string());
+    let shown_text_for_title = shown_text.clone();
     let save_dir = s.assistant.dir.clone();
-    let slot_title = s.assistant.slot(id).map(|t| t.title.clone()).unwrap_or_default();
+    let title_model = (settings.auto_title && (s.assistant.model_override.is_none() || s.assistant.titles_with_override))
+        .then(|| (assistant.model.clone(), settings.model.clone()));
     let run = crate::export_tools::guard_job(job.progress.clone(), job.result.clone(), move || {
         // However this body ends (even in a panic), the thread stops being "running".
         struct Done(Arc<ThreadShared>);
@@ -743,9 +918,31 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
             st.finish = Some(report.finish.clone());
             st.running = false;
         }
+        // After the first answer, the model names the thread (once; a rename by the person stops it).
+        if let Some((model, model_id)) = &title_model
+            && matches!(report.finish, Finish::Done)
+            && worker_shared.title_auto.load(Ordering::SeqCst)
+        {
+            let (turns, answer) = {
+                let st = lock(&worker_shared.state);
+                let turns = st
+                    .thread
+                    .messages
+                    .iter()
+                    .filter(|m| m.role == edith_ai::Role::User && m.parts.iter().any(|p| matches!(p, edith_ai::Part::Text { .. })))
+                    .count();
+                (turns, st.thread.messages.iter().rev().find(|m| m.role == edith_ai::Role::Assistant).map(|m| m.text()).unwrap_or_default())
+            };
+            if turns == 1
+                && let Some(t) = ask_for_title(&**model, model_id, &shown_text_for_title, &answer, &worker_shared.cancel)
+                && worker_shared.title_auto.swap(false, Ordering::SeqCst)
+            {
+                *lock(&worker_shared.title) = t;
+            }
+        }
         // The conversation is saved when a turn ends, never in the middle of one.
         if let Some(dir) = &save_dir {
-            let rec = saved_from_state(id, &slot_title, &lock(&worker_shared.state));
+            let rec = saved_from_state(id, &worker_shared.title(), &lock(&worker_shared.state));
             if let Err(why) = assistant_store::save(dir, &rec) {
                 push_event(&worker_shared, AgentEvent::Notice { text: format!("This conversation could not be saved: {why}.") });
             }
@@ -805,7 +1002,7 @@ fn thread_view(s: &mut Session, p: &Value) -> Result<Value> {
     let events: Vec<&AgentEvent> = st.events.iter().skip(skip).take(EVENTS_PER_CALL).collect();
     let next = start + events.len() as u64;
     Ok(json!({
-        "thread": id, "title": slot.title, "running": st.running, "finish": st.finish.as_ref().map(finish_json),
+        "thread": id, "title": slot.shared.title(), "running": st.running, "finish": st.finish.as_ref().map(finish_json),
         "first": st.dropped, "next": next, "events": events,
         "usage": st.usage, "usageText": usage_summary(&st.usage, price.as_ref()),
     }))
@@ -846,12 +1043,14 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "assistant.settings",
             "Assistant Settings",
-            r#"{"service":str?,"model":str?,"effort":"low|medium|high|xhigh|max"|null?,"showThinking":bool?,"chips":{"selection":bool?,"playhead":bool?,"transcript":bool?,"markers":bool?,"frame":bool?}?,"maxSteps":1..40?,"maxCostUsd":f64|null?,"maxOutputTokens":256..64000?}"#,
+            r#"{"service":str?,"model":str?,"effort":"low|medium|high|xhigh|max"|null?,"showThinking":bool?,"autoTitle":bool?,"chips":{"selection":bool?,"playhead":bool?,"transcript":bool?,"markers":bool?,"frame":bool?}?,"maxSteps":1..40?,"maxCostUsd":f64|null?,"maxOutputTokens":256..64000?}"#,
             settings,
         ),
         spec("assistant.models", "Assistant Models", r#"{"refresh":bool?}"#, models),
         spec("assistant.newThread", "New Assistant Thread", r#"{"title":str?}"#, new_thread),
         spec("assistant.threads", "Assistant Threads", "{}", threads),
+        spec("assistant.renameThread", "Rename Assistant Thread", r#"{"thread":id,"title":str}"#, rename_thread),
+        spec("assistant.branch", "Branch Assistant Thread", r#"{"thread":id,"turn":u64,"text":str?,"context":[...]?,"wait":bool?}"#, branch),
         spec("assistant.deleteThread", "Delete Assistant Thread", r#"{"thread":id}"#, delete_thread),
         spec("assistant.send", "Ask the Assistant", r#"{"text":str,"thread":id?,"context":[{"label":str,"text":str}]?,"wait":bool?}"#, send),
         spec("assistant.thread", "Assistant Thread", r#"{"thread":id,"since":u64?}"#, thread_view),

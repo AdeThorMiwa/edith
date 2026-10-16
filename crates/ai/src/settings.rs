@@ -43,6 +43,8 @@ pub struct AiSettings {
     pub show_thinking: bool,
     /// What goes along with each question.
     pub chips: Chips,
+    /// After the first answer, ask the model for a short title for the thread (one small extra request).
+    pub auto_title: bool,
     /// Most model requests in one turn.
     pub max_steps: u32,
     /// Stop a turn once a thread's estimated cost reaches this many US dollars (`None`: no limit).
@@ -59,6 +61,7 @@ impl Default for AiSettings {
             effort: None,
             show_thinking: true,
             chips: Chips::default(),
+            auto_title: true,
             max_steps: 12,
             max_cost_usd: Some(1.0),
             max_output_tokens: 8192,

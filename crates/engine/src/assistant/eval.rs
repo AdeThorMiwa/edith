@@ -88,6 +88,8 @@ fn run_task(inp: &Inputs, task: &Task, cancel: &dyn Fn() -> bool) -> (TaskResult
     s.assistant.use_model(inp.model.clone());
     s.assistant.use_prompt_pack(inp.pack.clone());
     s.assistant.settings = inp.settings.clone().sanitized();
+    // an evaluation asks only its questions: no extra request to name the thread
+    s.assistant.settings.auto_title = false;
     if let Some(info) = &inp.info {
         lock(&s.assistant.models).models = vec![info.clone()];
     }

@@ -307,12 +307,21 @@ impl Agent<'_> {
             let mut attempt = 0;
             let response = loop {
                 let mut delivered = false;
+                let base = thread.usage;
                 let result = self.model.stream(&request, cancel, &mut |e| {
                     let ev = match e {
+                        // The running count while the reply streams: the thread so far plus this reply so far.
+                        // It is not "output" the person saw, so a retry stays possible.
+                        StreamEvent::Usage(u) => {
+                            let mut total = base;
+                            total.add(&u);
+                            sink(AgentEvent::Usage { reply: u, total });
+                            return;
+                        }
                         StreamEvent::Text(text) => AgentEvent::Text { text },
                         StreamEvent::Thinking(text) => AgentEvent::Thinking { text },
                         StreamEvent::ToolUseStarted { id, name } => AgentEvent::ToolStarted { id, name },
-                        StreamEvent::ToolUseFinished { .. } | StreamEvent::Usage(_) => return,
+                        StreamEvent::ToolUseFinished { .. } => return,
                     };
                     delivered = true;
                     sink(ev);
