@@ -54,6 +54,7 @@ edith-llm = { path = "crates/llm" }
 edith-agent = { path = "crates/agent" }
 edith-ai = { path = "crates/ai" }
 edith-sources = { path = "crates/sources" }
+edith-planner = { path = "crates/planner" }
 filmcraft-tts = { path = "crates/tts" }
 filmcraft-tts-text = { path = "crates/tts-text" }
 filmcraft-render = { path = "crates/render" }

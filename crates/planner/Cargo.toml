@@ -1,0 +1,16 @@
+[package]
+name = "edith-planner"
+description = "Edith planner: the structure of a video (sections, beats, shots) kept next to the edit, and Format Packs, the data files that give a kind of video its starting structure. Pure data and integer arithmetic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+filmcraft-time = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "1"

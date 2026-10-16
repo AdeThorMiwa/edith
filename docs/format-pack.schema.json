@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Format Pack",
+  "description": "The starting structure for a kind of video: sections of beats, each a share of the runtime with a purpose and an intensity. Written as TOML (see docs/format-packs.md); this schema describes the same data. A pack is data, never code.",
+  "type": "object",
+  "required": ["version", "id", "name", "section"],
+  "properties": {
+    "version": { "const": 1, "description": "The file format version." },
+    "id": { "type": "string", "pattern": "^[a-z0-9_-]{1,40}$", "description": "A short unique name. A pack of yours with the same id replaces the shipped one." },
+    "name": { "type": "string", "maxLength": 120 },
+    "summary": { "type": "string", "maxLength": 500 },
+    "typical_minutes": {
+      "type": "object",
+      "required": ["min", "max"],
+      "properties": { "min": { "type": "number", "minimum": 1 }, "max": { "type": "number", "maximum": 600 } },
+      "description": "How long this kind of video usually is."
+    },
+    "look_preset": { "type": "string", "maxLength": 120, "description": "The name of a look preset that suits it (for example Cinema Look). Empty for none." },
+    "title_style": { "type": "string", "maxLength": 500 },
+    "targets": {
+      "type": "object",
+      "maxProperties": 20,
+      "additionalProperties": { "type": "number" },
+      "description": "Named numbers the editing coach will use later (words per minute, shot length, and so on)."
+    },
+    "section": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": ["name", "beat"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 120 },
+          "beat": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "from", "to", "intensity"],
+              "properties": {
+                "name": { "type": "string", "maxLength": 120, "description": "Unique in the pack." },
+                "purpose": { "type": "string", "maxLength": 500, "description": "What changes here?" },
+                "from": { "type": "number", "minimum": 0, "maximum": 100, "description": "Where it starts, as a percentage of the runtime. Must be where the beat before it ended (within half a percent); the first beat starts at 0." },
+                "to": { "type": "number", "minimum": 0, "maximum": 100, "description": "Where it ends. The last beat ends at 100." },
+                "intensity": { "type": "number", "minimum": 0, "maximum": 10 },
+                "intensity_end": { "type": "number", "minimum": 0, "maximum": 10, "description": "For a beat that ramps: its intensity at the end, or across its copies." },
+                "sound": { "type": "string", "maxLength": 500, "description": "A note for the sound plan." },
+                "repeat": {
+                  "type": "object",
+                  "required": ["min", "max", "default"],
+                  "properties": {
+                    "min": { "type": "integer", "minimum": 1 },
+                    "max": { "type": "integer", "maximum": 10 },
+                    "default": { "type": "integer" },
+                    "name": { "type": "string", "maxLength": 120, "description": "The name of each copy; {n} becomes its number." }
+                  },
+                  "description": "The beat comes in several copies that share its time equally."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

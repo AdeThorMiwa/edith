@@ -1489,6 +1489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "edith-planner"
+version = "0.7.2"
+dependencies = [
+ "filmcraft-time",
+ "serde",
+ "serde_json",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "edith-sources"
 version = "0.7.2"
 dependencies = [

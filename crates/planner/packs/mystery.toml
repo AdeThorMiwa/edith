@@ -1,0 +1,101 @@
+# Mystery: an investigation that builds to a turn and ends honestly open.
+version = 1
+id = "mystery"
+name = "Mystery"
+summary = "A question, a trail of clues, an easy answer that almost works, a turn that breaks it, and an honest ending."
+look_preset = "Cinema Look"
+title_style = "Short, plain and a little cold: a place or a name, never a shout."
+typical_minutes = { min = 10, max = 20 }
+
+# Starting guesses for the coach; tune them against real references.
+[targets]
+words_per_minute = 140
+average_shot_seconds = 7
+silence_share_percent = 12
+
+[[section]]
+name = "Opening"
+
+[[section.beat]]
+name = "Cold open"
+purpose = "One striking image or fact; pose the question without context."
+from = 0
+to = 4
+intensity = 8
+sound = "Sparse: a low drone, one sharp sound at the image."
+
+[[section.beat]]
+name = "The question"
+purpose = "What we are investigating and why it matters."
+from = 4
+to = 8
+intensity = 6
+sound = "Room tone, voice up front."
+
+[[section]]
+name = "Setup"
+
+[[section.beat]]
+name = "The scene"
+purpose = "People, place, timeline: establish the normal."
+from = 8
+to = 20
+intensity = 4
+sound = "Quiet ambience of the place; leave silence."
+
+[[section]]
+name = "Investigation"
+
+[[section.beat]]
+name = "Evidence trail"
+purpose = "Each clue: the reveal, what it implies, and the doubt it leaves."
+from = 20
+to = 55
+intensity = 5
+intensity_end = 7
+sound = "A drone that thickens with each clue; few stingers."
+repeat = { min = 3, max = 5, default = 4, name = "Clue {n}" }
+
+[[section.beat]]
+name = "False resolution"
+purpose = "The easy explanation, and why it almost works."
+from = 55
+to = 65
+intensity = 6
+sound = "Resolve the tension a little; warmer, then thin."
+
+[[section.beat]]
+name = "The turn"
+purpose = "New information that breaks the easy explanation."
+from = 65
+to = 75
+intensity = 9
+sound = "Cut the sound out for a beat, then bring it back lower."
+
+[[section]]
+name = "Answer"
+
+[[section.beat]]
+name = "Best explanation"
+purpose = "A reasoned answer: what it explains and what it costs."
+from = 75
+to = 90
+intensity = 8
+intensity_end = 6
+sound = "Steady and clear; ease the drone down."
+
+[[section.beat]]
+name = "What we still don't know"
+purpose = "Honest ambiguity."
+from = 90
+to = 97
+intensity = 4
+sound = "Almost nothing: room tone."
+
+[[section.beat]]
+name = "Last image"
+purpose = "A quiet close; an end card if you want one."
+from = 97
+to = 100
+intensity = 3
+sound = "A single held note that fades."

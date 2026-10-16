@@ -1,0 +1,91 @@
+# Explainer: one idea made clear, with a surprise at the start and a thread left at the end.
+version = 1
+id = "explainer"
+name = "Explainer"
+summary = "A hook, why it matters, a simple mental model, the idea step by step, the common mistake, a worked example, and a thread to pull."
+look_preset = ""
+title_style = "A direct question or a concrete claim; plain words."
+typical_minutes = { min = 6, max = 12 }
+
+[targets]
+words_per_minute = 155
+average_shot_seconds = 4
+silence_share_percent = 6
+
+[[section]]
+name = "Opening"
+
+[[section.beat]]
+name = "Hook"
+purpose = "A concrete surprise or question the viewer wants answered."
+from = 0
+to = 5
+intensity = 7
+sound = "Bright and quick; a light bed under the voice."
+
+[[section.beat]]
+name = "Why you should care"
+purpose = "The stakes in the viewer's own life."
+from = 5
+to = 10
+intensity = 5
+sound = "Keep the bed light."
+
+[[section]]
+name = "Understanding"
+
+[[section.beat]]
+name = "The mental model"
+purpose = "The simplest accurate picture, with one visual metaphor."
+from = 10
+to = 25
+intensity = 4
+sound = "Gentle bed; let the explanation breathe."
+
+[[section.beat]]
+name = "Step by step"
+purpose = "Each step: the claim, an example, a visual, and a check."
+from = 25
+to = 60
+intensity = 4
+intensity_end = 5
+sound = "A small lift at each new step."
+repeat = { min = 2, max = 4, default = 3, name = "Concept {n}" }
+
+[[section]]
+name = "Challenge"
+
+[[section.beat]]
+name = "The misconception"
+purpose = "Where intuition fails."
+from = 60
+to = 70
+intensity = 7
+sound = "A brief change of texture at the mistake."
+
+[[section.beat]]
+name = "Worked example"
+purpose = "Apply the model from start to finish."
+from = 70
+to = 85
+intensity = 6
+sound = "Steady bed; keep it moving."
+
+[[section]]
+name = "Close"
+
+[[section.beat]]
+name = "Recap and implication"
+purpose = "What changes now that you know it."
+from = 85
+to = 95
+intensity = 5
+sound = "Ease the bed down."
+
+[[section.beat]]
+name = "Open question"
+purpose = "Leave a thread to pull."
+from = 95
+to = 100
+intensity = 3
+sound = "Let it end on the voice."
