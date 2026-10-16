@@ -464,7 +464,11 @@ fn ci() -> Result<(), String> {
     let cargo = env!("CARGO");
     run(Command::new(cargo).args(["fmt", "--check"]))?;
     run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--release", "--", "-D", "warnings"]))?;
-    run(Command::new(cargo).args(["test", "--workspace", "--release"]))?;
+    // Tests run against an empty data directory, as on a fresh machine: models downloaded on this
+    // computer (Whisper, Kokoro voices) and saved preferences must not change what a test sees.
+    let data = root().join("target/ci-data");
+    let _ = std::fs::create_dir_all(&data);
+    run(Command::new(cargo).args(["test", "--workspace", "--release"]).env("FILMCRAFT_DATA_DIR", data))?;
     layers()?;
     assets()?;
     wasm()
