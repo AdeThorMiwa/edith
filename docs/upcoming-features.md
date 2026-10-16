@@ -379,7 +379,9 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Notes.** Disclosure of realistic synthetic media is a YouTube setting; the ledger supplies the timecodes. The ledger only encodes what a source says; it is not legal advice.
 
-### F05 Source Hub and Find Media panel · Must · L · yours · ⬜
+### F05 Source Hub and Find Media panel · Must · L · yours · 🟡
+
+**Built so far (2026-10-16):** F05.1 `edith-sources`: one request and candidate shape, the Pexels (video, photos), Pixabay (video, photos) and **Freesound** (sound) adapters with each site's licence read into what it allows, simple keyword rules, and the HTTPS client (search, thumbnails, download to a file with a SHA-256); tested against recorded answers and a local mock server. F05.2 the engine side: `hub.providers|search|results|shortlist|acquire|cancel` (searches run at once in the background, one site failing does not hide the others, answers are kept for 24 hours, a chosen file is downloaded as a cancellable job, imported into `Sources/<site>` and its F04 record written for it). **Freesound limit:** a key can fetch a sound's high-quality preview (MP3), not the original file, which needs a Freesound sign-in; each such candidate says so. **Not yet:** the Find Media panel (F05.3), the other sources (Wikimedia Commons, the Internet Archive, NASA), and local folders (F05.5).
 
 **Needs:** F02, F04 · **Unlocks:** F09 slots, F16, F17, F21.
 

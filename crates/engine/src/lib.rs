@@ -24,6 +24,7 @@ pub mod essential_sound;
 pub mod export_tools;
 pub mod graphic_templates;
 pub mod graphics;
+pub mod hub;
 pub mod interchange;
 pub mod keyboard;
 mod keyframe_move;
@@ -455,6 +456,8 @@ pub struct Session {
     pub media_scan: Option<media_watch::MediaScan>,
     /// The assistant: threads, settings, the worker's tool channel (fork; roadmap F03).
     pub assistant: assistant::AssistantHub,
+    /// The Source Hub: media searches, the shortlist and downloads in progress (fork; roadmap F05).
+    pub hub: hub::Hub,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -548,6 +551,7 @@ impl Session {
             media_stamps: Default::default(),
             media_scan: None,
             assistant: Default::default(),
+            hub: Default::default(),
         }
     }
 
@@ -1244,6 +1248,8 @@ mod export_tests;
 mod file_tests;
 #[cfg(test)]
 mod gap_selection_tests;
+#[cfg(all(test, feature = "net"))]
+mod hub_tests;
 #[cfg(test)]
 mod image_sequence_tests;
 #[cfg(test)]

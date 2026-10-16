@@ -2090,6 +2090,7 @@ version = "0.7.2"
 dependencies = [
  "edith-ai",
  "edith-net",
+ "edith-sources",
  "filmcraft-audio-dsp",
  "filmcraft-captions",
  "filmcraft-codecs",
@@ -2118,6 +2119,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "web-time",
+ "zeroize",
 ]
 
 [[package]]

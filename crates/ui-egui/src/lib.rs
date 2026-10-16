@@ -2011,6 +2011,7 @@ impl eframe::App for FilmcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         self.session.pump_assistant(); // fork: answers the assistant's tool calls, every frame
+        self.session.pump_hub(); // fork: finishes media downloads (imports the file and records where it came from)
         let had_synthetic = !self.synthetic.is_empty();
         self.drain_control(ctx);
         if !self.synthetic.is_empty() && !had_synthetic {
