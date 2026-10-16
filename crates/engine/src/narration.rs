@@ -237,6 +237,9 @@ fn placement(s: &Session, p: &Value, range: TimeRange) -> Result<Option<TrackId>
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tts.create";
     let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
+    // a narrator voice (`preset`) gives the settings not given here, and its effects for the track
+    let (q, chain) = crate::narrator::with_preset(s, cmd, p)?;
+    let p = &q;
     let mut n = settings(cmd, p, None)?;
     let at = time_p(s, p, "").unwrap_or(s.playhead());
     if at < Tick::ZERO {
@@ -278,6 +281,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
             st.selection = vec![id];
             Ok(id)
         })?;
+        if !chain.is_empty() {
+            crate::narrator::apply_chain(s, &chain, track)?;
+        }
         let seq = s.project.sequence(seq_id).ok_or(EngineError::NoSequence)?;
         Ok(json!({
             "item": item.0,
@@ -526,7 +532,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.create",
             "New Narration",
-            r#"{"text":str,"voice":str?,"pitch":"extraLow|low|default|high|extraHigh"?,"pace":0.5..2?,"take":0..99?,"time":ticks?,"track":"A1"|id?,"dir":str?}"#,
+            r#"{"text":str,"voice":str?,"pitch":"extraLow|low|default|high|extraHigh"?,"pace":0.5..2?,"take":0..99?,"preset":str?,"time":ticks?,"track":"A1"|id?,"dir":str?}"#,
             has_seq,
             create,
             true,

@@ -37,6 +37,7 @@ pub mod media_watch;
 pub mod mixer;
 pub mod multicam;
 pub mod narration;
+pub mod narrator;
 pub mod net_commands;
 pub mod panels;
 pub mod paste_media;
@@ -462,6 +463,8 @@ pub struct Session {
     pub hub: hub::Hub,
     /// How the narrator says your words: the global list (fork; roadmap F06.1).
     pub pronounce: pronounce::Global,
+    /// The saved narrator voices (fork; roadmap F06.4).
+    pub narrator: narrator::Presets,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -557,6 +560,7 @@ impl Session {
             assistant: Default::default(),
             hub: Default::default(),
             pronounce: Default::default(),
+            narrator: Default::default(),
         }
     }
 
@@ -1279,6 +1283,8 @@ mod mixer_tests;
 mod multicam_tests;
 #[cfg(test)]
 mod narration_tests;
+#[cfg(test)]
+mod narrator_tests;
 #[cfg(test)]
 mod nest_editing_tests;
 #[cfg(test)]
