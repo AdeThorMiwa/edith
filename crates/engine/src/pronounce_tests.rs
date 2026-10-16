@@ -153,6 +153,7 @@ fn a_changed_word_changes_what_a_narration_is_rendered_from_and_a_trial_word_is_
         voice: tts::default_voice_id().into(),
         pitch: Default::default(),
         pace: 1.0,
+        take: 0,
         speech_duration: filmcraft_time::Tick::ZERO,
     };
     let none = effective(&s);
@@ -219,4 +220,14 @@ fn real_voices_flag_names_and_a_fix_changes_the_audio() {
     let after = wav(&mut s, "after");
     assert_ne!(before, after, "the fixes change the audio");
     assert_eq!(after, wav(&mut s, "after-again"), "and it is repeatable");
+    // takes: other deliveries of the same words, each repeatable, take 0 unchanged by their existence
+    let take = |s: &mut Session, take: u64| {
+        let path = std::env::temp_dir().join(format!("edith-pronounce-{}-take{take}.wav", std::process::id()));
+        s.execute("tts.preview", json!({"text": text, "voice": voice, "take": take, "path": path.to_string_lossy()})).unwrap();
+        std::fs::read(&path).unwrap()
+    };
+    let (t0, t2) = (take(&mut s, 0), take(&mut s, 2));
+    assert_eq!(t0, after, "take 0 is the plain reading");
+    assert_ne!(t0, t2, "another take is another delivery");
+    assert_eq!(t2, take(&mut s, 2), "and a take repeats");
 }

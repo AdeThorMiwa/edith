@@ -5,7 +5,7 @@
 //! | `tts.voices` | languages, voices, vocal pitches, pace limits and the pause marker |
 //! | `tts.preview` | synthesize without changing the project (`sample: true` speaks the voice's sample sentence); the host plays [`Session::tts_preview`]; `path` also writes a WAV |
 //! | `tts.create` | synthesize, write `Narration <n>.wav`, import it and place it at the playhead (one undo step) |
-//! | `tts.edit` | change a narration clip's script or voice settings and regenerate it in place (one undo step) |
+//! | `tts.edit` | change a narration clip's script or voice settings (including `take`) and regenerate it in place (one undo step) |
 //! | `tts.inspect` | the narration settings of a clip or item |
 //! | `tts.render` | synthesize in a background job into the cache, so the UI's create / edit / preview return at once |
 //! | `tts.downloadVoices` | download the natural voices (Kokoro-82M, 9 US English voices, CMUdict; 336 MB, SHA-256 checked) as a background job |
@@ -82,7 +82,13 @@ fn settings(cmd: &str, p: &Value, base: Option<&Narration>) -> Result<Narration>
         Some(v) => v.as_f64().ok_or_else(|| bad(cmd, "`pace` must be a number"))?,
         None => base.map_or(1.0, |b| b.pace),
     };
-    let n = Narration { text, language: info.language.to_string(), voice, pitch, pace, speech_duration: Tick::ZERO };
+    let take = match p.get("take") {
+        None | Some(Value::Null) => base.map_or(0, |b| b.take),
+        Some(v) => {
+            v.as_u64().and_then(|t| u32::try_from(t).ok()).ok_or_else(|| bad(cmd, "`take` must be a whole number from 0 to 99 (0 is the plain reading)"))?
+        }
+    };
+    let n = Narration { text, language: info.language.to_string(), voice, pitch, pace, take, speech_duration: Tick::ZERO };
     n.check().map_err(|e| bad(cmd, e))?;
     Ok(n)
 }
@@ -93,7 +99,7 @@ pub type SynthCache = Arc<Mutex<Vec<(String, Arc<tts::Audio>)>>>;
 const CACHE_ENTRIES: usize = 6;
 
 pub(crate) fn cache_key(n: &Narration, pron: &tts::Pronunciations) -> String {
-    format!("{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}", n.voice, n.pitch.id(), n.pace.to_bits(), n.text, pron.fingerprint())
+    format!("{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}", n.voice, n.pitch.id(), n.pace.to_bits(), n.take, n.text, pron.fingerprint())
 }
 
 fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
@@ -106,7 +112,7 @@ fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
 /// Synthesize `n` (no cache).
 fn render(n: &Narration, models_dir: Option<&std::path::Path>, pron: &tts::Pronunciations) -> std::result::Result<tts::Audio, tts::TtsError> {
     let voice = tts::voice_in(&n.voice, models_dir)?;
-    voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace, take: 0 }, pron)
+    voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace, take: n.take }, pron)
 }
 
 fn synthesize(s: &Session, cmd: &str, n: &Narration, p: &Value) -> Result<Arc<tts::Audio>> {
@@ -507,7 +513,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.preview",
             "Preview Narration",
-            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"sample":bool?,"clip":id?,"path":str?,"pronounce":{word:str}?}"#,
+            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"take":0..99?,"sample":bool?,"clip":id?,"path":str?,"pronounce":{word:str}?}"#,
             always,
             preview,
             false,
@@ -515,17 +521,24 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.create",
             "New Narration",
-            r#"{"text":str,"voice":str?,"pitch":"extraLow|low|default|high|extraHigh"?,"pace":0.5..2?,"time":ticks?,"track":"A1"|id?,"dir":str?}"#,
+            r#"{"text":str,"voice":str?,"pitch":"extraLow|low|default|high|extraHigh"?,"pace":0.5..2?,"take":0..99?,"time":ticks?,"track":"A1"|id?,"dir":str?}"#,
             has_seq,
             create,
             true,
         ),
-        spec("tts.edit", "Edit Narration", r#"{"clip":id?,"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"dir":str?}"#, has_narration_clip, edit, true),
+        spec(
+            "tts.edit",
+            "Edit Narration",
+            r#"{"clip":id?,"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"take":0..99?,"dir":str?}"#,
+            has_narration_clip,
+            edit,
+            true,
+        ),
         spec("tts.inspect", "Inspect Narration", r#"{"clip":id?,"item":id?}"#, always, inspect, false),
         spec(
             "tts.render",
             "Synthesize Narration",
-            r#"{"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"sample":bool?,"clip":id?,"wait":bool?,"pronounce":{word:str}?}"#,
+            r#"{"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"take":0..99?,"sample":bool?,"clip":id?,"wait":bool?,"pronounce":{word:str}?}"#,
             always,
             render_job,
             false,

@@ -13,6 +13,8 @@ pub const MAX_TEXT_BYTES: usize = 64 * 1024;
 /// Pace limits (speaking rate multiplier).
 pub const MIN_PACE: f64 = 0.5;
 pub const MAX_PACE: f64 = 2.0;
+/// The highest take (0 is the voice's plain reading).
+pub const MAX_TAKE: u32 = 99;
 
 /// Text to Speech ▸ Advanced ▸ Vocal pitch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -81,6 +83,10 @@ pub struct Narration {
     pub pitch: VocalPitch,
     /// Speaking rate, [`MIN_PACE`]–[`MAX_PACE`].
     pub pace: f64,
+    /// Which reading of the script: 0 is the plain one, 1 to [`MAX_TAKE`] are other deliveries of
+    /// the same words (natural voices only). Files saved before takes existed read as 0.
+    #[serde(default)]
+    pub take: u32,
     /// Length of the speech in the generated file. The file can be longer: when an edit made the
     /// speech shorter than its clip, the file is padded with silence to the clip's length.
     pub speech_duration: Tick,
@@ -94,6 +100,9 @@ impl Narration {
         }
         if !(MIN_PACE..=MAX_PACE).contains(&self.pace) {
             return Err(format!("pace must be between {MIN_PACE} and {MAX_PACE}"));
+        }
+        if self.take > MAX_TAKE {
+            return Err(format!("take must be between 0 and {MAX_TAKE}"));
         }
         if self.speech_duration < Tick::ZERO {
             return Err("negative speech duration".into());
@@ -113,6 +122,7 @@ mod tests {
             voice: "basic-female".into(),
             pitch: VocalPitch::High,
             pace: 1.25,
+            take: 0,
             speech_duration: Tick::from_seconds_f64(2.5),
         }
     }
@@ -123,6 +133,17 @@ mod tests {
         let s = serde_json::to_string(&n).unwrap();
         assert!(s.contains("\"pitch\":\"high\""), "{s}");
         assert_eq!(serde_json::from_str::<Narration>(&s).unwrap(), n);
+    }
+
+    #[test]
+    fn a_file_from_before_takes_reads_as_the_plain_reading_and_a_bad_take_is_refused() {
+        let old = r#"{"text":"Hi.","language":"en-US","voice":"basic-female","pitch":"default","pace":1.0,"speechDuration":0}"#;
+        let n: Narration = serde_json::from_str(old).unwrap();
+        assert_eq!(n.take, 0);
+        assert!(n.check().is_ok());
+        let with = Narration { take: 7, ..n.clone() };
+        assert_eq!(serde_json::from_str::<Narration>(&serde_json::to_string(&with).unwrap()).unwrap().take, 7);
+        assert!(Narration { take: MAX_TAKE + 1, ..n }.check().is_err());
     }
 
     #[test]

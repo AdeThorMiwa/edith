@@ -423,3 +423,41 @@ fn unique_wav_path_gives_up_instead_of_looping_forever() {
     }
     assert!(crate::voiceover::unique_wav_path(&s, "/nonexistent-dir", "Narration").is_err());
 }
+
+#[test]
+fn a_take_is_stored_with_the_narration_changed_by_edit_and_checked() {
+    let mut s = demo();
+    let dir = tmp("takes");
+    let r = s.execute("tts.create", json!({"text": "The fog rolled in.", "voice": "basic-female", "take": 3, "dir": dir})).unwrap();
+    let item = ItemId(r["item"].as_u64().unwrap());
+    assert_eq!(s.project.narrations[&item].take, 3);
+    assert_eq!(s.execute("tts.inspect", json!({"clip": r["clip"]})).unwrap()["narration"]["take"], 3);
+    // editing without `take` keeps it; with `take` changes it
+    let e = s.execute("tts.edit", json!({"clip": r["clip"], "pace": 1.1, "dir": dir})).unwrap();
+    assert_eq!(s.project.narrations[&ItemId(e["item"].as_u64().unwrap())].take, 3);
+    let e = s.execute("tts.edit", json!({"clip": r["clip"], "take": 0, "dir": dir})).unwrap();
+    assert_eq!(s.project.narrations[&ItemId(e["item"].as_u64().unwrap())].take, 0);
+    // a different take is a different render (its own cache entry), so the natural voices are asked again
+    let pron = filmcraft_tts::Pronunciations::default();
+    let mut n = s.project.narrations[&ItemId(e["item"].as_u64().unwrap())].clone();
+    let a = crate::narration::cache_key(&n, &pron);
+    n.take = 1;
+    assert_ne!(a, crate::narration::cache_key(&n, &pron));
+    // the built-in voices have no takes: every take sounds the same
+    let say = |s: &mut Session, take: u64| {
+        let p = std::path::Path::new(&dir).join(format!("take{take}.wav"));
+        s.execute("tts.preview", json!({"text": "The fog rolled in.", "voice": "basic-female", "take": take, "path": p.to_string_lossy()})).unwrap();
+        std::fs::read(p).unwrap()
+    };
+    assert_eq!(say(&mut s, 0), say(&mut s, 5));
+    // bad takes are refused and change nothing
+    let before = (*s.project).clone();
+    for bad in [json!(-1), json!(100), json!("two"), json!(1.5), json!(true), json!([1])] {
+        assert!(s.execute("tts.preview", json!({"text": "Hi.", "take": bad.clone()})).is_err(), "{bad}");
+        assert!(s.execute("tts.create", json!({"text": "Hi.", "take": bad.clone(), "dir": dir})).is_err(), "{bad}");
+        assert!(s.execute("tts.edit", json!({"clip": r["clip"], "take": bad.clone(), "dir": dir})).is_err(), "{bad}");
+    }
+    assert_eq!(*s.project, before);
+    assert_eq!(filmcraft_project::narration::MAX_TAKE, filmcraft_tts::MAX_TAKE, "the project and the voice agree on the highest take");
+    let _ = std::fs::remove_dir_all(&dir);
+}
