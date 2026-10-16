@@ -3762,3 +3762,17 @@
 	Lower voice	低い声
 	Higher voice	高い声
 	Back to normal	通常に戻す
+	Narrator voice	ナレーターボイス
+	Keep the sound of your narration: the voice, pace and pitch, and the effects on its track. Saved voices work in every project.	ナレーションの音を保存します。声、速さ、ピッチ、そしてトラックのエフェクトが含まれます。保存した声はすべてのプロジェクトで使えます。
+	built in	内蔵
+	Use	使用
+	Use it on the narration in the panel and render it again.	パネル内のナレーションに使い、もう一度生成します。
+	Use it for the next narration you add.	次に追加するナレーションに使います。
+	Delete this saved narrator voice. Narrations that used it keep their sound.	保存したこのナレーターボイスを削除します。使用済みのナレーションの音は変わりません。
+	Name this narrator voice	このナレーターボイスの名前
+	Save current	現在の設定を保存
+	Saves the voice, pace and pitch in the panel and, with a narration loaded, the effects on its track.	パネルの声・速さ・ピッチと、ナレーションを読み込んでいる場合はそのトラックのエフェクトを保存します。
+	Hear with effects	エフェクトありで聞く
+	Hear plain voice	素の声を聞く
+	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	このナレーションのトラックのエフェクトをオフ／オンにして、効果を聞き比べます。タイムラインは通常どおり再生してください。
+	Hear Plain Voice	素の声を聞く

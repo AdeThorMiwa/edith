@@ -3760,3 +3760,17 @@
 	Lower voice	Voz más grave
 	Higher voice	Voz más aguda
 	Back to normal	Volver a lo normal
+	Narrator voice	Voz del narrador
+	Keep the sound of your narration: the voice, pace and pitch, and the effects on its track. Saved voices work in every project.	Conserva el sonido de tu narración: la voz, el ritmo y el tono, y los efectos de su pista. Las voces guardadas sirven en todos los proyectos.
+	built in	incluida
+	Use	Usar
+	Use it on the narration in the panel and render it again.	Úsala en la narración del panel y vuelve a generarla.
+	Use it for the next narration you add.	Úsala para la próxima narración que añadas.
+	Delete this saved narrator voice. Narrations that used it keep their sound.	Elimina esta voz de narrador guardada. Las narraciones que la usaron conservan su sonido.
+	Name this narrator voice	Nombre de esta voz de narrador
+	Save current	Guardar actual
+	Saves the voice, pace and pitch in the panel and, with a narration loaded, the effects on its track.	Guarda la voz, el ritmo y el tono del panel y, con una narración cargada, los efectos de su pista.
+	Hear with effects	Escuchar con efectos
+	Hear plain voice	Escuchar la voz sin efectos
+	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	Activa o desactiva los efectos de la pista de esta narración para oír lo que hacen. Reproduce la línea de tiempo como siempre.
+	Hear Plain Voice	Escuchar la voz sin efectos

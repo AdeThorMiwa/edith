@@ -263,3 +263,42 @@ fn hostile_parameters_are_refused_and_change_nothing() {
     assert_eq!(*s.project, before);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// With the natural voices installed on this machine: the same line, plain and through each
+/// built-in chain, mixed down with the editor's own export, for listening (set `EDITH_SAMPLES_DIR`
+/// to keep the files). Run with `cargo test -p filmcraft-engine --features neural-voices --lib -- --ignored real_voices_through`.
+#[test]
+#[ignore = "needs the downloaded natural voices"]
+fn real_voices_through_the_built_in_chains() {
+    let Some(dir) = crate::transcript::models_dir().filter(|d| filmcraft_tts::catalog::installed(d)) else {
+        eprintln!("natural voices are not installed: skipped");
+        return;
+    };
+    let _ = dir;
+    let out = std::env::var("EDITH_SAMPLES_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| scratch("through"));
+    std::fs::create_dir_all(&out).unwrap();
+    let voice = filmcraft_tts::catalog::VOICES.first().unwrap().info.id;
+    let line = "The fog rolled in over the valley before anyone woke. Nobody had walked that road in forty years.";
+    let mut hashes = Vec::new();
+    for (name, preset) in [("plain", None), ("documentary", Some("Documentary")), ("clean", Some("Clean"))] {
+        let mut s = demo();
+        let wavs = scratch(&format!("through-{name}"));
+        let mut p = json!({"text": line, "voice": voice, "time": 40 * 254_016_000_000i64, "dir": wavs.to_string_lossy()});
+        if let Some(pr) = preset {
+            p["preset"] = json!(pr);
+        }
+        let r = s.execute("tts.create", p).unwrap();
+        let seconds = r["duration"].as_i64().unwrap() as f64 / 254_016_000_000.0;
+        let path = out.join(format!("{name}.wav"));
+        s.execute(
+            "file.exportMedia",
+            json!({"path": path.to_string_lossy(), "format": "wav", "range": "custom", "startSeconds": 40.0, "endSeconds": 40.0 + seconds + 0.5, "wait": true}),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > 100_000, "{name}: {} bytes", bytes.len());
+        hashes.push(bytes);
+        let _ = std::fs::remove_dir_all(&wavs);
+    }
+    assert!(hashes[0] != hashes[1] && hashes[0] != hashes[2] && hashes[1] != hashes[2], "each chain changes the sound");
+}

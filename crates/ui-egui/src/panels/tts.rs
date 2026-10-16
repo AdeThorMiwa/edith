@@ -35,6 +35,8 @@ pub struct TtsDraft {
     pub pace: f64,
     /// Which delivery of the script (0 is the plain reading); natural voices only.
     pub take: u32,
+    /// The narrator voice chosen with Use (a new narration starts from it, effects included).
+    pub preset: Option<String>,
     pub advanced_open: bool,
     /// The narration clip and item the draft was loaded from (None: a new narration).
     pub loaded_from: Option<(u64, u64)>,
@@ -66,6 +68,7 @@ impl Default for TtsDraft {
             pitch: VocalPitch::Default,
             pace: 1.0,
             take: 0,
+            preset: None,
             advanced_open: true,
             loaded_from: None,
             pending: None,
@@ -77,7 +80,11 @@ impl Default for TtsDraft {
 
 impl TtsDraft {
     fn params(&self) -> serde_json::Value {
-        json!({"text": self.text, "voice": self.voice, "pitch": self.pitch.id(), "pace": self.pace, "take": self.take})
+        let mut p = json!({"text": self.text, "voice": self.voice, "pitch": self.pitch.id(), "pace": self.pace, "take": self.take});
+        if let (Some(name), None) = (&self.preset, self.loaded_from) {
+            p["preset"] = json!(name);
+        }
+        p
     }
 }
 
@@ -102,7 +109,13 @@ fn job_outcome(app: &FilmcraftApp, id: u64) -> Option<Result<(), String>> {
 
 /// Start an action: synthesize in the background (or reuse the cache), then run `cmd`.
 fn start(app: &mut FilmcraftApp, cmd: &str, params: serde_json::Value, play: bool) {
-    let mut render = params.clone();
+    start_render(app, cmd, params.clone(), params, play);
+}
+
+/// [`start`] where the synthesis job is made from `render` (the settings the audio will have) and
+/// `cmd` runs with `params` when it is done.
+fn start_render(app: &mut FilmcraftApp, cmd: &str, params: serde_json::Value, render: serde_json::Value, play: bool) {
+    let mut render = render;
     if let Some(o) = render.as_object_mut() {
         o.remove("dir");
         o.remove("time");
@@ -186,6 +199,7 @@ pub fn follow_selection(app: &mut FilmcraftApp) {
                 d.pitch = n.pitch;
                 d.pace = n.pace;
                 d.take = n.take;
+                d.preset = None;
                 d.loaded_from = Some((clip.0, item));
                 if first_time {
                     app.show_panel(crate::dock::PanelKind::TextToSpeech);
@@ -202,6 +216,8 @@ pub fn follow_selection(app: &mut FilmcraftApp) {
 
 enum Action {
     Run(&'static str, serde_json::Value, bool),
+    /// Apply a narrator voice to the loaded narration: (command params, settings to render first).
+    Apply(serde_json::Value, serde_json::Value),
     New,
     Download,
     CancelDownload,
@@ -446,6 +462,29 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 crate::panels::tts_words::Event::Status(m) => note = Some(m),
             }
         }
+        ui.add_space(8.0);
+        for e in crate::panels::tts_voice::show(ui, &t, auto, &mut app.session, &d.voice, d.pace, d.pitch, editing, w) {
+            match e {
+                crate::panels::tts_voice::Event::Use { name, voice, pace, pitch } => {
+                    if let Some(v) = &voice {
+                        d.voice = v.clone();
+                    }
+                    if let Some(p) = pace {
+                        d.pace = p;
+                    }
+                    if let Some(p) = pitch {
+                        d.pitch = p;
+                    }
+                    d.preset = Some(name.clone());
+                    if let Some(c) = editing {
+                        // render the narration with the voice's settings first, then apply the voice
+                        let render = json!({"clip": c, "text": d.text, "voice": d.voice, "pitch": d.pitch.id(), "pace": d.pace, "take": d.take});
+                        actions.push(Action::Apply(json!({"name": name, "clip": c}), render));
+                    }
+                }
+                crate::panels::tts_voice::Event::Status(m) => note = Some(m),
+            }
+        }
     });
     if let Some(n) = note {
         app.ui.status = n;
@@ -484,6 +523,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 app.ui.tts = TtsDraft { language: keep.0, voice: keep.1, pitch: keep.2, pace: keep.3, download_job: dl, ..Default::default() };
             }
             Action::Run(cmd, p, play) => start(app, cmd, p, play),
+            Action::Apply(p, render) => start_render(app, "tts.applyVoicePreset", p, render, false),
             Action::Download => {
                 app.ui.tts.confirm_download = false;
                 match app.session.execute("tts.downloadVoices", json!({})) {

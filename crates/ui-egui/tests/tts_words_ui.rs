@@ -222,3 +222,53 @@ fn the_direction_menu_puts_a_marker_in_the_script_where_the_cursor_is() {
     assert_eq!(text(&mut d), "[pace 0.9] Hello there. [pitch -2] ");
     d.snapshot("tts-direction");
 }
+
+#[test]
+fn a_narrator_voice_is_saved_used_compared_and_deleted_from_the_panel() {
+    let mut d = Driver::new();
+    d.exec("window.panel.TextToSpeech", json!({}));
+    d.frames(3);
+    // a narration with the Clean chain on its track, selected so the panel loads it
+    let made = d.exec("tts.create", json!({"text": "The fog rolled in.", "voice": "basic-female", "preset": "Clean"}));
+    let clip = made["clip"].as_u64().unwrap();
+    d.frames(4);
+    let chain = |d: &mut Driver| d.exec("tts.voicePresets", json!({"clip": clip}));
+    assert_eq!(chain(&mut d)["track"], json!({"inserts": 4, "plain": false}));
+    // open the section
+    d.ok("ui.scroll", json!({"id": "tts.voice", "dx": 0.0, "dy": -2000.0}));
+    d.frames(3);
+    d.click("tts.voice.section");
+    d.ok("ui.scroll", json!({"id": "tts.voice.section", "dx": 0.0, "dy": -2000.0}));
+    d.frames(3);
+    for id in ["tts.voice.preset", "tts.voice.use", "tts.voice.delete", "tts.voice.name", "tts.voice.save", "tts.voice.plain"] {
+        assert!(d.has(id), "missing {id}: {:?}", d.ids("tts.voice"));
+    }
+    // save what is on the narration under a name
+    d.type_into("tts.voice.name", "Series narrator");
+    d.snapshot("tts-narrator");
+    d.click("tts.voice.save");
+    let names = |d: &mut Driver| -> Vec<String> { chain(d)["voices"].as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(names(&mut d), ["Documentary", "Clean", "Series narrator"]);
+    let saved = chain(&mut d)["voices"][2].clone();
+    assert_eq!((saved["voice"].clone(), saved["inserts"].as_array().unwrap().len()), (json!("basic-female"), 4));
+    // hear the plain voice, then with effects again
+    d.click("tts.voice.plain");
+    assert_eq!(chain(&mut d)["track"]["plain"], true);
+    d.click("tts.voice.plain");
+    assert_eq!(chain(&mut d)["track"]["plain"], false);
+    // the saved voice is selected, so Delete removes it
+    d.click("tts.voice.delete");
+    assert_eq!(names(&mut d), ["Documentary", "Clean"]);
+    // a built-in cannot be deleted; Use puts its chain on the narration (rendered first, as a job)
+    d.click("tts.voice.delete");
+    assert_eq!(names(&mut d).len(), 2);
+    d.click("tts.voice.use");
+    for _ in 0..200 {
+        if chain(&mut d)["track"]["inserts"] == 5 {
+            break;
+        }
+        d.frames(3);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(chain(&mut d)["track"]["inserts"], 5, "Documentary has five effects");
+}

@@ -3738,3 +3738,17 @@
 	Lower voice	更低的声音
 	Higher voice	更高的声音
 	Back to normal	恢复正常
+	Narrator voice	旁白声音
+	Keep the sound of your narration: the voice, pace and pitch, and the effects on its track. Saved voices work in every project.	保存旁白的声音：声音、语速和音高，以及其轨道上的效果。已保存的声音可用于所有项目。
+	built in	内置
+	Use	使用
+	Use it on the narration in the panel and render it again.	应用到面板中的旁白并重新生成。
+	Use it for the next narration you add.	用于你接下来添加的旁白。
+	Delete this saved narrator voice. Narrations that used it keep their sound.	删除此已保存的旁白声音。已使用它的旁白保持原有声音。
+	Name this narrator voice	为此旁白声音命名
+	Save current	保存当前设置
+	Saves the voice, pace and pitch in the panel and, with a narration loaded, the effects on its track.	保存面板中的声音、语速和音高；已载入旁白时还会保存其轨道上的效果。
+	Hear with effects	听带效果的声音
+	Hear plain voice	听原声
+	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	开关此旁白轨道上的效果，以便听出它们的作用。照常播放时间线即可。
+	Hear Plain Voice	听原声
