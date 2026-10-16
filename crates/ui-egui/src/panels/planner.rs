@@ -71,7 +71,16 @@ pub fn parse_clock(text: &str) -> Option<f64> {
 
 /// A text box that keeps what you type until it loses focus; returns the new text then (when it
 /// changed). `key` identifies the box.
-fn field(ui: &mut egui::Ui, key: &str, current: &str, multiline: bool, width: f32, rows: usize, hint: &str, t: &Tokens) -> (egui::Response, Option<String>) {
+pub(crate) fn field(
+    ui: &mut egui::Ui,
+    key: &str,
+    current: &str,
+    multiline: bool,
+    width: f32,
+    rows: usize,
+    hint: &str,
+    t: &Tokens,
+) -> (egui::Response, Option<String>) {
     let buf = egui::Id::new(("planner-buffer", key));
     let mut text = ui.data(|d| d.get_temp::<String>(buf)).unwrap_or_else(|| current.to_string());
     let edit = if multiline { TextEdit::multiline(&mut text).desired_rows(rows) } else { TextEdit::singleline(&mut text) };

@@ -481,6 +481,9 @@ pub struct UiState {
     /// Text to Speech panel: the script and voice settings being written or edited.
     #[serde(default)]
     pub tts: crate::panels::tts::TtsDraft,
+    /// The plan panels (A/V Script, beat lane, board): the beat and sentence you are on.
+    #[serde(default)]
+    pub planner: crate::panels::av_script::PlannerView,
     /// Export mode: settings, preset, destination, range, the Preset Manager and Quick Export.
     #[serde(default)]
     pub export: crate::panels::export_mode::ExportUi,
@@ -978,6 +981,7 @@ impl Default for UiState {
             keyframe_selection: Vec::new(),
             essential_sound_tab: "Edit".into(),
             tts: Default::default(),
+            planner: Default::default(),
             export: Default::default(),
             text_tab: captions_tab(),
             caption_search: String::new(),

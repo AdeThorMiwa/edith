@@ -11,9 +11,11 @@
 
 pub mod model;
 pub mod pack;
+pub mod script;
 
 pub use model::{Beat, Link, Planner, Section, Shot, Status};
 pub use pack::{FormatPack, builtin_packs, split};
+pub use script::{BeatRange, ranges, sentences, speech_ticks};
 
 #[cfg(test)]
 mod tests;

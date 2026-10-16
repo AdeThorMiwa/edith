@@ -17,6 +17,10 @@
 //! | `planner.move {beat\|section\|shot, to?, at}` | reorder, or move a beat to another section or a shot to another beat |
 //! | `planner.delete {section\|beat\|shot}` | remove one |
 //! | `planner.link {beat, start, duration \| clear}` | tie a beat to a range of the timeline |
+//! | `planner.lines` | every beat's narration as sentences, with the time each takes to say, its planned start, the shots for each, and the beat's actual length on the timeline (the A/V script reads this) |
+//! | `planner.setLine {beat, line, text}`, `planner.addLine {beat, at?, text}`, `planner.moveLine {beat, line, to}` | edit a beat's narration one sentence at a time (empty text deletes it); the narration is always the sentences joined, and shots follow their sentence |
+//! | `planner.setShotSource {shot, item\|null}` | give a shot the project item that fills it (or none) |
+//! | `planner.refreshLinks {start?, track?}` | after the plan's order changed: lay the markers out again to match (what `buildSkeleton` does, markers move and nothing doubles) |
 //! | `planner.buildSkeleton {start?, track?}` | lay the plan on the timeline: a range marker for every beat and an offline placeholder clip for every shot that has no source yet |
 //! | `planner.export {path?}`, `planner.import {path\|plan}` | the plan as JSON, and back |
 //!
@@ -31,7 +35,7 @@
 use std::path::PathBuf;
 
 use edith_planner::model::{MAX_INTENSITY, MAX_NAME, MAX_NARRATION, MAX_NOTE, MAX_PURPOSE, MAX_TARGET, MAX_TITLE};
-use edith_planner::{Beat, FormatPack, Link, Planner, Section, Shot, Status, builtin_packs};
+use edith_planner::{Beat, FormatPack, Link, Planner, Section, Shot, Status, builtin_packs, script};
 use filmcraft_project::{ClipId, Label, Marker, MarkerId, MarkerKind, Project};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
 use serde_json::{Value, json};
@@ -74,6 +78,7 @@ fn plan_of(s: &Session, cmd: &str) -> Result<Planner> {
 fn edit<R>(s: &mut Session, cmd: &str, label: &str, f: impl FnOnce(&mut Planner) -> Result<R>) -> Result<R> {
     let mut plan = plan_of(s, cmd)?;
     let r = f(&mut plan)?;
+    fix_lines(&mut plan);
     plan.check().map_err(|e| bad(cmd, e))?;
     s.edit(label, |pr, _| {
         put(pr, Some(plan));
@@ -310,6 +315,242 @@ fn packs_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"packs": rows, "problems": problems, "folder": packs_dir(s).map(|d| d.to_string_lossy().into_owned())}))
 }
 
+/// A shot's sentence must exist: one past the end of its beat's narration becomes "the beat as a
+/// whole". Run after every change so the script and the shots never disagree.
+fn fix_lines(plan: &mut Planner) {
+    for sec in &mut plan.sections {
+        for b in &mut sec.beats {
+            if b.shots.iter().any(|x| x.line.is_some()) {
+                let count = script::sentences(&b.narration).len();
+                for x in &mut b.shots {
+                    if x.line.is_some_and(|l| l as usize >= count) {
+                        x.line = None;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Words per minute for this plan: its pack's target, else 150.
+fn words_per_minute(s: &Session, plan: &Planner) -> u32 {
+    plan.pack
+        .as_deref()
+        .and_then(|id| find_pack(s, id, "planner.lines").ok())
+        .and_then(|p| p.targets.get("words_per_minute").copied())
+        .filter(|w| w.is_finite() && (40.0..=400.0).contains(w))
+        .map_or(150, |w| w.round() as u32)
+}
+
+fn lines_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
+    let cmd = "planner.lines";
+    let plan = plan_of(s, cmd)?;
+    let wpm = words_per_minute(s, &plan);
+    let laid = script::ranges(&plan, Tick::ZERO);
+    let seq = s.active_sequence();
+    let beats: Vec<Value> = plan
+        .sections
+        .iter()
+        .flat_map(|sec| sec.beats.iter().map(move |b| (sec, b)))
+        .zip(&laid)
+        .map(|((sec, b), range)| {
+            let actual = b.link.and_then(|l| l.marker).and_then(|m| seq.and_then(|q| q.markers.iter().find(|x| x.id.0 == m))).map(|m| m.duration.0);
+            let base = b.link.map_or(range.start, |l| l.start);
+            let parts = script::split(&b.narration).parts;
+            let mut offset = 0i64;
+            let lines: Vec<Value> = parts
+                .iter()
+                .enumerate()
+                .map(|(i, part)| {
+                    let ticks = script::speech_ticks(&part.text, wpm);
+                    let start = base.0.saturating_add(offset);
+                    offset = offset.saturating_add(ticks.0);
+                    json!({
+                        "index": i,
+                        "text": part.text,
+                        "seconds": secs(ticks),
+                        "ticks": ticks.0,
+                        "startTicks": start,
+                        "shots": b.shots.iter().filter(|x| x.line == Some(i as u32)).map(|x| x.id).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            json!({
+                "beat": b.id,
+                "section": sec.id,
+                "sectionName": sec.name,
+                "name": b.name,
+                "purpose": b.purpose,
+                "status": b.status.id(),
+                "intensity": b.intensity,
+                "targetTicks": b.target.0,
+                "plannedStartTicks": range.start.0,
+                "startTicks": base.0,
+                "link": b.link,
+                "actualTicks": actual,
+                "narrationTicks": offset,
+                "lines": lines,
+                "shots": b.shots,
+                "wholeBeatShots": b.shots.iter().filter(|x| x.line.is_none()).map(|x| x.id).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok(json!({"beats": beats, "wordsPerMinute": wpm, "title": plan.title, "targetTicks": plan.target.0, "plannedTicks": plan.planned().0}))
+}
+
+/// Largest text of one sentence typed into a line.
+const MAX_LINE: usize = 5_000;
+
+fn line_text(p: &Value, cmd: &str) -> Result<String> {
+    let t = match p.get("text") {
+        Some(Value::String(t)) => t.trim().to_string(),
+        _ => return Err(bad(cmd, "`text` is required (empty text on setLine deletes the sentence)")),
+    };
+    if t.chars().count() > MAX_LINE || t.chars().any(char::is_control) {
+        return Err(bad(cmd, format!("`text` must be at most {MAX_LINE} characters on one line, without control characters")));
+    }
+    Ok(t)
+}
+
+/// Remap the shots' sentence numbers after sentence `from` moved to `to` (a delete maps to None).
+fn remap_lines(b: &mut Beat, f: impl Fn(u32) -> Option<u32>) {
+    for x in &mut b.shots {
+        if let Some(l) = x.line {
+            x.line = f(l);
+        }
+    }
+}
+
+fn set_line(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.setLine";
+    let bid = required_id(p, "beat", cmd)?;
+    let line = uint(p, "line", cmd)?.ok_or_else(|| bad(cmd, "`line` (the sentence number, from 0) is required"))? as usize;
+    let new = line_text(p, cmd)?;
+    let lines = edit(s, cmd, "Edit Narration Line", |pl| {
+        let b = pl.beat_mut(bid).ok_or_else(|| bad(cmd, format!("no beat {bid}")))?;
+        let mut sp = script::split(&b.narration);
+        if line >= sp.parts.len() {
+            return Err(bad(cmd, format!("the beat has {} sentences; there is no sentence {line}", sp.parts.len())));
+        }
+        if new.is_empty() {
+            let gone = sp.parts.remove(line);
+            if line == sp.parts.len()
+                && let Some(last) = sp.parts.last_mut()
+            {
+                last.gap = gone.gap;
+            }
+            remap_lines(b, |l| match l.cmp(&(line as u32)) {
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(l - 1),
+                std::cmp::Ordering::Less => Some(l),
+            });
+        } else if let Some(part) = sp.parts.get_mut(line) {
+            part.text = new;
+        }
+        b.narration = sp.join();
+        Ok(script::sentences(&b.narration).len())
+    })?;
+    Ok(json!({"beat": bid, "lines": lines}))
+}
+
+fn add_line(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.addLine";
+    let bid = required_id(p, "beat", cmd)?;
+    let new = line_text(p, cmd)?;
+    if new.is_empty() {
+        return Err(bad(cmd, "`text` cannot be empty"));
+    }
+    let at = edit(s, cmd, "Add Narration Line", |pl| {
+        let b = pl.beat_mut(bid).ok_or_else(|| bad(cmd, format!("no beat {bid}")))?;
+        let mut sp = script::split(&b.narration);
+        let at = at_index(p, sp.parts.len(), cmd)?;
+        if at == sp.parts.len()
+            && let Some(last) = sp.parts.last_mut()
+            && last.gap.is_empty()
+        {
+            last.gap = " ".into();
+        }
+        let gap = if at == sp.parts.len() { String::new() } else { " ".into() };
+        sp.parts.insert(at, script::Sentence { text: new, gap });
+        remap_lines(b, |l| Some(if l as usize >= at { l + 1 } else { l }));
+        b.narration = sp.join();
+        Ok(at)
+    })?;
+    Ok(json!({"beat": bid, "line": at}))
+}
+
+fn move_line(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.moveLine";
+    let bid = required_id(p, "beat", cmd)?;
+    let from = uint(p, "line", cmd)?.ok_or_else(|| bad(cmd, "`line` is required"))? as usize;
+    let to = uint(p, "to", cmd)?.ok_or_else(|| bad(cmd, "`to` is required"))? as usize;
+    edit(s, cmd, "Move Narration Line", |pl| {
+        let b = pl.beat_mut(bid).ok_or_else(|| bad(cmd, format!("no beat {bid}")))?;
+        let mut sp = script::split(&b.narration);
+        let n = sp.parts.len();
+        if from >= n || to >= n {
+            return Err(bad(cmd, format!("the beat has {n} sentences")));
+        }
+        // the gaps stay where they are in the text; the sentences move between them
+        let gaps: Vec<String> = sp.parts.iter().map(|x| x.gap.clone()).collect();
+        let moved = sp.parts.remove(from);
+        sp.parts.insert(to, moved);
+        for (part, gap) in sp.parts.iter_mut().zip(gaps) {
+            part.gap = gap;
+        }
+        let (f, t) = (from as u32, to as u32);
+        remap_lines(b, |l| {
+            Some(if l == f {
+                t
+            } else if f < t && l > f && l <= t {
+                l - 1
+            } else if f > t && l >= t && l < f {
+                l + 1
+            } else {
+                l
+            })
+        });
+        b.narration = sp.join();
+        Ok(())
+    })?;
+    Ok(json!({"beat": bid, "line": to}))
+}
+
+fn set_shot_source(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.setShotSource";
+    let xid = required_id(p, "shot", cmd)?;
+    let source = match p.get("item") {
+        None => return Err(bad(cmd, "`item` is required: a project item id, or null to clear")),
+        Some(Value::Null) => None,
+        Some(_) => {
+            let id = uint(p, "item", cmd)?.ok_or_else(|| bad(cmd, "`item` must be a project item id or null"))?;
+            if s.project.item(filmcraft_project::ItemId(id)).is_none_or(|i| i.as_media().is_none()) {
+                return Err(bad(cmd, format!("item {id} is not a clip, picture or sound in the project")));
+            }
+            Some(id)
+        }
+    };
+    edit(s, cmd, "Set Shot Picture", |pl| {
+        let (a, b, c) = pl.find_shot(xid).ok_or_else(|| bad(cmd, format!("no shot {xid}")))?;
+        let x = pl.sections.get_mut(a).and_then(|s| s.beats.get_mut(b)).and_then(|b| b.shots.get_mut(c)).ok_or_else(|| bad(cmd, "no such shot"))?;
+        x.source = source;
+        Ok(())
+    })?;
+    Ok(json!({"shot": xid, "item": source}))
+}
+
+fn refresh_links(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.refreshLinks";
+    let plan = plan_of(s, cmd)?;
+    let mut q = p.clone();
+    // keep the plan where it started on the timeline unless told otherwise
+    if q.get("startSeconds").is_none() && q.get("startTicks").is_none() {
+        let first = plan.beats().filter_map(|b| b.link).map(|l| l.start.0).min().unwrap_or(0);
+        q["startTicks"] = json!(first);
+    }
+    build_skeleton(s, &q)
+}
+
 // ---------------------------------------------------------------------------- skeleton
 
 /// Where each beat and each shot without a source goes, from `start`, end to end.
@@ -451,7 +692,8 @@ fn build_skeleton(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------------------------------------------------------------------- commands
 
-fn store(s: &mut Session, label: &str, plan: Planner, cmd: &str) -> Result<Value> {
+fn store(s: &mut Session, label: &str, mut plan: Planner, cmd: &str) -> Result<Value> {
+    fix_lines(&mut plan);
     plan.check().map_err(|e| bad(cmd, e))?;
     let out = plan_json(s, &plan);
     s.edit(label, |pr, _| {
@@ -707,6 +949,16 @@ fn shot_fields(x: &mut Shot, p: &Value, cmd: &str) -> Result<()> {
         Some(Value::Null) => x.source = None,
         Some(_) => x.source = Some(uint(p, "source", cmd)?.ok_or_else(|| bad(cmd, "`source` must be a project item id or null"))?),
     }
+    match p.get("line") {
+        None => {}
+        Some(Value::Null) => x.line = None,
+        Some(_) => {
+            x.line = Some(
+                u32::try_from(uint(p, "line", cmd)?.ok_or_else(|| bad(cmd, "`line` must be a sentence number or null"))?)
+                    .map_err(|_| bad(cmd, "`line` is too large"))?,
+            )
+        }
+    }
     Ok(())
 }
 
@@ -910,14 +1162,14 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "planner.addShot",
             "Add Shot",
-            r#"{"beat":id,"intent":str?,"shotType":str?,"cameraMove":str?,"seconds"|"ticks":n?,"source":id|null?,"at":n?}"#,
+            r#"{"beat":id,"intent":str?,"shotType":str?,"cameraMove":str?,"seconds"|"ticks":n?,"source":id|null?,"line":n|null?,"at":n?}"#,
             add_shot,
             true,
         ),
         spec(
             "planner.updateShot",
             "Edit Shot",
-            r#"{"shot":id,"intent":str?,"shotType":str?,"cameraMove":str?,"seconds"|"ticks":n?,"source":id|null?}"#,
+            r#"{"shot":id,"intent":str?,"shotType":str?,"cameraMove":str?,"seconds"|"ticks":n?,"source":id|null?,"line":n|null?}"#,
             update_shot,
             true,
         ),
@@ -930,6 +1182,12 @@ pub fn commands() -> Vec<CommandSpec> {
             link,
             true,
         ),
+        spec("planner.lines", "List Plan Lines", "{}", lines_cmd, false),
+        spec("planner.setLine", "Edit Narration Line", r#"{"beat":id,"line":n,"text":str}"#, set_line, true),
+        spec("planner.addLine", "Add Narration Line", r#"{"beat":id,"text":str,"at":n?}"#, add_line, true),
+        spec("planner.moveLine", "Move Narration Line", r#"{"beat":id,"line":n,"to":n}"#, move_line, true),
+        spec("planner.setShotSource", "Set Shot Picture", r#"{"shot":id,"item":id|null}"#, set_shot_source, true),
+        spec("planner.refreshLinks", "Refresh Plan Markers", r#"{"startSeconds"|"startTicks":n?,"track":"V2"?}"#, refresh_links, true),
         spec("planner.buildSkeleton", "Build Plan Skeleton", r#"{"startSeconds"|"startTicks":n?,"track":"V2"?}"#, build_skeleton, true),
         spec("planner.export", "Export Plan", r#"{"path":str?}"#, export, false),
         spec("planner.import", "Import Plan", r#"{"path":str?,"plan":object?}"#, import, true),

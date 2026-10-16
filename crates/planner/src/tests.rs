@@ -336,3 +336,110 @@ fn the_schema_file_names_every_field_a_pack_has() {
         assert!(text.contains(&format!("\"{field}\"")), "the schema does not mention {field}");
     }
 }
+
+// ---------------------------------------------------------------------------- sentences and time
+
+use crate::script;
+
+fn texts(s: &str) -> Vec<String> {
+    script::split(s).parts.into_iter().map(|p| p.text).collect()
+}
+
+#[test]
+fn text_is_cut_at_the_end_of_each_sentence() {
+    assert_eq!(texts("It rang once. Nobody came! Why? Because."), ["It rang once.", "Nobody came!", "Why?", "Because."]);
+    assert_eq!(texts("No full stop at the end"), ["No full stop at the end"]);
+    assert_eq!(texts(""), Vec::<String>::new());
+    assert_eq!(texts("   \n  "), Vec::<String>::new());
+    assert_eq!(texts("Line one\nLine two\n\nLine three"), ["Line one", "Line two", "Line three"], "a line break ends a sentence");
+    // several marks and closing quotes stay with their sentence
+    assert_eq!(texts("Really?! \"Yes.\" He left."), ["Really?!", "\"Yes.\"", "He left."]);
+    assert_eq!(texts("Wait... What? (Yes.) Fine."), ["Wait...", "What?", "(Yes.)", "Fine."]);
+    // abbreviations, initials and numbers do not end a sentence
+    assert_eq!(texts("Dr. Smith met Mr. Jones at 3.5 percent."), ["Dr. Smith met Mr. Jones at 3.5 percent."]);
+    assert_eq!(texts("J. R. Smith left. Then Prof. Lee came, e.g. late."), ["J. R. Smith left.", "Then Prof. Lee came, e.g. late."]);
+    assert_eq!(texts("Version 2. Next."), ["Version 2.", "Next."]);
+    // markers never split, and one before a sentence stays with it
+    assert_eq!(
+        texts("It rang. [pause 1.5s] Nobody came. [pace 0.8] Then silence. [pitch -2]"),
+        ["It rang.", "[pause 1.5s] Nobody came.", "[pace 0.8] Then silence.", "[pitch -2]"]
+    );
+    assert_eq!(texts("A [pause 1s] B."), ["A [pause 1s] B."]);
+    assert_eq!(texts("Unclosed [marker. Still going. Yes."), ["Unclosed [marker. Still going. Yes."]);
+}
+
+#[test]
+fn splitting_and_joining_gives_back_the_exact_text_whatever_it_is() {
+    for text in [
+        "",
+        " ",
+        "\n\n",
+        "One.",
+        "  Leading and trailing.  ",
+        "A. B. C.",
+        "A.\n\nB.\r\nC.",
+        "Dr. X, e.g. Y. Z",
+        "[pause 1s]",
+        "[[nested]] marker. Next.",
+        "emoji 🎬 here. And 日本語。そして。 More.",
+        "tabs\tand  double  spaces.  Next one?  ",
+        "Unclosed [bracket. Never closes",
+        ".....",
+        "?!?!",
+        &"word. ".repeat(20_000),
+        &"x".repeat(200_000),
+    ] {
+        let s = script::split(text);
+        assert_eq!(s.join(), text, "{:?}", &text[..text.len().min(30)]);
+        assert!(s.parts.iter().all(|p| !p.text.is_empty() && p.text == p.text.trim()));
+    }
+}
+
+#[test]
+fn speech_time_counts_words_not_markers_and_adds_pauses() {
+    let tps = TICKS_PER_SECOND;
+    // 150 words per minute is 2.5 words a second
+    assert_eq!(script::speech_ticks("one two three four five", 150), Tick(2 * tps));
+    assert_eq!(script::speech_ticks("", 150), Tick(0));
+    assert_eq!(script::speech_ticks("  \n ", 150), Tick(0));
+    assert_eq!(script::speech_ticks("word", 60), Tick(tps));
+    // markers are not words; a pause adds its length; a direction adds nothing
+    assert_eq!(script::speech_ticks("one two [pace 0.8] three four five", 150), Tick(2 * tps));
+    assert_eq!(script::speech_ticks("one two three four five [pause 1.5s]", 150), Tick(2 * tps + tps * 3 / 2));
+    assert_eq!(script::speech_ticks("[pause 500ms] hello", 60), Tick(tps + tps / 2));
+    assert_eq!(script::speech_ticks("[pause 99999s]", 150), Tick(10 * tps), "a pause is capped at ten seconds");
+    assert_eq!(script::speech_ticks("[pause x] [pause -1s] hello", 60), Tick(tps));
+    // punctuation alone is not a word
+    assert_eq!(script::speech_ticks("... --- !!!", 150), Tick(0));
+    // a pace outside 40 to 400 is replaced by 150
+    for bad in [0, 1, 39, 401, u32::MAX] {
+        assert_eq!(script::speech_ticks("one two three four five", bad), Tick(2 * tps), "{bad}");
+    }
+    // very long text neither overflows nor panics
+    let long = "word ".repeat(2_000_000);
+    assert!(script::speech_ticks(&long, 40).0 > 0);
+}
+
+#[test]
+fn beat_ranges_lie_end_to_end_and_add_up() {
+    let plan = pack("mystery").instantiate(secs(600), None).unwrap();
+    let r = script::ranges(&plan, secs(5));
+    assert_eq!(r.len(), plan.beat_count());
+    assert_eq!(r[0].start, secs(5));
+    assert!(r.windows(2).all(|w| w[0].end == w[1].start));
+    assert_eq!(r.last().unwrap().end, secs(605));
+    assert_eq!(r.iter().map(|x| x.end.0 - x.start.0).sum::<i64>(), plan.planned().0);
+    assert!(script::ranges(&Planner::default(), Tick(0)).is_empty());
+    // a start close to the end of time saturates instead of overflowing
+    let far = script::ranges(&plan, Tick(i64::MAX - 5));
+    assert!(far.iter().all(|x| x.end.0 >= x.start.0));
+}
+
+#[test]
+fn a_shot_remembers_its_sentence_and_older_plans_without_one_still_load() {
+    let old = r#"{"id":3,"intent":"x","shotType":"","cameraMove":"","target":0,"source":null,"clip":null}"#;
+    let shot: Shot = serde_json::from_str(old).unwrap();
+    assert_eq!(shot.line, None);
+    let with = Shot { line: Some(2), ..shot };
+    assert_eq!(serde_json::from_str::<Shot>(&serde_json::to_string(&with).unwrap()).unwrap().line, Some(2));
+}

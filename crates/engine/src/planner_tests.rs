@@ -665,3 +665,198 @@ fn starting_over_removes_the_markers_and_placeholders_the_plan_made_and_nothing_
     assert!(u.execute("planner.clear", json!({"keepTimeline": "yes"})).is_err());
     assert!(get(&u.project).is_some());
 }
+
+// ---------------------------------------------------------------------------- the lines (A/V script)
+
+fn write(s: &mut Session, beat: u64, text: &str) {
+    s.execute("planner.updateBeat", json!({"beat": beat, "narration": text})).unwrap();
+}
+
+fn narration(s: &Session, beat: u64) -> String {
+    plan(s).beat_ref(beat).unwrap().narration.clone()
+}
+
+fn line_texts(s: &mut Session, beat: u64) -> Vec<String> {
+    let r = s.execute("planner.lines", json!({})).unwrap();
+    r["beats"].as_array().unwrap().iter().find(|b| b["beat"] == beat).unwrap()["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn lines_lists_each_sentence_with_its_time_start_and_shots_and_the_beats_actual_length() {
+    let mut s = sequence();
+    mystery(&mut s, 10.0);
+    let cold = beat_id(&s, "Cold open");
+    write(&mut s, cold, "It rang once. [pause 1s] Nobody came to the shore. Why?");
+    let shot = s.execute("planner.addShot", json!({"beat": cold, "intent": "The bell", "line": 1})).unwrap()["shot"].as_u64().unwrap();
+    let whole = s.execute("planner.addShot", json!({"beat": cold, "intent": "Fog"})).unwrap()["shot"].as_u64().unwrap();
+    let r = s.execute("planner.lines", json!({})).unwrap();
+    assert_eq!(r["wordsPerMinute"], 140, "from the Mystery pack's target");
+    let b = r["beats"][0].clone();
+    assert_eq!((b["name"].clone(), b["beat"].clone()), (json!("Cold open"), json!(cold)));
+    let lines = b["lines"].as_array().unwrap();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0]["text"], "It rang once.");
+    assert_eq!(lines[1]["text"], "[pause 1s] Nobody came to the shore.");
+    // time: 3 words at 140 wpm, then a 1 s pause plus 5 words, starting where the beat starts
+    let tps = TICKS_PER_SECOND as f64;
+    assert!((lines[0]["seconds"].as_f64().unwrap() - 3.0 * 60.0 / 140.0).abs() < 1e-6);
+    assert!((lines[1]["seconds"].as_f64().unwrap() - (1.0 + 5.0 * 60.0 / 140.0)).abs() < 1e-6);
+    assert_eq!(lines[0]["startTicks"], 0);
+    assert_eq!(lines[1]["startTicks"].as_i64().unwrap(), lines[0]["ticks"].as_i64().unwrap());
+    assert!((b["narrationTicks"].as_i64().unwrap() as f64 / tps - (9.0 * 60.0 / 140.0 + 1.0)).abs() < 1e-6);
+    assert_eq!(lines[1]["shots"], json!([shot]));
+    assert_eq!(b["wholeBeatShots"], json!([whole]));
+    // the second beat starts where the first ends, until the plan is linked to the timeline
+    assert_eq!(r["beats"][1]["plannedStartTicks"], b["targetTicks"]);
+    assert_eq!(b["actualTicks"], Value::Null);
+    s.execute("planner.buildSkeleton", json!({"startSeconds": 10})).unwrap();
+    let r = s.execute("planner.lines", json!({})).unwrap();
+    assert_eq!(r["beats"][0]["startTicks"].as_i64().unwrap(), 10 * TICKS_PER_SECOND, "rows are timed from the beat's place on the timeline");
+    assert_eq!(r["beats"][0]["actualTicks"], r["beats"][0]["targetTicks"], "the marker's length");
+    // someone shortens the marker by hand: the actual length follows it
+    let m = s.active_sequence().unwrap().markers[0].clone();
+    std::sync::Arc::make_mut(&mut s.project)
+        .sequence_mut(s.state.active_sequence.unwrap())
+        .unwrap()
+        .markers
+        .iter_mut()
+        .find(|x| x.id == m.id)
+        .unwrap()
+        .duration
+        .0 /= 2;
+    assert_ne!(s.execute("planner.lines", json!({})).unwrap()["beats"][0]["actualTicks"], r["beats"][0]["targetTicks"]);
+    assert!(Session::default().execute("planner.lines", json!({})).is_err(), "no plan");
+}
+
+#[test]
+fn editing_adding_deleting_and_moving_sentences_keeps_the_narration_whole_and_the_shots_with_their_sentence() {
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    let b = beat_id(&s, "Cold open");
+    write(&mut s, b, "One. Two. Three. Four.");
+    let on = |s: &mut Session, line: u64| {
+        s.execute("planner.addShot", json!({"beat": b, "intent": format!("for {line}"), "line": line})).unwrap()["shot"].as_u64().unwrap()
+    };
+    let (s0, s2, s3) = (on(&mut s, 0), on(&mut s, 2), on(&mut s, 3));
+    let line_of = |s: &Session, id: u64| plan(s).beat_ref(b).unwrap().shots.iter().find(|x| x.id == id).unwrap().line;
+    // replace a sentence
+    let undo = s.history.undo.len();
+    s.execute("planner.setLine", json!({"beat": b, "line": 1, "text": "  Second, rewritten.  "})).unwrap();
+    assert_eq!(narration(&s, b), "One. Second, rewritten. Three. Four.");
+    assert_eq!(s.history.undo.len(), undo + 1);
+    s.undo().unwrap();
+    assert_eq!(narration(&s, b), "One. Two. Three. Four.");
+    s.redo().unwrap();
+    // add in the middle: sentences after it, and their shots, shift by one
+    s.execute("planner.addLine", json!({"beat": b, "at": 1, "text": "New."})).unwrap();
+    assert_eq!(line_texts(&mut s, b), ["One.", "New.", "Second, rewritten.", "Three.", "Four."]);
+    assert_eq!((line_of(&s, s0), line_of(&s, s2), line_of(&s, s3)), (Some(0), Some(3), Some(4)));
+    // add at the end, with a line break at the end of the text kept
+    write(&mut s, b, "One. Two.\n");
+    s.execute("planner.addLine", json!({"beat": b, "text": "Last."})).unwrap();
+    assert_eq!(narration(&s, b), "One. Two.\nLast.");
+    write(&mut s, b, "One. Two. Three. Four.");
+    // rewriting the narration leaves a shot with no sentence when its sentence is gone: tie them again
+    assert_eq!((line_of(&s, s0), line_of(&s, s2), line_of(&s, s3)), (Some(0), None, None));
+    s.execute("planner.updateShot", json!({"shot": s2, "line": 2})).unwrap();
+    s.execute("planner.updateShot", json!({"shot": s3, "line": 3})).unwrap();
+    // delete: its shot loses its sentence, later ones move up
+    s.execute("planner.setLine", json!({"beat": b, "line": 2, "text": ""})).unwrap();
+    assert_eq!(narration(&s, b), "One. Two. Four.");
+    assert_eq!((line_of(&s, s0), line_of(&s, s2), line_of(&s, s3)), (Some(0), None, Some(2)));
+    // delete the last one, and the first
+    s.execute("planner.setLine", json!({"beat": b, "line": 2, "text": ""})).unwrap();
+    assert_eq!(narration(&s, b), "One. Two.");
+    assert_eq!(line_of(&s, s3), None);
+    // move: the shot goes with its sentence
+    write(&mut s, b, "Alpha. Bravo. Charlie.");
+    s.execute("planner.updateShot", json!({"shot": s0, "line": 0})).unwrap();
+    s.execute("planner.updateShot", json!({"shot": s3, "line": 2})).unwrap();
+    s.execute("planner.moveLine", json!({"beat": b, "line": 0, "to": 2})).unwrap();
+    assert_eq!(narration(&s, b), "Bravo. Charlie. Alpha.");
+    assert_eq!((line_of(&s, s0), line_of(&s, s3)), (Some(2), Some(1)));
+    s.execute("planner.moveLine", json!({"beat": b, "line": 2, "to": 0})).unwrap();
+    assert_eq!(narration(&s, b), "Alpha. Bravo. Charlie.");
+    assert_eq!((line_of(&s, s0), line_of(&s, s3)), (Some(0), Some(2)));
+    // writing the narration directly cannot leave a shot pointing past the end
+    write(&mut s, b, "Only one.");
+    assert_eq!(line_of(&s, s3), None);
+    assert_eq!(line_of(&s, s0), Some(0));
+}
+
+#[test]
+fn a_shot_takes_a_project_item_as_its_picture_and_hostile_line_input_is_refused() {
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    let b = beat_id(&s, "Cold open");
+    write(&mut s, b, "One. Two.");
+    let x = s.execute("planner.addShot", json!({"beat": b, "intent": "x"})).unwrap()["shot"].as_u64().unwrap();
+    let item = s.project.items.values().find(|i| i.as_media().is_some()).map(|i| i.id.0).unwrap();
+    s.execute("planner.setShotSource", json!({"shot": x, "item": item})).unwrap();
+    assert_eq!(plan(&s).beat_ref(b).unwrap().shots[0].source, Some(item));
+    s.execute("planner.setShotSource", json!({"shot": x, "item": null})).unwrap();
+    assert_eq!(plan(&s).beat_ref(b).unwrap().shots[0].source, None);
+    let bin = s.project.root.id.0;
+    let before = (*s.project).clone();
+    let long = "x".repeat(MAX_LINE_TEXT + 1);
+    for (cmd, p) in [
+        ("planner.setShotSource", json!({"shot": x})),
+        ("planner.setShotSource", json!({"shot": x, "item": 999_999})),
+        ("planner.setShotSource", json!({"shot": x, "item": bin})),
+        ("planner.setShotSource", json!({"shot": 999_999, "item": item})),
+        ("planner.setShotSource", json!({"shot": x, "item": "clip"})),
+        ("planner.setLine", json!({"beat": b, "line": 5, "text": "x"})),
+        ("planner.setLine", json!({"beat": b, "line": -1, "text": "x"})),
+        ("planner.setLine", json!({"beat": b, "text": "x"})),
+        ("planner.setLine", json!({"beat": b, "line": 0})),
+        ("planner.setLine", json!({"beat": b, "line": 0, "text": 5})),
+        ("planner.setLine", json!({"beat": b, "line": 0, "text": long})),
+        ("planner.setLine", json!({"beat": b, "line": 0, "text": "a\nb"})),
+        ("planner.setLine", json!({"beat": b, "line": 0, "text": "a\u{7}b"})),
+        ("planner.setLine", json!({"beat": 999_999, "line": 0, "text": "x"})),
+        ("planner.addLine", json!({"beat": b, "text": ""})),
+        ("planner.addLine", json!({"beat": b, "text": "  "})),
+        ("planner.addLine", json!({"beat": b})),
+        ("planner.addLine", json!({"beat": b, "text": "x", "at": -1})),
+        ("planner.addLine", json!({"beat": 999_999, "text": "x"})),
+        ("planner.moveLine", json!({"beat": b, "line": 0, "to": 9})),
+        ("planner.moveLine", json!({"beat": b, "line": 9, "to": 0})),
+        ("planner.moveLine", json!({"beat": b, "line": 0})),
+        ("planner.moveLine", json!({"beat": 999_999, "line": 0, "to": 0})),
+        ("planner.addShot", json!({"beat": b, "line": -2})),
+        ("planner.addShot", json!({"beat": b, "line": "first"})),
+        ("planner.updateShot", json!({"shot": x, "line": 1e30})),
+    ] {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.execute(cmd, p.clone())));
+        assert!(r.is_ok(), "{cmd} panicked on {p}");
+        assert!(r.unwrap().is_err(), "{cmd} accepted {}", p.to_string().chars().take(100).collect::<String>());
+    }
+    assert_eq!(*s.project, before, "nothing changed");
+}
+
+const MAX_LINE_TEXT: usize = 5_000;
+
+#[test]
+fn changing_the_order_then_refreshing_lays_the_markers_out_again_without_doubling_them() {
+    let mut s = sequence();
+    mystery(&mut s, 5.0);
+    s.execute("planner.buildSkeleton", json!({"startSeconds": 3})).unwrap();
+    let names = |s: &Session| -> Vec<String> { markers(s).into_iter().map(|m| m.2).collect() };
+    assert_eq!(names(&s)[0], "Beat: Cold open");
+    // swap the order of the first two beats in the plan: the timeline still shows the old order
+    let (q, c) = (beat_id(&s, "The question"), beat_id(&s, "Cold open"));
+    s.execute("planner.move", json!({"beat": q, "at": 0})).unwrap();
+    assert_eq!(names(&s)[0], "Beat: Cold open");
+    let r = s.execute("planner.refreshLinks", json!({})).unwrap();
+    assert_eq!(r["markers"], 12);
+    assert_eq!(markers(&s).len(), 12, "none doubled");
+    assert_eq!(names(&s)[0], "Beat: The question");
+    assert_eq!(markers(&s)[0].0, 3 * TICKS_PER_SECOND, "the plan stays where it started");
+    let _ = c;
+    assert!(Session::default().execute("planner.refreshLinks", json!({})).is_err());
+}

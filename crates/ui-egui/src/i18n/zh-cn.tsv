@@ -3812,3 +3812,24 @@
 	{beats} beats · {planned} planned of {target}	{beats} 个段落 · 已规划 {planned} / {target}
 	custom	自定义
 	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	移除计划，以及它放在时间线上的标记和占位片段。撤销即可全部恢复。
+	A/V Script	音画脚本
+	Refresh Plan Markers	刷新计划标记
+	+ sentence	+ 句子
+	+ visual	+ 画面
+	+ visual for the beat	+ 整个段落的画面
+	Add a shot for this sentence.	为这句话添加一个镜头。
+	Delete this sentence	删除这句话
+	Delete this shot	删除这个镜头
+	Jump the timeline here.	将时间线跳到这里。
+	Narrate	配音
+	Narration	旁白
+	New sentence.	新句子。
+	No picture	无画面
+	No plan yet. Open Window ▸ Planner and create one from a Format Pack.	还没有计划。请打开「窗口 ▸ 策划」，用格式包创建一个。
+	Picture	画面
+	Put this beat's narration in the Text to Speech panel.	把此段落的旁白放进文字转语音面板。
+	Select a clip in the Project panel, then press here to use it as the picture.	在项目面板中选择一个片段，然后点按此处将其用作画面。
+	The beat's narration is in the Text to Speech panel.	该段落的旁白已放入文字转语音面板。
+	Use the clip selected in the Project panel as this shot's picture.	将项目面板中选中的片段用作此镜头的画面。
+	What the picture shows	画面内容
+	Whole beat	整个段落

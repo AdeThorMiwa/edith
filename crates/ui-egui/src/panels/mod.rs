@@ -5,6 +5,7 @@ pub mod assistant;
 pub mod assistant_view;
 pub mod assistant_widgets;
 pub mod audio_fx_editor;
+pub mod av_script;
 pub mod clip_dialogs;
 pub mod color_dialogs;
 pub mod connections;
@@ -120,6 +121,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::Rights => rights_panel::show(app, ui, rect),
         PanelKind::FindMedia => find_media::show(app, ui, rect),
         PanelKind::Planner => planner::show(app, ui, rect),
+        PanelKind::AvScript => av_script::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }

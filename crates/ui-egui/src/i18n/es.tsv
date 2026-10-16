@@ -3834,3 +3834,24 @@
 	{beats} beats · {planned} planned of {target}	{beats} tramos · {planned} planificados de {target}
 	custom	personalizado
 	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	Quita el plan y los marcadores y clips provisionales que puso en la línea de tiempo. Deshacer lo recupera todo.
+	A/V Script	Guion A/V
+	Refresh Plan Markers	Actualizar marcadores del plan
+	+ sentence	+ frase
+	+ visual	+ imagen
+	+ visual for the beat	+ imagen para el tramo
+	Add a shot for this sentence.	Añade un plano para esta frase.
+	Delete this sentence	Eliminar esta frase
+	Delete this shot	Eliminar este plano
+	Jump the timeline here.	Lleva la línea de tiempo aquí.
+	Narrate	Narrar
+	Narration	Narración
+	New sentence.	Frase nueva.
+	No picture	Sin imagen
+	No plan yet. Open Window ▸ Planner and create one from a Format Pack.	Aún no hay plan. Abre Ventana ▸ Planificador y crea uno desde un paquete de formato.
+	Picture	Imagen
+	Put this beat's narration in the Text to Speech panel.	Pone la narración de este tramo en el panel de texto a voz.
+	Select a clip in the Project panel, then press here to use it as the picture.	Selecciona un clip en el panel Proyecto y pulsa aquí para usarlo como imagen.
+	The beat's narration is in the Text to Speech panel.	La narración del tramo está en el panel de texto a voz.
+	Use the clip selected in the Project panel as this shot's picture.	Usa el clip seleccionado en el panel Proyecto como imagen de este plano.
+	What the picture shows	Qué muestra la imagen
+	Whole beat	Tramo completo

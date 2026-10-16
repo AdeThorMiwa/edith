@@ -73,6 +73,8 @@ pub struct Shot {
     pub shot_type: String,
     pub camera_move: String,
     pub target: Tick,
+    /// Which sentence of the beat's narration this shot is for (0 is the first); none: the beat as a whole.
+    pub line: Option<u32>,
     /// A project item chosen for it.
     pub source: Option<u64>,
     /// The placeholder clip `buildSkeleton` put on the timeline.

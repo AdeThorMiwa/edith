@@ -3836,3 +3836,24 @@
 	{beats} beats · {planned} planned of {target}	{beats} ビート · {target} のうち {planned} を計画済み
 	custom	カスタム
 	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	プランと、プランがタイムラインに置いたマーカーと仮クリップを削除します。元に戻すとすべて復活します。
+	A/V Script	A/Vスクリプト
+	Refresh Plan Markers	プランのマーカーを更新
+	+ sentence	+ 文
+	+ visual	+ 映像
+	+ visual for the beat	+ ビート全体の映像
+	Add a shot for this sentence.	この文のショットを追加します。
+	Delete this sentence	この文を削除
+	Delete this shot	このショットを削除
+	Jump the timeline here.	タイムラインをここへ移動します。
+	Narrate	ナレーション化
+	Narration	ナレーション
+	New sentence.	新しい文。
+	No picture	映像なし
+	No plan yet. Open Window ▸ Planner and create one from a Format Pack.	プランはまだありません。ウィンドウ ▸ プランナーを開き、フォーマットパックから作成してください。
+	Picture	映像
+	Put this beat's narration in the Text to Speech panel.	このビートのナレーションを読み上げパネルに入れます。
+	Select a clip in the Project panel, then press here to use it as the picture.	プロジェクトパネルでクリップを選び、ここを押すと映像として使います。
+	The beat's narration is in the Text to Speech panel.	ビートのナレーションを読み上げパネルに入れました。
+	Use the clip selected in the Project panel as this shot's picture.	プロジェクトパネルで選択中のクリップをこのショットの映像にします。
+	What the picture shows	映像の内容
+	Whole beat	ビート全体
