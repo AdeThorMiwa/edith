@@ -195,3 +195,30 @@ fn the_take_stepper_moves_between_standard_and_other_deliveries_for_natural_voic
     d.click("tts.take.prev");
     assert_eq!(state(&mut d)["take"], 0, "never below the standard reading");
 }
+
+#[test]
+fn the_direction_menu_puts_a_marker_in_the_script_where_the_cursor_is() {
+    let mut d = Driver::new();
+    d.exec("window.panel.TextToSpeech", json!({}));
+    d.frames(3);
+    let text = |d: &mut Driver| d.ok("ui.inspect", json!({}))["ui"]["tts"]["text"].as_str().unwrap_or("").to_string();
+    d.type_into("tts.text", "Hello there.");
+    assert_eq!(text(&mut d), "Hello there.");
+    // at the start of the script
+    d.ok("ui.key", json!({"key": "Home"}));
+    d.frames(2);
+    d.click("tts.direction");
+    for id in ["slower", "faster", "lower", "higher", "normal"] {
+        assert!(d.has(&format!("tts.direction.{id}")), "missing {id}");
+    }
+    d.click("tts.direction.slower");
+    assert_eq!(text(&mut d), "[pace 0.9] Hello there.");
+    // at the end
+    d.click("tts.text");
+    d.ok("ui.key", json!({"key": "End"}));
+    d.frames(2);
+    d.click("tts.direction");
+    d.click("tts.direction.lower");
+    assert_eq!(text(&mut d), "[pace 0.9] Hello there. [pitch -2] ");
+    d.snapshot("tts-direction");
+}

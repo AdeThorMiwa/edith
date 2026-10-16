@@ -394,7 +394,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (ir, i) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                 icons::paint(ui.painter(), ir, Icon::Info, t.text_faint);
-                i.on_hover_text("Add pause inserts [pause 1s]. Change the number for a longer or shorter pause, e.g. [pause 500ms] or [pause 2s].");
+                i.on_hover_text(
+                    "Add pause inserts [pause 1s]. Change the number for a longer or shorter pause, e.g. [pause 500ms] or [pause 2s]. Direction inserts [pace 0.9] or [pitch -2] where the cursor is: the text after it is read that way until another direction or [normal].",
+                );
                 let b = ui.small_button("Add pause");
                 auto.add("tts.addPause", visible(ui, b.rect), "Add pause");
                 if b.clicked() {
@@ -404,10 +406,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     d.text.push_str(filmcraft_tts::script::PAUSE_MARKER);
                     d.text.push(' ');
                 }
+                let menu = ui.menu_button(tl!("Direction"), |ui| {
+                    for (id, label, marker) in crate::panels::tts_direction::items() {
+                        let item = ui.button(label).on_hover_text(marker);
+                        auto.add(&format!("tts.direction.{id}"), item.rect, label);
+                        if item.clicked() {
+                            crate::panels::tts_direction::insert_at_cursor(ui.ctx(), crate::panels::tts_direction::text_id(), &mut d.text, marker);
+                            ui.close();
+                        }
+                    }
+                });
+                auto.add("tts.direction", visible(ui, menu.response.rect), "Direction");
             });
         });
         ui.add_space(4.0);
         let te = egui::TextEdit::multiline(&mut d.text)
+            .id(crate::panels::tts_direction::text_id())
             .hint_text("Type what you want the voice to say")
             .desired_width(w)
             .desired_rows(8)

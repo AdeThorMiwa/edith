@@ -475,7 +475,8 @@ fn real_voices_follow_directions() {
     let _ = dir;
     let mut s = demo();
     let voice = filmcraft_tts::catalog::VOICES.first().unwrap().info.id;
-    let out = tmp("directions");
+    // EDITH_SAMPLES_DIR: keep the audio there to listen to; otherwise a scratch folder
+    let out = std::env::var("EDITH_SAMPLES_DIR").unwrap_or_else(|_| tmp("directions"));
     std::fs::create_dir_all(&out).unwrap();
     let mut say = |name: &str, text: &str| -> Vec<f32> {
         let path = format!("{out}/{name}.wav");
