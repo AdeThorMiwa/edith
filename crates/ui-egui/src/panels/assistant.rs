@@ -21,6 +21,7 @@ use egui::{Color32, Key, Modifiers, Rect, RichText, vec2};
 use serde_json::{Value, json};
 
 use super::assistant_view::{ChatLog, Entry};
+use super::assistant_widgets::ActionIcon;
 use crate::FilmcraftApp;
 use crate::dock::PanelKind;
 use crate::theme::Tokens;
@@ -510,7 +511,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         let this_turn = turn;
                         turn += 1;
                         let shown = !running && (last_user == Some(i) || chat.hover_entry == Some(i));
-                        let (row, links) = super::assistant_widgets::action_row(ui, shown, &[tl!("Edit"), tl!("Copy")], &t);
+                        let (row, links) =
+                            super::assistant_widgets::action_row(ui, shown, &[(ActionIcon::Edit, tl!("Edit")), (ActionIcon::Copy, tl!("Copy"))], &t);
                         for (n, r) in links.iter().enumerate() {
                             let (id, label) = if n == 0 { ("edit", "Edit message") } else { ("copy", "Copy message") };
                             elems.push((format!("assistant.{id}.{i}"), r.clone(), label.to_string()));
@@ -526,7 +528,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     Entry::Assistant(text) => {
                         let r = ui.scope(|ui| super::assistant_widgets::answer(ui, (thread, i), &super::assistant_view::blocks(text), &t)).response;
                         let shown = !running && (last_answer == Some(i) || chat.hover_entry == Some(i));
-                        let (row, links) = super::assistant_widgets::action_row(ui, shown, &[tl!("Copy"), tl!("Retry")], &t);
+                        let (row, links) =
+                            super::assistant_widgets::action_row(ui, shown, &[(ActionIcon::Copy, tl!("Copy")), (ActionIcon::Retry, tl!("Retry"))], &t);
                         for (n, l) in links.iter().enumerate() {
                             let (id, label) = if n == 0 { ("copy", "Copy answer") } else { ("retry", "Ask again") };
                             elems.push((format!("assistant.{id}.{i}"), l.clone(), label.to_string()));

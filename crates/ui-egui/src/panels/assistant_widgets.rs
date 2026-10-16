@@ -169,23 +169,67 @@ pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Token
     }
 }
 
-/// A small faint text link ("Copy", "Retry"): brighter under the pointer.
-pub fn action_link(ui: &mut Ui, label: &str, t: &Tokens) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), Tokens::ui(SMALL), t.text_faint);
-    let (rect, resp) = ui.allocate_exact_size(galley.size() + vec2(8.0, 2.0), Sense::click());
-    let color = if resp.hovered() { t.text } else { t.text_faint };
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, Tokens::ui(SMALL), color);
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+/// The small icons under a message.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ActionIcon {
+    Copy,
+    Retry,
+    Edit,
 }
 
-/// The row of links under a message. Always takes the same height, so nothing jumps when the links
-/// appear; they are drawn only when `shown`. Returns the row's area and one response per link
+fn paint_action_icon(painter: &egui::Painter, c: egui::Pos2, icon: ActionIcon, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    let p = |x: f32, y: f32| pos2(c.x + x, c.y + y);
+    match icon {
+        ActionIcon::Copy => {
+            // a page in front of another: the front one whole, the back one as an L
+            painter.rect_stroke(egui::Rect::from_min_max(p(-2.0, -2.0), p(4.5, 4.5)), 1.5, stroke, StrokeKind::Inside);
+            painter.line_segment([p(-4.5, 2.0), p(-4.5, -4.5)], stroke);
+            painter.line_segment([p(-4.5, -4.5), p(2.0, -4.5)], stroke);
+        }
+        ActionIcon::Retry => {
+            // an open circle with an arrowhead: go round again
+            let (r, from, to) = (4.6_f32, 0.6_f32, 5.6_f32);
+            let steps = 14;
+            let pts: Vec<egui::Pos2> = (0..=steps)
+                .map(|i| {
+                    let a = from + (to - from) * i as f32 / steps as f32;
+                    p(r * a.cos(), r * a.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts.clone(), stroke));
+            if let Some(end) = pts.last() {
+                painter.line_segment([*end, pos2(end.x - 3.2, end.y - 0.4)], stroke);
+                painter.line_segment([*end, pos2(end.x - 0.6, end.y - 3.2)], stroke);
+            }
+        }
+        ActionIcon::Edit => {
+            // a pencil: body, tip and the line it writes on
+            painter.line_segment([p(-1.0, 1.0), p(3.6, -3.6)], Stroke::new(2.6, color));
+            painter.line_segment([p(-4.2, 4.2), p(-1.0, 1.0)], Stroke::new(1.3, color));
+            painter.line_segment([p(0.5, 5.0), p(5.0, 5.0)], stroke);
+        }
+    }
+}
+
+/// A small flat icon button under a message: faint, brighter and lightly filled under the pointer.
+pub fn action_icon(ui: &mut Ui, icon: ActionIcon, tip: &str, t: &Tokens) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, t.radius_sm, t.hover);
+    }
+    paint_action_icon(ui.painter(), rect.center(), icon, if resp.hovered() { t.text } else { t.text_faint });
+    resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The row of icons under a message. Always takes the same height, so nothing jumps when the icons
+/// appear; they are drawn only when `shown`. Returns the row's area and one response per icon
 /// (none when hidden).
-pub fn action_row(ui: &mut Ui, shown: bool, labels: &[&str], t: &Tokens) -> (egui::Rect, Vec<Response>) {
+pub fn action_row(ui: &mut Ui, shown: bool, icons: &[(ActionIcon, &str)], t: &Tokens) -> (egui::Rect, Vec<Response>) {
     let out = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        ui.set_min_height(16.0);
-        if shown { labels.iter().map(|l| action_link(ui, l, t)).collect::<Vec<_>>() } else { Vec::new() }
+        ui.set_min_height(20.0);
+        if shown { icons.iter().map(|(i, tip)| action_icon(ui, *i, tip, t)).collect::<Vec<_>>() } else { Vec::new() }
     });
     (out.response.rect, out.inner)
 }
