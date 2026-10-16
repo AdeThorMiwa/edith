@@ -24,7 +24,7 @@ mod settings;
 
 pub use assistant::{Assistant, agent_config, usage_summary};
 pub use models::{badges, resolve_model};
-pub use settings::{AiSettings, SETTINGS_FILE};
+pub use settings::{AiSettings, Chips, SETTINGS_FILE};
 
 pub use edith_agent as agent;
 pub use edith_agent::*;

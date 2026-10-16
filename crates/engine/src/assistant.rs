@@ -373,7 +373,7 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 fn settings_json(st: &AiSettings) -> Value {
-    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens})
+    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "chips": st.chips, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens})
 }
 
 fn model_json(m: &ModelInfo) -> Value {
@@ -422,6 +422,25 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("showThinking") {
         next.show_thinking = v.as_bool().ok_or_else(|| bad(cmd, "`showThinking` must be true or false"))?;
+    }
+    if let Some(v) = p.get("chips") {
+        let o = v.as_object().ok_or_else(|| bad(cmd, "`chips` must be an object such as {\"frame\": false}"))?;
+        for (k, on) in o {
+            let on = on.as_bool().ok_or_else(|| bad(cmd, format!("`chips.{}` must be true or false", k.chars().take(20).collect::<String>())))?;
+            match k.as_str() {
+                "selection" => next.chips.selection = on,
+                "playhead" => next.chips.playhead = on,
+                "transcript" => next.chips.transcript = on,
+                "markers" => next.chips.markers = on,
+                "frame" => next.chips.frame = on,
+                other => {
+                    return Err(bad(
+                        cmd,
+                        format!("there is no chip `{}`; use selection, playhead, transcript, markers or frame", other.chars().take(20).collect::<String>()),
+                    ));
+                }
+            }
+        }
     }
     if let Some(v) = p.get("maxSteps") {
         next.max_steps =
@@ -827,7 +846,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "assistant.settings",
             "Assistant Settings",
-            r#"{"service":str?,"model":str?,"effort":"low|medium|high|xhigh|max"|null?,"showThinking":bool?,"maxSteps":1..40?,"maxCostUsd":f64|null?,"maxOutputTokens":256..64000?}"#,
+            r#"{"service":str?,"model":str?,"effort":"low|medium|high|xhigh|max"|null?,"showThinking":bool?,"chips":{"selection":bool?,"playhead":bool?,"transcript":bool?,"markers":bool?,"frame":bool?}?,"maxSteps":1..40?,"maxCostUsd":f64|null?,"maxOutputTokens":256..64000?}"#,
             settings,
         ),
         spec("assistant.models", "Assistant Models", r#"{"refresh":bool?}"#, models),

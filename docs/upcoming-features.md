@@ -285,7 +285,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Source.** The architect's first run of the Assistant (2026-10-15): everything worked as designed, and this is what they want better. None of it was in the roadmap, so it lives here. It is a list of intentions with a design note each, not a spec; each item gets a short design pass when it is picked up. Size: M (about 15 to 40 agent-hours for the lot).
 
-1. **Defaults that suit how it is used.**
+1. **Defaults that suit how it is used.** *(Built 2026-10-16 as F03.7a: the chips are saved settings (`chips` in `edith-ai-settings.json`, `assistant.settings {chips: {frame: false}}`); Frame is on by default and goes only to a model that the list says can see; Settings has a "Sent with each question" group. Transcript and Markers stay off.)*
    - The **Frame** chip is on by default for a model that can see, and the choice is remembered (chips become settings in `edith-ai-settings.json`, not per-session). Cost is small: a 768 px frame is about 450 tokens, a fraction of a cent on Haiku. The "Sent along:" line already shows what went with each message, so nothing is hidden.
    - Transcript and Markers stay off unless the architect says otherwise; Transcript could turn itself on when a transcript exists near the playhead.
    - Settings gets a "Defaults" group so the first-run experience can be tuned in one place.

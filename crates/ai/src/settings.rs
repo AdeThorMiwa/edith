@@ -9,6 +9,24 @@ use std::path::Path;
 
 pub const SETTINGS_FILE: &str = "edith-ai-settings.json";
 
+/// What is sent along with each question unless the person turns it off. Remembered between
+/// sessions. The picture of the frame is on by default but only goes to a model that can see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Chips {
+    pub selection: bool,
+    pub playhead: bool,
+    pub transcript: bool,
+    pub markers: bool,
+    pub frame: bool,
+}
+
+impl Default for Chips {
+    fn default() -> Self {
+        Self { selection: true, playhead: true, transcript: false, markers: false, frame: true }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiSettings {
@@ -23,6 +41,8 @@ pub struct AiSettings {
     pub effort: Option<Effort>,
     /// Ask the model for a short summary of its reasoning and show it.
     pub show_thinking: bool,
+    /// What goes along with each question.
+    pub chips: Chips,
     /// Most model requests in one turn.
     pub max_steps: u32,
     /// Stop a turn once a thread's estimated cost reaches this many US dollars (`None`: no limit).
@@ -38,6 +58,7 @@ impl Default for AiSettings {
             model_by_service: BTreeMap::new(),
             effort: None,
             show_thinking: true,
+            chips: Chips::default(),
             max_steps: 12,
             max_cost_usd: Some(1.0),
             max_output_tokens: 8192,
@@ -131,6 +152,23 @@ mod tests {
         assert_eq!((s.service.as_str(), s.model.as_str()), ("anthropic", "claude-haiku-5-5"));
         assert_eq!(s.max_cost_usd, Some(1.0));
         assert_eq!(s.clone().sanitized(), s);
+    }
+
+    #[test]
+    fn the_frame_goes_along_by_default_and_the_choice_is_remembered() {
+        let d = Chips::default();
+        assert!(d.frame && d.selection && d.playhead && !d.transcript && !d.markers);
+        let dir = tmp("chips");
+        let s = AiSettings { chips: Chips { frame: false, markers: true, ..Chips::default() }, ..Default::default() };
+        s.save(&dir).unwrap();
+        assert_eq!(AiSettings::load(&dir).0.chips, s.chips);
+        // an older file with no chips gets the defaults; a partial one keeps what it says
+        std::fs::write(dir.join(SETTINGS_FILE), r#"{"model":"claude-opus-5-5"}"#).unwrap();
+        assert_eq!(AiSettings::load(&dir).0.chips, Chips::default());
+        std::fs::write(dir.join(SETTINGS_FILE), r#"{"chips":{"frame":false}}"#).unwrap();
+        let c = AiSettings::load(&dir).0.chips;
+        assert!(!c.frame && c.selection);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

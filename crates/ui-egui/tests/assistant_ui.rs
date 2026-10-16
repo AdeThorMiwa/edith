@@ -482,8 +482,8 @@ fn the_transcript_markers_and_frame_chips_send_what_they_name_and_the_message_sa
     d.app().session.assistant.use_model(model.clone());
     d.open_assistant();
     d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
-    assert_eq!(d.label("assistant.chip.frame"), "Frame off", "the frame chip starts off: pictures cost more than text");
-    for chip in ["transcript", "markers", "frame"] {
+    assert_eq!(d.label("assistant.chip.frame"), "Frame on", "a model that can see gets the frame by default");
+    for chip in ["transcript", "markers"] {
         d.click(&format!("assistant.chip.{chip}"));
     }
     assert_eq!(d.label("assistant.chip.frame"), "Frame on");
@@ -499,6 +499,34 @@ fn the_transcript_markers_and_frame_chips_send_what_they_name_and_the_message_sa
         assert!(sent.1.contains(label), "{label} missing from {:?}", sent.1);
     }
     d.snapshot("assistant-frame");
+}
+
+#[test]
+fn the_chips_are_saved_settings_so_a_choice_is_there_next_time() {
+    let _g = guard();
+    let dir = std::env::temp_dir().join(format!("edith-ui-chips-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    session.assistant.use_model(vision_model(true, vec![]));
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
+    assert_eq!(d.exec("assistant.settings", json!({}))["settings"]["chips"]["frame"], true);
+    // turn the frame off from its chip
+    d.click("assistant.chip.frame");
+    d.wait("the setting", |d| d.exec("assistant.settings", json!({}))["settings"]["chips"]["frame"] == false);
+    assert_eq!(d.label("assistant.chip.frame"), "Frame off");
+    // a new session on the same folder finds the choice
+    let mut again = Session::default();
+    again.assistant.set_dir(&dir);
+    assert_eq!(again.execute("assistant.settings", json!({})).unwrap()["settings"]["chips"]["frame"], false);
+    // hostile values change nothing
+    for bad in [json!({"chips": 5}), json!({"chips": {"frame": "yes"}}), json!({"chips": {"nothing": true}}), json!({"chips": {"frame": null}})] {
+        assert!(d.app().session.execute("assistant.settings", bad.clone()).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

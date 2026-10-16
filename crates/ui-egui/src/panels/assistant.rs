@@ -42,11 +42,6 @@ struct Chat {
     models_at: f64,
     usage_text: String,
     running: bool,
-    chip_selection: bool,
-    chip_playhead: bool,
-    chip_transcript: bool,
-    chip_markers: bool,
-    chip_frame: bool,
     error: Option<String>,
     polled_at: f64,
     /// The slash commands (`/pacing`, …) as the engine lists them.
@@ -69,11 +64,6 @@ impl Chat {
             models_at: f64::NEG_INFINITY,
             usage_text: String::new(),
             running: false,
-            chip_selection: true,
-            chip_playhead: true,
-            chip_transcript: false,
-            chip_markers: false,
-            chip_frame: false,
             error: None,
             polled_at: f64::NEG_INFINITY,
             commands: Vec::new(),
@@ -88,6 +78,11 @@ impl Chat {
 
     fn ready(&self) -> bool {
         self.status.as_ref().and_then(|s| s.get("ready")).and_then(Value::as_bool).unwrap_or(false)
+    }
+
+    /// Whether a chip is on: it is a saved setting, so it is the same next time.
+    fn chip(&self, name: &str) -> bool {
+        self.setting("chips").get(name).and_then(Value::as_bool).unwrap_or(matches!(name, "selection" | "playhead" | "frame"))
     }
 
     /// The provider has many models and none is chosen yet: nothing is picked for the person.
@@ -374,6 +369,23 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     }
                 }
             });
+            ui.separator();
+            ui.label(RichText::new(tl!("Sent with each question")).size(11.0).color(t.text_faint));
+            for (name, label) in [
+                ("selection", tl!("Selection")),
+                ("playhead", tl!("Playhead")),
+                ("transcript", tl!("Transcript")),
+                ("markers", tl!("Markers")),
+                ("frame", tl!("Frame")),
+            ] {
+                let mut on = chat.chip(name);
+                let r = ui.checkbox(&mut on, label);
+                elems.push((format!("assistant.settings.chip.{name}"), r.clone(), format!("Send {name} by default")));
+                if r.changed() {
+                    actions.push(Action::Settings(json!({"chips": {name: on}})));
+                }
+            }
+            ui.separator();
             ui.label(RichText::new(tl!("The cost is an estimate from list prices.")).size(11.0).color(t.text_faint));
         });
     });
@@ -510,39 +522,41 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .and_then(|m| m["models"].as_array())
         .and_then(|a| a.iter().find(|m| m["id"] == current_model.as_str()))
         .and_then(|m| m["capabilities"]["images"].as_bool())
-        .unwrap_or(true);
+        // until the model list says so, a model is not assumed to see: no picture goes by surprise
+        .unwrap_or(false);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(tl!("Sends along:")).size(11.0).color(t.text_faint));
         let blocks = context_blocks(app, Chips { selection: true, playhead: true, transcript: false, markers: false, frame: false });
         let text_of = |label: &str| blocks.iter().find(|b| b["label"] == label).and_then(|b| b["text"].as_str()).unwrap_or("nothing selected").to_string();
-        let r = ui.selectable_label(chat.chip_selection, tl!("Selection")).on_hover_text(text_of("selection"));
-        elems.push(("assistant.chip.selection".into(), r.clone(), format!("Selection {}", if chat.chip_selection { "on" } else { "off" })));
-        if r.clicked() {
-            chat.chip_selection = !chat.chip_selection;
-        }
-        let r = ui.selectable_label(chat.chip_playhead, tl!("Playhead")).on_hover_text(text_of("playhead"));
-        elems.push(("assistant.chip.playhead".into(), r.clone(), format!("Playhead {}", if chat.chip_playhead { "on" } else { "off" })));
-        if r.clicked() {
-            chat.chip_playhead = !chat.chip_playhead;
-        }
-        let r = ui.selectable_label(chat.chip_transcript, tl!("Transcript")).on_hover_text(tl!("What is said within 20 seconds of the playhead."));
-        elems.push(("assistant.chip.transcript".into(), r.clone(), format!("Transcript {}", if chat.chip_transcript { "on" } else { "off" })));
-        if r.clicked() {
-            chat.chip_transcript = !chat.chip_transcript;
-        }
-        let r = ui.selectable_label(chat.chip_markers, tl!("Markers")).on_hover_text(tl!("Every marker in this sequence."));
-        elems.push(("assistant.chip.markers".into(), r.clone(), format!("Markers {}", if chat.chip_markers { "on" } else { "off" })));
-        if r.clicked() {
-            chat.chip_markers = !chat.chip_markers;
-        }
+        let mut chip = |ui: &mut egui::Ui, name: &str, label: &str, hover: &str, enabled: bool| {
+            let on = chat.chip(name) && enabled;
+            let r = ui.add_enabled_ui(enabled, |ui| ui.selectable_label(on, label)).inner.on_hover_text(hover).on_disabled_hover_text(hover);
+            elems.push((
+                format!("assistant.chip.{name}"),
+                r.clone(),
+                format!(
+                    "{} {}",
+                    match name {
+                        "selection" => "Selection",
+                        "playhead" => "Playhead",
+                        "transcript" => "Transcript",
+                        "markers" => "Markers",
+                        _ => "Frame",
+                    },
+                    if on { "on" } else { "off" }
+                ),
+            ));
+            if r.clicked() {
+                actions.push(Action::Settings(json!({"chips": {name: !chat.chip(name)}})));
+            }
+        };
+        chip(ui, "selection", tl!("Selection"), &text_of("selection"), true);
+        chip(ui, "playhead", tl!("Playhead"), &text_of("playhead"), true);
+        chip(ui, "transcript", tl!("Transcript"), tl!("What is said within 20 seconds of the playhead."), true);
+        chip(ui, "markers", tl!("Markers"), tl!("Every marker in this sequence."), true);
         let hover =
             if sees { tl!("A picture of the Program monitor at the playhead. Costs more than text.") } else { tl!("This model cannot look at pictures.") };
-        let r =
-            ui.add_enabled_ui(sees, |ui| ui.selectable_label(chat.chip_frame && sees, tl!("Frame"))).inner.on_hover_text(hover).on_disabled_hover_text(hover);
-        elems.push(("assistant.chip.frame".into(), r.clone(), format!("Frame {}", if chat.chip_frame && sees { "on" } else { "off" })));
-        if r.clicked() {
-            chat.chip_frame = !chat.chip_frame;
-        }
+        chip(ui, "frame", tl!("Frame"), hover, sees);
     });
 
     // ---- slash commands, while the message is just "/something" ----
@@ -592,11 +606,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     });
 
     let chips = Chips {
-        selection: chat.chip_selection,
-        playhead: chat.chip_playhead,
-        transcript: chat.chip_transcript,
-        markers: chat.chip_markers,
-        frame: chat.chip_frame && sees,
+        selection: chat.chip("selection"),
+        playhead: chat.chip("playhead"),
+        transcript: chat.chip("transcript"),
+        markers: chat.chip("markers"),
+        frame: chat.chip("frame") && sees,
     };
     drop(chat);
     for (id, r, label) in &elems {
