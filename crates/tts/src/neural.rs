@@ -14,7 +14,7 @@ use filmcraft_tts_text::{Chunk, Lang, Lexicon, Overrides};
 
 use crate::catalog;
 use crate::kokoro::{KOKORO_RATE, Kokoro, VoicePack};
-use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, check_text};
+use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, check_text, script};
 
 /// How far a take moves the voice's prosody style (the style values have a spread of about 0.15):
 /// timing shifts a few percent and stress moves, while the voice stays itself.
@@ -122,43 +122,56 @@ impl Voice for NeuralVoice {
     fn synthesize_with(&self, text: &str, params: &Params, pronounce: &Pronunciations) -> Result<Audio, TtsError> {
         check_text(text)?;
         params.check()?;
-        let chunks = filmcraft_tts_text::phonemize(text, Lang::EnUs, &self.lexicon, &overrides_of(pronounce)).map_err(|e| TtsError::Invalid(e.to_string()))?;
+        let overrides = overrides_of(pronounce);
+        // A script with directions is spoken in stretches that share a delivery; one without is a
+        // single stretch with the narration's own settings, exactly as before directions existed.
+        let runs = if script::has_directions(text) { script::runs(text) } else { vec![script::Run { text: text.to_string(), pace: 1.0, semitones: 0.0 }] };
         let rate = KOKORO_RATE;
         let max = (MAX_SECONDS * f64::from(rate)) as usize;
-        let mut out: Vec<f32> = Vec::new();
+        let mut all: Vec<f32> = Vec::new();
         let mut spoke = false;
-        for (i, c) in chunks.iter().enumerate() {
-            match c {
-                Chunk::Pause { millis } => {
-                    let n = (u64::from(*millis) * u64::from(rate) / 1000) as usize;
-                    out.resize(out.len().saturating_add(n), 0.0);
+        // sentences are numbered across the whole script so a take keeps its seeds
+        let mut sentence_base = 0u64;
+        for run in &runs {
+            let here = params.directed(run.pace, run.semitones);
+            let chunks = filmcraft_tts_text::phonemize(&run.text, Lang::EnUs, &self.lexicon, &overrides).map_err(|e| TtsError::Invalid(e.to_string()))?;
+            let mut out: Vec<f32> = Vec::new();
+            for (i, c) in chunks.iter().enumerate() {
+                match c {
+                    Chunk::Pause { millis } => {
+                        let n = (u64::from(*millis) * u64::from(rate) / 1000) as usize;
+                        out.resize(out.len().saturating_add(n), 0.0);
+                    }
+                    Chunk::Phonemes(p) => {
+                        if self.model.ids(p).is_empty() {
+                            continue;
+                        }
+                        if spoke {
+                            out.resize(out.len().saturating_add((SENTENCE_GAP_MS * rate / 1000) as usize), 0.0);
+                        }
+                        // take 0 is the plain reading (as before takes existed); every take moves each
+                        // sentence's style by its own noise, seeded by the take and the sentence
+                        let seed = sentence_base + i as u64 + 1 + u64::from(here.take) * TAKE_SEED_STEP;
+                        let sigma = if here.take == 0 { 0.0 } else { TAKE_SIGMA };
+                        let s = self.model.speak_take(p, &self.pack, here.pace, seed, sigma)?;
+                        out.extend_from_slice(&s);
+                        spoke = true;
+                    }
                 }
-                Chunk::Phonemes(p) => {
-                    if self.model.ids(p).is_empty() {
-                        continue;
-                    }
-                    if spoke {
-                        out.resize(out.len().saturating_add((SENTENCE_GAP_MS * rate / 1000) as usize), 0.0);
-                    }
-                    // take 0 is the plain reading (as before takes existed); every take moves each
-                    // sentence's style by its own noise, seeded by the take and the sentence
-                    let seed = i as u64 + 1 + u64::from(params.take) * TAKE_SEED_STEP;
-                    let sigma = if params.take == 0 { 0.0 } else { TAKE_SIGMA };
-                    let s = self.model.speak_take(p, &self.pack, params.pace, seed, sigma)?;
-                    out.extend_from_slice(&s);
-                    spoke = true;
+                if all.len().saturating_add(out.len()) > max {
+                    return Err(TtsError::AudioTooLong);
                 }
             }
-            if out.len() > max {
-                return Err(TtsError::AudioTooLong);
+            sentence_base += chunks.len() as u64;
+            if here.semitones.abs() > 1e-6 {
+                out = pitch_shift(out, here.semitones, rate);
             }
+            all.extend_from_slice(&out);
         }
         if !spoke {
             return Err(TtsError::Empty);
         }
-        if params.semitones.abs() > 1e-6 {
-            out = pitch_shift(out, params.semitones, rate);
-        }
+        let mut out = all;
         // headroom: never clip
         let peak = out.iter().fold(0f32, |m, x| m.max(x.abs()));
         if peak > 0.98 {

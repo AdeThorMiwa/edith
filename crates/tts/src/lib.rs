@@ -75,6 +75,14 @@ impl Default for Params {
 }
 
 impl Params {
+    /// These settings with a direction on top: pace times `pace`, pitch plus `semitones`, both kept
+    /// within the voice's limits (a non-finite request leaves the setting as it is).
+    pub fn directed(&self, pace: f64, semitones: f64) -> Params {
+        let p = if pace.is_finite() { self.pace * pace } else { self.pace };
+        let st = if semitones.is_finite() { self.semitones + semitones } else { self.semitones };
+        Params { pace: p.clamp(MIN_PACE, MAX_PACE), semitones: st.clamp(-MAX_SEMITONES, MAX_SEMITONES), take: self.take }
+    }
+
     pub fn check(&self) -> Result<(), TtsError> {
         if !(MIN_PACE..=MAX_PACE).contains(&self.pace) {
             return Err(TtsError::Invalid(format!("pace must be between {MIN_PACE} and {MAX_PACE}")));
@@ -206,7 +214,7 @@ pub fn check_words(text: &str, models_dir: Option<&std::path::Path>, pronounce: 
     #[cfg(feature = "kokoro")]
     {
         let dir = models_dir.ok_or(TtsError::NotInstalled)?;
-        neural::check_words(text, dir, pronounce)
+        neural::check_words(&script::strip_directions(text), dir, pronounce)
     }
     #[cfg(not(feature = "kokoro"))]
     {
@@ -317,6 +325,28 @@ mod tests {
             assert!(Pronunciations::checked_entry("x", "/kjuːbɹɪk/").is_err(), "a symbol the voice does not have (the length mark)");
             assert!(Pronunciations::checked_entry("x", "/kjˈubɹɪk/").is_ok());
         }
+    }
+
+    #[test]
+    fn a_direction_is_laid_over_the_settings_and_kept_within_the_limits() {
+        let base = Params { semitones: 3.0, pace: 1.5, take: 4 };
+        assert_eq!(base.directed(1.0, 0.0), base);
+        let d = base.directed(0.5, -5.0);
+        assert_eq!((d.pace, d.semitones, d.take), (0.75, -2.0, 4));
+        let d = base.directed(100.0, 100.0);
+        assert_eq!((d.pace, d.semitones), (MAX_PACE, MAX_SEMITONES));
+        let d = base.directed(0.0001, -100.0);
+        assert_eq!((d.pace, d.semitones), (MIN_PACE, -MAX_SEMITONES));
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(base.directed(bad, bad), base, "{bad}");
+        }
+        assert!(base.directed(0.7, 2.0).check().is_ok());
+    }
+
+    #[test]
+    fn directions_are_not_something_to_say() {
+        assert_eq!(check_text("[pace 0.8] [pitch -2] [normal]").err(), Some(TtsError::Empty));
+        assert!(check_text("[pace 0.8] Hello.").is_ok());
     }
 
     #[test]

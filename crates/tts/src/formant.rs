@@ -88,8 +88,18 @@ impl Voice for FormantVoice {
         let mut plan: Vec<Piece> = Vec::with_capacity(segments.len());
         let mut total_ms = 0.0f64;
         let mut spoken = false;
+        // directions in the script change the pace and pitch of what follows
+        let (mut pace_by, mut pitch_by) = (1.0f64, 0.0f64);
         for seg in &segments {
             match seg {
+                Segment::Direction(d) => {
+                    (pace_by, pitch_by) = match d {
+                        script::Direction::Pace(p) => (*p, pitch_by),
+                        script::Direction::Pitch(st) => (pace_by, *st),
+                        script::Direction::Normal => (1.0, 0.0),
+                    };
+                    continue;
+                }
                 Segment::Pause { millis } => {
                     total_ms += f64::from(*millis);
                     plan.push(Piece::Pause(*millis));
@@ -97,8 +107,9 @@ impl Voice for FormantVoice {
                 Segment::Speech(s) => {
                     let ph = phones(s);
                     spoken |= ph.iter().any(|p| p.kind != Kind::Silence);
-                    total_ms += ph.iter().map(|p| f64::from(p.dur_ms)).sum::<f64>() / params.pace;
-                    plan.push(Piece::Speech(ph));
+                    let here = params.directed(pace_by, pitch_by);
+                    total_ms += ph.iter().map(|p| f64::from(p.dur_ms)).sum::<f64>() / here.pace;
+                    plan.push(Piece::Speech(ph, here));
                 }
             }
             if total_ms > MAX_SECONDS * 1000.0 {
@@ -117,7 +128,7 @@ impl Voice for FormantVoice {
                     let n = (f64::from(*ms) / 1000.0 * f64::from(SAMPLE_RATE)).round() as usize;
                     out.resize(out.len().saturating_add(n), 0.0);
                 }
-                Piece::Speech(ph) => render(&self.spec, ph, params, &mut out),
+                Piece::Speech(ph, here) => render(&self.spec, ph, here, &mut out),
             }
         }
         // one gain for the whole narration so loudness doesn't jump between pieces
@@ -136,7 +147,7 @@ impl Voice for FormantVoice {
 
 enum Piece {
     Pause(u32),
-    Speech(Vec<Phone>),
+    Speech(Vec<Phone>, Params),
 }
 
 // ------------------------------------------------------------------------------------- phones
@@ -732,5 +743,35 @@ mod tests {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| v.synthesize(s, &Params::default())));
             assert!(r.is_ok(), "panicked on {s:?}");
         }
+    }
+
+    #[test]
+    fn directions_change_the_pace_and_pitch_of_what_follows_and_are_not_spoken() {
+        let plain = say("basic-female", "The fog rolled in. Nobody woke.", Params::default());
+        let n = |a: &Audio| a.samples.len() as f64;
+        // a marker that sets nothing new changes how long it takes by (almost) nothing
+        let same = say("basic-female", "The fog rolled in. [normal] Nobody woke.", Params::default());
+        assert!((n(&same) - n(&plain)).abs() < n(&plain) * 0.02, "{} vs {}", n(&same), n(&plain));
+        let first = say("basic-female", "The fog rolled in. ", Params::default());
+        // half pace for the second sentence only: the second takes twice as long, the first is as before
+        let slow = say("basic-female", "The fog rolled in. [pace 0.5] Nobody woke.", Params::default());
+        let second = say("basic-female", "Nobody woke.", Params::default());
+        assert!(n(&slow) > n(&plain) * 1.2, "{} vs {}", n(&slow), n(&plain));
+        assert!((n(&slow) - (n(&first) + 2.0 * n(&second))).abs() < n(&plain) * 0.1, "{} {} {}", n(&slow), n(&first), n(&second));
+        // [normal] puts it back
+        let back = say("basic-female", "The fog rolled in. [pace 0.5] Nobody woke. [normal] The end.", Params::default());
+        let back_plain = say("basic-female", "The fog rolled in. Nobody woke. The end.", Params::default());
+        assert!(n(&back) > n(&back_plain) * 1.1 && n(&back) < n(&slow) * 2.0);
+        // pitch: the markers are not spoken, and the same words a few semitones lower have the same length
+        let low = say("basic-female", "[pitch -4] Nobody woke.", Params::default());
+        assert_eq!(low.samples.len(), second.samples.len());
+        assert!(pitch(&low.samples) < pitch(&second.samples) * 0.9, "{} vs {}", pitch(&low.samples), pitch(&second.samples));
+        // the result is repeatable, and a script of directions alone has nothing to say
+        assert!(slow == say("basic-female", "The fog rolled in. [pace 0.5] Nobody woke.", Params::default()), "repeatable");
+        assert_eq!(voice("basic-female").unwrap().synthesize("[pace 0.5] [pitch 2]", &Params::default()).err(), Some(TtsError::Empty));
+        // directions stack with the narration's own settings and stay inside the voice's limits
+        let fast = say("basic-female", "[pace 100] Nobody woke.", Params { pace: 2.0, ..Default::default() });
+        assert!(n(&fast) > 0.0 && n(&fast) <= n(&second) / 1.9);
+        let _ = say("basic-female", "[pitch 99] Nobody woke.", Params { semitones: 12.0, ..Default::default() });
     }
 }

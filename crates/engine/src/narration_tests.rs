@@ -461,3 +461,37 @@ fn a_take_is_stored_with_the_narration_changed_by_edit_and_checked() {
     assert_eq!(filmcraft_project::narration::MAX_TAKE, filmcraft_tts::MAX_TAKE, "the project and the voice agree on the highest take");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// With the natural voices installed on this machine: directions change the pace and pitch of what
+/// follows, and a script that only says `[normal]` is read exactly as one without markers. Run with
+/// `cargo test -p filmcraft-engine --features neural-voices --lib -- --ignored real_voices_follow`.
+#[test]
+#[ignore = "needs the downloaded natural voices"]
+fn real_voices_follow_directions() {
+    let Some(dir) = crate::transcript::models_dir().filter(|d| filmcraft_tts::catalog::installed(d)) else {
+        eprintln!("natural voices are not installed: skipped");
+        return;
+    };
+    let _ = dir;
+    let mut s = demo();
+    let voice = filmcraft_tts::catalog::VOICES.first().unwrap().info.id;
+    let out = tmp("directions");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut say = |name: &str, text: &str| -> Vec<f32> {
+        let path = format!("{out}/{name}.wav");
+        s.execute("tts.preview", json!({"text": text, "voice": voice, "path": path})).unwrap();
+        wav_samples(&path)
+    };
+    let plain_text = "The fog rolled in over the valley. Nobody had walked that road in forty years.";
+    let plain = say("plain", plain_text);
+    assert!(plain == say("normal", &format!("[normal] {plain_text}")), "a script that only says [normal] reads as one without markers");
+    let slow = say("slow", "The fog rolled in over the valley. [pace 0.7] Nobody had walked that road in forty years.");
+    assert!(slow.len() as f64 > plain.len() as f64 * 1.1, "slower: {} vs {}", slow.len(), plain.len());
+    let low = say("low", &format!("[pitch -3] {plain_text}"));
+    assert_eq!(low.len(), plain.len(), "a lower voice takes as long");
+    assert!(low != plain, "and sounds different");
+    assert!(low == say("low-again", &format!("[pitch -3] {plain_text}")), "repeatable");
+    // the sentences before a direction are read as before
+    let n = plain.len().min(slow.len()) / 4;
+    assert!(plain[..n] == slow[..n], "the first sentence is untouched by a direction after it");
+}
