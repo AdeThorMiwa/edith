@@ -250,6 +250,73 @@ pub fn phonemize(text: &str, lang: Lang, lex: &Lexicon, overrides: &Overrides) -
     Ok(chunks)
 }
 
+/// The word before a possessive `'s` (straight or curly apostrophe), when there is one.
+fn possessive_stem(lower: &str) -> Option<&str> {
+    lower.strip_suffix("'s").or_else(|| lower.strip_suffix("\u{2019}s")).filter(|s| !s.is_empty())
+}
+
+/// `base` (Kokoro phonemes) with the possessive ending: /ɪz/ after a sibilant, /s/ after a
+/// voiceless sound, else /z/.
+fn with_possessive(base: &str) -> String {
+    let ending = match base.trim_end_matches(|c: char| !SYMBOLS.contains(c) || matches!(c, ',' | '.' | '!' | '?' | ';' | ':')).chars().last() {
+        Some('s' | 'z' | 'ʃ' | 'ʒ' | 'ʧ' | 'ʤ') => "ɪz",
+        Some('p' | 't' | 'k' | 'f' | 'θ') => "s",
+        _ => "z",
+    };
+    format!("{base}{ending}")
+}
+
+/// A word the dictionary and the rules do not know: it would be spoken from a letter-by-letter
+/// guess, which is often wrong for names and places.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Unknown {
+    /// The word as first written in the script.
+    pub word: String,
+    /// How many times it appears.
+    pub count: u32,
+}
+
+/// Most unknown words reported (the rest are ignored; a script with more has bigger problems).
+pub const MAX_UNKNOWN: usize = 500;
+
+/// Whether `word` is spoken from a dictionary entry, a rule built on one, a single letter or one of
+/// your overrides. Follows the order of [`word_phonemes`].
+fn is_known(word: &str, lex: &Lexicon, overrides: &BTreeMap<String, String>) -> bool {
+    let lower = word.to_lowercase();
+    if lower.is_empty() || overrides.contains_key(&lower) || is_single_letter(word) {
+        return true;
+    }
+    if possessive_stem(&lower).is_some_and(|stem| overrides.contains_key(stem)) {
+        return true;
+    }
+    if word.contains('-') && !word.contains(char::is_numeric) {
+        let none = BTreeMap::new();
+        return word.split('-').filter(|part| !part.is_empty()).all(|part| is_known(part, lex, &none));
+    }
+    lex.pronunciations(&lower.to_uppercase()).is_some() || morphology(&lower, lex).is_some()
+}
+
+/// The words of `text` that would be guessed, each once, in order of first appearance. Words you
+/// have an override for count as known. Errors only for a script over the normalizer's limit.
+pub fn unknown_words(text: &str, lang: Lang, lex: &Lexicon, overrides: &Overrides) -> Result<Vec<Unknown>, NormalizeError> {
+    let overrides = bounded_overrides(overrides);
+    let mut found: Vec<Unknown> = Vec::new();
+    let mut index: BTreeMap<String, usize> = BTreeMap::new();
+    for token in normalize::normalize(text, lang)? {
+        let Token::Word(w) = token else { continue };
+        let key = w.to_lowercase();
+        if let Some(&at) = index.get(&key) {
+            if let Some(u) = found.get_mut(at) {
+                u.count = u.count.saturating_add(1);
+            }
+        } else if !is_known(&w, lex, &overrides) && found.len() < MAX_UNKNOWN {
+            index.insert(key, found.len());
+            found.push(Unknown { word: w, count: 1 });
+        }
+    }
+    Ok(found)
+}
+
 /// The bounded view of the user's overrides: keys lowercased, at most
 /// [`MAX_OVERRIDES`] entries of at most [`MAX_OVERRIDE_LEN`] chars — excess is
 /// ignored, not an error.
@@ -352,6 +419,14 @@ fn word_phonemes(word: &str, lex: &Lexicon, overrides: Option<&BTreeMap<String, 
                 return Some(out);
             }
         }
+    }
+    // The possessive of a word you gave a pronunciation ("Kubrick's") follows it.
+    if let Some(map) = overrides
+        && let Some(stem) = possessive_stem(&lower)
+        && map.contains_key(stem)
+        && let Some(base) = word_phonemes(stem, lex, overrides, lang)
+    {
+        return Some(with_possessive(&base));
     }
     // Spelled-out single letters use the letter's name; a lowercase single
     // letter that is a function word (a, i) stays on the normal path.
@@ -1257,6 +1332,66 @@ PERCENT  P ER0 S EH1 N T
         // A raw value with a character outside SYMBOLS falls back to respelling.
         let bad = Overrides([("kokoro".into(), "/kəmˈpuːtər/".into())].into_iter().collect());
         assert_eq!(speak_with(&bad, "kokoro"), "kˈɑkɑɹɑ");
+    }
+
+    fn unknown(text: &str, ov: &Overrides) -> Vec<(String, u32)> {
+        unknown_words(text, Lang::EnUs, &test_lex(), ov).unwrap().into_iter().map(|u| (u.word, u.count)).collect()
+    }
+
+    #[test]
+    fn names_and_places_are_flagged_once_in_order_and_known_words_are_not() {
+        let none = Overrides::default();
+        // dictionary words, endings built on them, single letters and acronyms are known
+        assert!(
+            unknown("The cat played with two dogs. I wish a call, dollars, wished, making.", &none).is_empty(),
+            "{:?}",
+            unknown("The cat played with two dogs.", &none)
+        );
+        // names are flagged once each, with how often they come up, in order of first appearance
+        assert_eq!(
+            unknown("Kubrick call Reykjavik. A dog, kubrick wish Reykjavik, cat Zorblat Kubrick.", &none),
+            [("Kubrick".to_string(), 3), ("Reykjavik".to_string(), 2), ("Zorblat".to_string(), 1)]
+        );
+        // a hyphenated word is read part by part, so only the unknown part is flagged
+        assert!(unknown("cat-dog", &none).is_empty());
+        assert_eq!(unknown("cat-zorblat", &none), [("zorblat".to_string(), 1)]);
+        // numbers are spoken as words, so they are not flagged
+        assert!(unknown("one hundred and 5 dogs in 1999", &none).iter().all(|(w, _)| w != "5" && w != "1999"));
+    }
+
+    #[test]
+    fn a_word_you_gave_a_pronunciation_stops_being_flagged_with_its_possessive() {
+        let ov = Overrides([("kubrick".to_string(), "koo brick".to_string())].into_iter().collect());
+        assert!(unknown("Kubrick and KUBRICK and Kubrick's cat", &ov).is_empty(), "{:?}", unknown("Kubrick's", &ov));
+        // the possessive follows the override: voiceless k takes /s/, a vowel takes /z/, a sibilant /ɪz/
+        let plain = speak_with(&ov, "kubrick");
+        assert_eq!(speak_with(&ov, "kubrick's"), format!("{plain}s"));
+        let ov2 = Overrides(
+            [("zorb".to_string(), "/zˈɔɹb/".to_string()), ("ash".to_string(), "/ˈæʃ/".to_string()), ("tee".to_string(), "/tˈi/".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        assert_eq!(speak_with(&ov2, "zorb's"), "zˈɔɹbz");
+        assert_eq!(speak_with(&ov2, "ash's"), "ˈæʃɪz");
+        assert_eq!(speak_with(&ov2, "tee’s"), "tˈiz");
+        // without an override the possessive of an unknown word is still a guess
+        assert_eq!(unknown("Kubrick's", &Overrides::default()), [("Kubrick's".to_string(), 1)]);
+    }
+
+    #[test]
+    fn the_unknown_word_check_survives_hostile_text() {
+        let none = Overrides::default();
+        assert!(unknown_words("", Lang::EnUs, &test_lex(), &none).unwrap().is_empty());
+        assert!(unknown_words(&"x".repeat(2_000_000), Lang::EnUs, &test_lex(), &none).is_err());
+        // thousands of different made-up words are cut off, never an unbounded list
+        let many: String = (0..5000).map(|i| format!("qz{} ", "k".repeat(1 + i % 7) + &i.to_string().replace(|c: char| c.is_ascii_digit(), "x"))).collect();
+        assert!(unknown_words(&many, Lang::EnUs, &test_lex(), &none).unwrap().len() <= MAX_UNKNOWN);
+        for text in ["---", "'s 's", "\u{0}\u{1}", "日本語 ☃ ###", "-a- --b-- c-"] {
+            let _ = unknown_words(text, Lang::EnUs, &test_lex(), &none);
+        }
+        // a possessive of nothing, and an empty override key, do not panic
+        let odd = Overrides([(String::new(), "x".to_string()), ("'s".to_string(), "y".to_string())].into_iter().collect());
+        let _ = phonemize("'s 's hello", Lang::EnUs, &test_lex(), &odd);
     }
 
     fn speak_with(ov: &Overrides, text: &str) -> String {

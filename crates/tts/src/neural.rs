@@ -14,7 +14,7 @@ use filmcraft_tts_text::{Chunk, Lang, Lexicon, Overrides};
 
 use crate::catalog;
 use crate::kokoro::{KOKORO_RATE, Kokoro, VoicePack};
-use crate::{Audio, MAX_SECONDS, Params, TtsError, Voice, VoiceInfo, check_text};
+use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, check_text};
 
 /// Silence between sentences, ms.
 const SENTENCE_GAP_MS: u32 = 120;
@@ -39,6 +39,36 @@ pub struct NeuralVoice {
     pack: Arc<VoicePack>,
 }
 
+/// The loaded package for `dir`, loading it first when another (or none) is held.
+fn loaded_for<'a>(guard: &'a mut Option<Loaded>, dir: &Path) -> Result<&'a mut Loaded, TtsError> {
+    if guard.as_ref().is_none_or(|l| l.dir != dir) {
+        let model = Arc::new(Kokoro::load(dir)?);
+        let bytes = std::fs::read(dir.join("cmudict.dict")).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?;
+        let lexicon = Arc::new(Lexicon::parse_cmudict(&bytes).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?);
+        *guard = Some(Loaded { dir: dir.to_path_buf(), model, lexicon, packs: HashMap::new() });
+    }
+    guard.as_mut().ok_or_else(|| TtsError::Model("voice package not loaded".into()))
+}
+
+/// The words of `text` the voices would guess at; see [`crate::check_words`].
+pub fn check_words(text: &str, models_dir: &Path, pronounce: &Pronunciations) -> Result<Vec<UnknownWord>, TtsError> {
+    crate::check_text(text)?;
+    if !catalog::installed(models_dir) {
+        return Err(TtsError::NotInstalled);
+    }
+    let dir = catalog::package_dir(models_dir);
+    let lexicon = {
+        let mut guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
+        loaded_for(&mut guard, &dir)?.lexicon.clone()
+    };
+    let found = filmcraft_tts_text::unknown_words(text, Lang::EnUs, &lexicon, &overrides_of(pronounce)).map_err(|e| TtsError::Invalid(e.to_string()))?;
+    Ok(found.into_iter().map(|u| UnknownWord { word: u.word, count: u.count }).collect())
+}
+
+fn overrides_of(p: &Pronunciations) -> Overrides {
+    Overrides(p.0.clone())
+}
+
 /// Load (or reuse) the package in `models_dir` and the voice `id`.
 pub fn load(id: &str, models_dir: &Path) -> Result<NeuralVoice, TtsError> {
     let v = catalog::find(id).ok_or_else(|| TtsError::UnknownVoice(id.to_string()))?;
@@ -47,13 +77,7 @@ pub fn load(id: &str, models_dir: &Path) -> Result<NeuralVoice, TtsError> {
     }
     let dir = catalog::package_dir(models_dir);
     let mut guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    if guard.as_ref().is_none_or(|l| l.dir != dir) {
-        let model = Arc::new(Kokoro::load(&dir)?);
-        let bytes = std::fs::read(dir.join("cmudict.dict")).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?;
-        let lexicon = Arc::new(Lexicon::parse_cmudict(&bytes).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?);
-        *guard = Some(Loaded { dir: dir.clone(), model, lexicon, packs: HashMap::new() });
-    }
-    let loaded = guard.as_mut().ok_or_else(|| TtsError::Model("voice package not loaded".into()))?;
+    let loaded = loaded_for(&mut guard, &dir)?;
     let pack = match loaded.packs.get(v.file) {
         Some(p) => p.clone(),
         None => {
@@ -71,9 +95,13 @@ impl Voice for NeuralVoice {
     }
 
     fn synthesize(&self, text: &str, params: &Params) -> Result<Audio, TtsError> {
+        self.synthesize_with(text, params, &Pronunciations::default())
+    }
+
+    fn synthesize_with(&self, text: &str, params: &Params, pronounce: &Pronunciations) -> Result<Audio, TtsError> {
         check_text(text)?;
         params.check()?;
-        let chunks = filmcraft_tts_text::phonemize(text, Lang::EnUs, &self.lexicon, &Overrides::default()).map_err(|e| TtsError::Invalid(e.to_string()))?;
+        let chunks = filmcraft_tts_text::phonemize(text, Lang::EnUs, &self.lexicon, &overrides_of(pronounce)).map_err(|e| TtsError::Invalid(e.to_string()))?;
         let rate = KOKORO_RATE;
         let max = (MAX_SECONDS * f64::from(rate)) as usize;
         let mut out: Vec<f32> = Vec::new();

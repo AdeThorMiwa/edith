@@ -17,7 +17,8 @@ pub mod kokoro;
 pub mod neural;
 pub mod script;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Sample rate of every voice's output.
 pub const SAMPLE_RATE: u32 = 24_000;
@@ -115,11 +116,50 @@ pub struct VoiceInfo {
     pub installed: bool,
 }
 
+/// How you want words said: word (any case) → a respelling in plain English (`koo brick`) or
+/// phonemes between slashes. Only the natural voices use it; the built-in voices ignore it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pronunciations(pub BTreeMap<String, String>);
+
+impl Pronunciations {
+    /// A short stable text for the list, to tell two lists apart (a cache key).
+    pub fn fingerprint(&self) -> String {
+        self.0.iter().map(|(w, s)| format!("{w}\u{1e}{s}")).collect::<Vec<_>>().join("\u{1d}")
+    }
+}
+
+/// A word the voice would have to guess at, and how often the script says it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct UnknownWord {
+    pub word: String,
+    pub count: u32,
+}
+
 /// A voice that turns a script into audio.
 pub trait Voice: Send + Sync {
     fn info(&self) -> VoiceInfo;
     /// Speak `text` (pause markers allowed). Fails on an empty or over-long script, or bad params.
     fn synthesize(&self, text: &str, params: &Params) -> Result<Audio, TtsError>;
+    /// [`Self::synthesize`] saying the words in `pronounce` as given. Voices that cannot ignore it.
+    fn synthesize_with(&self, text: &str, params: &Params, pronounce: &Pronunciations) -> Result<Audio, TtsError> {
+        let _ = pronounce;
+        self.synthesize(text, params)
+    }
+}
+
+/// The words of `text` the natural voices would guess at (not in the dictionary, not built from
+/// one, and not in `pronounce`). Needs the downloaded voice package, which carries the dictionary.
+pub fn check_words(text: &str, models_dir: Option<&std::path::Path>, pronounce: &Pronunciations) -> Result<Vec<UnknownWord>, TtsError> {
+    #[cfg(feature = "kokoro")]
+    {
+        let dir = models_dir.ok_or(TtsError::NotInstalled)?;
+        neural::check_words(text, dir, pronounce)
+    }
+    #[cfg(not(feature = "kokoro"))]
+    {
+        let _ = (text, models_dir, pronounce);
+        Err(TtsError::Unavailable)
+    }
 }
 
 /// Languages offered (English only for now).
@@ -186,6 +226,32 @@ pub fn check_text(text: &str) -> Result<(), TtsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_built_in_voices_ignore_pronunciations_and_the_list_tells_itself_apart() {
+        let v = voice(default_voice_id()).unwrap();
+        let p = Params::default();
+        let list = Pronunciations([("kubrick".to_string(), "koo brick".to_string())].into_iter().collect());
+        assert_eq!(v.synthesize_with("Hello Kubrick.", &p, &list).unwrap(), v.synthesize("Hello Kubrick.", &p).unwrap());
+        assert_ne!(list.fingerprint(), Pronunciations::default().fingerprint());
+        let other = Pronunciations([("kubrick".to_string(), "kyoo brick".to_string())].into_iter().collect());
+        assert_ne!(list.fingerprint(), other.fingerprint());
+        assert_eq!(list.fingerprint(), list.clone().fingerprint());
+    }
+
+    #[test]
+    fn checking_words_needs_the_natural_voices() {
+        let none = Pronunciations::default();
+        let want = if cfg!(feature = "kokoro") { TtsError::NotInstalled } else { TtsError::Unavailable };
+        assert_eq!(check_words("Hello Kubrick.", None, &none).err(), Some(want));
+        let empty = std::env::temp_dir().join(format!("filmcraft-tts-nomodels-{}", std::process::id()));
+        let r = check_words("Hello Kubrick.", Some(&empty), &none);
+        assert!(matches!(r, Err(TtsError::NotInstalled | TtsError::Unavailable)), "{r:?}");
+        // an empty script is refused before anything is loaded
+        if cfg!(feature = "kokoro") {
+            assert_eq!(check_words("   ", Some(&empty), &none).err(), Some(TtsError::Empty));
+        }
+    }
 
     #[test]
     fn catalogue_ids_are_unique_and_resolvable() {
