@@ -2,7 +2,7 @@
 //!
 //! | command | does |
 //! |---|---|
-//! | `tts.voices` | languages, voices, vocal pitches, pace limits and the pause marker |
+//! | `tts.voices` | languages, voices, vocal pitches, pace limits, the pause marker and the direction markers |
 //! | `tts.preview` | synthesize without changing the project (`sample: true` speaks the voice's sample sentence); the host plays [`Session::tts_preview`]; `path` also writes a WAV |
 //! | `tts.create` | synthesize, write `Narration <n>.wav`, import it and place it at the playhead (one undo step) |
 //! | `tts.edit` | change a narration clip's script or voice settings (including `take`) and regenerate it in place (one undo step) |
@@ -158,6 +158,11 @@ fn voices(_s: &mut Session, _p: &Value) -> Result<Value> {
         "pitches": VocalPitch::ALL.iter().map(|p| json!({"id": p.id(), "label": p.label(), "semitones": p.semitones()})).collect::<Vec<_>>(),
         "pace": {"min": tts::MIN_PACE, "max": tts::MAX_PACE, "default": 1.0},
         "pauseMarker": tts::script::PAUSE_MARKER,
+        "directionMarkers": [
+            {"marker": "[pace 0.85]", "does": "speak what follows at this multiple of the narration's pace (0.85x and 85% also work); sticks until changed", "range": "0.5 to 2 after the pace setting is applied"},
+            {"marker": "[pitch -2]", "does": "shift what follows by this many semitones from the vocal pitch (+1.5 and -2st also work); sticks until changed", "range": "-12 to 12 in total"},
+            {"marker": "[normal]", "does": "back to the narration's own pace and pitch"},
+        ],
         "maxTextBytes": tts::MAX_TEXT_BYTES,
         "sampleSentence": tts::SAMPLE_SENTENCE,
     }))

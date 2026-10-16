@@ -495,3 +495,39 @@ fn real_voices_follow_directions() {
     let n = plain.len().min(slow.len()) / 4;
     assert!(plain[..n] == slow[..n], "the first sentence is untouched by a direction after it");
 }
+
+#[test]
+fn directions_are_reported_followed_not_spoken_and_hostile_ones_are_harmless() {
+    let mut s = demo();
+    let dir = tmp("directions-basic");
+    // listed for agents
+    let v = s.execute("tts.voices", json!({})).unwrap();
+    let markers: Vec<&str> = v["directionMarkers"].as_array().unwrap().iter().map(|m| m["marker"].as_str().unwrap()).collect();
+    assert_eq!(markers, ["[pace 0.85]", "[pitch -2]", "[normal]"]);
+    // the built-in voice: slower is longer, the markers are not spoken, and the text is stored as typed
+    let len = |s: &mut Session, text: &str| -> usize {
+        let path = format!("{dir}-{}.wav", text.len());
+        s.execute("tts.preview", json!({"text": text, "voice": "basic-female", "path": path})).unwrap();
+        wav_samples(&path).len()
+    };
+    let plain = len(&mut s, "The fog rolled in. Nobody woke.");
+    let slow = len(&mut s, "The fog rolled in. [pace 0.5] Nobody woke.");
+    assert!(slow as f64 > plain as f64 * 1.2, "{slow} vs {plain}");
+    let spoken_marker = len(&mut s, "The fog rolled in. [pace 0.5] Nobody woke. [normal]");
+    assert!((spoken_marker as f64 - slow as f64).abs() < slow as f64 * 0.01, "a trailing marker adds nothing: {spoken_marker} vs {slow}");
+    let r = s.execute("tts.create", json!({"text": "Fog. [pitch -2] Rain. [pace 80%] Wind.", "voice": "basic-male", "dir": dir})).unwrap();
+    assert_eq!(s.execute("tts.inspect", json!({"clip": r["clip"]})).unwrap()["narration"]["text"], "Fog. [pitch -2] Rain. [pace 80%] Wind.");
+    // a script of directions alone has nothing to say; hostile marker text neither panics nor runs away
+    assert!(s.execute("tts.preview", json!({"text": "[pace 0.5] [pitch 3] [normal]"})).is_err());
+    let many: String = (0..10_000).map(|i| format!("[pace {}] w ", 1 + i % 2)).collect();
+    for text in [many.as_str(), "[pace 99999999] hi", "[pitch -99999999] hi", "[pace 1.2.3] hi [pitch] [[pace 1]]", "[pace 0.5"] {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.execute("tts.preview", json!({"text": text, "voice": "basic-female"}))));
+        assert!(r.is_ok(), "{}", &text[..text.len().min(30)]);
+    }
+    // checking words ignores the markers (without the natural voices it only says so)
+    let r = s.execute("tts.checkScript", json!({"text": "[pace 0.8] Hello there. [pitch -2] Goodbye."})).unwrap();
+    if r["available"] == json!(true) {
+        assert!(r["words"].as_array().unwrap().iter().all(|w| !["pace", "pitch"].contains(&w["word"].as_str().unwrap_or(""))), "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
