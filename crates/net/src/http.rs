@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::io::{BufRead, Read};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -180,6 +180,15 @@ impl Response {
 
 /// What a finished stream reports. For a status of 400 or more, `error_body` holds the start of
 /// the body (usually the provider's error JSON) and no lines were delivered.
+/// What [`Client::download`] wrote.
+#[derive(Clone, Debug)]
+pub struct Downloaded {
+    pub status: u16,
+    pub bytes: u64,
+    /// SHA-256 of the file, as hex (empty when nothing was written).
+    pub sha256: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct StreamEnd {
     pub status: u16,
@@ -244,6 +253,82 @@ impl Client {
                 let outcome = if end.status >= 400 { Outcome::Failed } else { Outcome::Ok };
                 let err = (end.status >= 400).then(|| format!("the server answered {}", end.status));
                 self.state.record(req.method.as_str(), &req.url, outcome, Some(end.status), bytes, millis, err.as_deref());
+            }
+            Err(e) => self.record_error(req, e, millis),
+        }
+        result
+    }
+
+    /// Sends `req` and writes the body to `path` as it arrives (a file too big to hold in memory:
+    /// video). The file is written as `<path>.part` and renamed only when the whole body has
+    /// arrived and is within `max_bytes`; on any failure nothing is left behind. `progress` is
+    /// told the bytes so far and the total when the server says it. Returns the status, the size
+    /// and the SHA-256 of what was written. A status of 400 or more writes nothing.
+    pub fn download(&self, req: &Request, path: &Path, max_bytes: u64, mut progress: impl FnMut(u64, Option<u64>)) -> Result<Downloaded, NetError> {
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let started = Instant::now();
+        let part = {
+            let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+            name.push(".part");
+            path.with_file_name(name)
+        };
+        let mut bytes = 0u64;
+        let result = (|| {
+            let host = self.admit(req)?;
+            self.wait_for_host(&host, req)?;
+            let http_req = build_request(req, None)?;
+            let agent = &self.stream_agent;
+            let timeout = req.timeout.unwrap_or(Duration::from_secs(1800));
+            let sent = catch_unwind(AssertUnwindSafe(|| run(agent, http_req, None, Some(timeout))));
+            let mut response = sent.map_err(|_| internal_error())?.map_err(map_err)?;
+            let status = response.status().as_u16();
+            if status >= 400 {
+                return Ok(Downloaded { status, bytes: 0, sha256: String::new() });
+            }
+            let total = response.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+            if total.is_some_and(|t| t > max_bytes) {
+                return Err(NetError::TooLarge(max_bytes));
+            }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| io_error(&e))?;
+            }
+            let mut file = std::fs::File::create(&part).map_err(|e| io_error(&e))?;
+            let mut reader = response.body_mut().with_config().limit(max_bytes).reader();
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                if req.cancelled() {
+                    return Err(NetError::Cancelled);
+                }
+                let n = reader.read(&mut buf).map_err(|e| io_error(&e))?;
+                if n == 0 {
+                    break;
+                }
+                let chunk = buf.get(..n).unwrap_or(&[]);
+                file.write_all(chunk).map_err(|e| io_error(&e))?;
+                hasher.update(chunk);
+                bytes = bytes.saturating_add(n as u64);
+                progress(bytes, total);
+            }
+            file.flush().map_err(|e| io_error(&e))?;
+            drop(file);
+            if total.is_some_and(|t| t != bytes) {
+                return Err(NetError::Transport("the download ended early".to_string()));
+            }
+            std::fs::rename(&part, path).map_err(|e| io_error(&e))?;
+            let digest = hasher.finalize();
+            Ok(Downloaded { status, bytes, sha256: digest.iter().map(|b| format!("{b:02x}")).collect() })
+        })();
+        if result.as_ref().map_or(true, |d| d.status >= 400) {
+            let _ = std::fs::remove_file(&part);
+        }
+        let millis = elapsed_ms(started);
+        match &result {
+            Ok(d) => {
+                let outcome = if d.status >= 400 { Outcome::Failed } else { Outcome::Ok };
+                let err = (d.status >= 400).then(|| format!("the server answered {}", d.status));
+                self.state.record(req.method.as_str(), &req.url, outcome, Some(d.status), bytes, millis, err.as_deref());
             }
             Err(e) => self.record_error(req, e, millis),
         }
@@ -519,6 +604,58 @@ mod tests {
 
     fn client() -> Client {
         client_with(|_| {})
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("edith-net-dl-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn a_download_is_written_hashed_and_renamed_only_when_whole() {
+        let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let b2 = body.clone();
+        let s = serve(move |_, _| response(200, &[("Content-Type", "video/mp4")], &b2));
+        let dir = scratch("ok");
+        let path = dir.join("sub/clip.mp4");
+        let mut seen = Vec::new();
+        let d = client().download(&Request::get(&format!("{}/clip.mp4?token=SECRET", s.url)), &path, 10_000_000, |n, t| seen.push((n, t))).unwrap();
+        assert_eq!((d.status, d.bytes), (200, 300_000));
+        assert_eq!(std::fs::read(&path).unwrap(), body);
+        assert!(!path.with_file_name("clip.mp4.part").exists(), "no half file is left");
+        use sha2::{Digest, Sha256};
+        let want: String = Sha256::digest(&body).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(d.sha256, want);
+        assert_eq!(seen.last().copied(), Some((300_000, Some(300_000))));
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
+        let log = format!("{:?}", client().state().entries(None));
+        assert!(!log.contains("SECRET"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_download_that_is_too_big_or_refused_or_stopped_leaves_nothing() {
+        let s = serve(|_, _| response(200, &[], &[7u8; 5000]));
+        let dir = scratch("bad");
+        let path = dir.join("f.bin");
+        // bigger than allowed: refused up front from the declared length
+        assert_eq!(client().download(&Request::get(&s.url), &path, 1000, |_, _| {}).unwrap_err(), NetError::TooLarge(1000));
+        assert!(!path.exists() && !dir.join("f.bin.part").exists());
+        // the server says no
+        let nope = serve(|_, _| response(404, &[], b"not here"));
+        let d = client().download(&Request::get(&nope.url), &path, 1000, |_, _| {}).unwrap();
+        assert_eq!((d.status, d.bytes), (404, 0));
+        assert!(!path.exists() && !dir.join("f.bin.part").exists());
+        // stopped before it starts
+        let stop = Arc::new(AtomicBool::new(true));
+        assert_eq!(client().download(&Request::get(&s.url).cancel_with(stop), &path, 10_000, |_, _| {}).unwrap_err(), NetError::Cancelled);
+        // Offline mode blocks it
+        let off = client();
+        off.state().set_offline(true);
+        assert_eq!(off.download(&Request::get(&s.url), &path, 10_000, |_, _| {}).unwrap_err(), NetError::Offline);
+        assert_eq!(s.hits(), 1, "only the first (too big) request ever reached the server");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

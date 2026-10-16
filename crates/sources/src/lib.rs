@@ -14,6 +14,8 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+#[cfg(feature = "net")]
+pub mod client;
 pub mod freesound;
 pub mod pexels;
 pub mod pixabay;
@@ -23,3 +25,8 @@ mod util;
 
 pub use types::{Candidate, Download, Kind, Orientation, Page, Request, Rights, SourceError};
 pub use util::apply_request;
+
+#[cfg(feature = "keychain")]
+pub use client::keychain_keys;
+#[cfg(feature = "net")]
+pub use client::{Cancel, Keys, SOURCES, SourceInfo, Sources, info};

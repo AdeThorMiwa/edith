@@ -87,6 +87,15 @@ pub const SERVICES: &[Service] = &[
         note: "Runs models locally; start its server from the Developer tab. Nothing leaves this computer.",
     },
     Service {
+        id: "freesound",
+        label: "Freesound",
+        kind: Kind::ApiKey,
+        secret: Some("source.freesound.api_key"),
+        key_url: Some("https://freesound.org/apiv2/apply/"),
+        free: true,
+        note: "Free sound effects and music under Creative Commons licences.",
+    },
+    Service {
         id: "pexels",
         label: "Pexels",
         kind: Kind::ApiKey,
