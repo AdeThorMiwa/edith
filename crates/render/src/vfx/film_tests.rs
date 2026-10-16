@@ -6,7 +6,7 @@ use filmcraft_time::Tick;
 use crate::effects::{FxCtx, dec, enc};
 use crate::image::Image;
 
-const IDS: &[&str] = &["film_grain"];
+const IDS: &[&str] = &["film_grain", "halation", "diffusion"];
 
 fn cx_at(t: i64) -> FxCtx<'static> {
     FxCtx {
@@ -310,5 +310,149 @@ fn speed() {
             best = best.min(t0.elapsed().as_secs_f64() * 1000.0);
         }
         println!("{id}: {best:.0} ms per 1080p frame");
+    }
+}
+
+// ---------------------------------------------------------------------- halation and diffusion
+
+/// A dark picture with one bright square in the middle (display grey `v` outside, white inside).
+fn spot(w: usize, h: usize, outside: f32, half: usize) -> Image {
+    let mut img = flat(w, h, outside);
+    for y in h / 2 - half..h / 2 + half {
+        for x in w / 2 - half..w / 2 + half {
+            img.px[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
+        }
+    }
+    img
+}
+
+fn px(img: &Image, x: usize, y: usize) -> [f32; 4] {
+    let i = (y * img.w + x) * 4;
+    [img.px[i], img.px[i + 1], img.px[i + 2], img.px[i + 3]]
+}
+
+fn halo(strength: f64) -> EffectInstance {
+    let mut e = inst("halation");
+    setf(&mut e, "strength", strength);
+    e
+}
+
+#[test]
+fn halation_at_zero_is_the_identity_and_only_highlights_make_a_glow() {
+    let img = spot(128, 96, 0.02, 4);
+    assert_eq!(run(&halo(0.0), &img, &cx_at(0)).px, img.px);
+    let o = run(&halo(80.0), &img, &cx_at(0));
+    // the bright square itself stays at least as bright, and the glow reaches outside it
+    let (inside, near) = (px(&o, 64, 48), px(&o, 64 + 4 + 6, 48));
+    assert!(inside[0] >= px(&img, 64, 48)[0] - 1e-5);
+    let before = px(&img, 64 + 4 + 6, 48);
+    assert!(near[0] > before[0] + 0.01, "glow next to the square: {near:?} vs {before:?}");
+    // and it is red-orange: red exceeds green exceeds blue in the added light
+    let added = [near[0] - before[0], near[1] - before[1], near[2] - before[2]];
+    assert!(added[0] > added[1] * 1.5 && added[1] > added[2] * 1.2, "{added:?}");
+    // far from any highlight (many radii away) nothing changes
+    let mut small = halo(80.0);
+    setf(&mut small, "radius", 8.0);
+    let o = run(&small, &img, &cx_at(0));
+    let far = px(&o, 3, 3);
+    assert!((far[0] - px(&img, 3, 3)[0]).abs() < 1e-4, "{far:?}");
+}
+
+#[test]
+fn a_picture_with_no_highlights_gets_no_halation_and_a_white_tint_makes_neutral_glow() {
+    let dim = flat(64, 48, 0.3);
+    assert_eq!(run(&halo(100.0), &dim, &cx_at(0)).px, dim.px);
+    let mut e = halo(80.0);
+    e.params.get_mut("tint").unwrap().value = ParamValue::Color([1.0, 1.0, 1.0, 1.0]);
+    let o = run(&e, &spot(128, 96, 0.02, 4), &cx_at(0));
+    let near = px(&o, 64 + 10, 48);
+    assert!((near[0] - near[1]).abs() < 0.01 && (near[1] - near[2]).abs() < 0.01, "{near:?}");
+}
+
+#[test]
+fn halation_gets_wider_with_the_radius_and_keeps_its_size_at_half_resolution() {
+    let reach = |radius: f64, scale: f32, w: usize, h: usize, half: usize| {
+        let mut e = halo(90.0);
+        setf(&mut e, "radius", radius);
+        let mut c = cx_at(0);
+        c.px_scale = scale;
+        let img = spot(w, h, 0.0, half);
+        let o = run(&e, &img, &c);
+        // how far from the square's edge the glow still adds 1% (in working pixels)
+        (1..w / 2 - half).take_while(|d| px(&o, w / 2 + half + d, h / 2)[0] > 0.01).count() as f32
+    };
+    let (small, large) = (reach(10.0, 1.0, 256, 128, 6), reach(60.0, 1.0, 256, 128, 6));
+    assert!(large > small * 2.0, "{small} vs {large}");
+    // the same picture at half size (and half-size working scale) glows to about half the distance
+    let (full, half) = (reach(40.0, 1.0, 256, 128, 8), reach(40.0, 0.5, 128, 64, 4));
+    assert!(half > full * 0.35 && half < full * 0.7, "full {full}, half {half}");
+}
+
+fn diff(strength: f64, lift: f64) -> EffectInstance {
+    let mut e = inst("diffusion");
+    setf(&mut e, "strength", strength);
+    setf(&mut e, "black_lift", lift);
+    e
+}
+
+#[test]
+fn diffusion_at_zero_is_the_identity_and_blooms_bright_parts_into_dark_ones() {
+    let img = spot(128, 96, 0.02, 4);
+    assert_eq!(run(&diff(0.0, 0.0), &img, &cx_at(0)).px, img.px);
+    let mut e = diff(70.0, 0.0);
+    setf(&mut e, "highlight_bias", 100.0);
+    let o = run(&e, &img, &cx_at(0));
+    let near = px(&o, 64 + 4 + 5, 48)[0];
+    assert!(near > px(&img, 64 + 4 + 5, 48)[0] + 0.01, "bloom spills out of the highlight: {near}");
+    // the bloom adds light: the picture does not get darker anywhere
+    assert!(o.px.iter().zip(&img.px).all(|(a, b)| *a >= *b - 1e-4));
+}
+
+#[test]
+fn diffusion_with_no_bloom_softens_edges_without_adding_light() {
+    let img = spot(128, 96, 0.02, 12);
+    let mut e = diff(80.0, 0.0);
+    setf(&mut e, "highlight_bias", 0.0);
+    let o = run(&e, &img, &cx_at(0));
+    let edge = |i: &Image| (px(i, 64 + 12, 48)[0] - px(i, 64 + 11, 48)[0]).abs() + (px(i, 64 + 13, 48)[0] - px(i, 64 + 12, 48)[0]).abs();
+    assert!(edge(&o) < edge(&img) * 0.8, "softer edge");
+    // the total light is about the same (a blur moves light, it does not make it)
+    let total = |i: &Image| i.px.iter().step_by(4).map(|v| f64::from(*v)).sum::<f64>();
+    assert!((total(&o) / total(&img) - 1.0).abs() < 0.02);
+}
+
+#[test]
+fn black_lift_raises_only_the_blacks() {
+    let lifted = |v: f32| display_luma(&run(&diff(0.0, 80.0), &flat(8, 8, v), &cx_at(0)))[0];
+    assert!(lifted(0.0) > 0.05, "black becomes a faint haze: {}", lifted(0.0));
+    assert!(lifted(0.0) > lifted(0.2) - 0.2 + 0.0 && (lifted(1.0) - 1.0).abs() < 1e-4, "white stays white: {}", lifted(1.0));
+    assert!(lifted(0.5) - 0.5 < (lifted(0.0) - 0.0) * 0.45, "mid greys move far less than black");
+    let mut prev = -1.0;
+    for v in [0.0, 0.1, 0.3, 0.6, 0.9, 1.0] {
+        let o = lifted(v);
+        assert!(o >= v - 1e-4, "never darker: {v} -> {o}");
+        assert!(o > prev, "still monotonic");
+        prev = o;
+    }
+}
+
+#[test]
+fn hostile_values_cannot_break_halation_or_diffusion() {
+    let img = spot(40, 30, 0.1, 5);
+    for id in ["halation", "diffusion"] {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -5.0, 1e30, 1e-30] {
+            let mut e = inst(id);
+            for p in find_effect(id).unwrap().params.iter() {
+                if matches!(p.kind, ParamKind::Float { .. }) {
+                    setf(&mut e, p.id, v);
+                }
+            }
+            for scale in [1.0, 0.0, f32::NAN, 1e9] {
+                let mut c = cx_at(0);
+                c.px_scale = scale;
+                let o = run(&e, &img, &c);
+                assert!(o.px.iter().all(|x| x.is_finite() && *x >= -1e-3), "{id} {v} {scale}");
+            }
+        }
     }
 }

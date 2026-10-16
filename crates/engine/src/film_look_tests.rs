@@ -14,12 +14,16 @@ const W: u32 = 960;
 const H: u32 = 540;
 
 fn session() -> (Session, u64) {
+    session_with(DemoScene::Aurora)
+}
+
+fn session_with(scene: DemoScene) -> (Session, u64) {
     let mut s = Session::default();
     s.execute("file.newSequence", json!({"width": W, "height": H, "fps": 24})).unwrap();
     let item = crate::demo::add_generator(
         Arc::make_mut(&mut s.project),
         &s.media,
-        GeneratorSource::new(Generator::Demo(DemoScene::Aurora), W, H, FrameRate::FPS_24, Tick(5 * TICKS_PER_SECOND)),
+        GeneratorSource::new(Generator::Demo(scene), W, H, FrameRate::FPS_24, Tick(5 * TICKS_PER_SECOND)),
         "Source clip",
         Label::Iris,
         None,
@@ -74,4 +78,26 @@ fn the_pack_is_listed_in_the_effects_panel_and_film_grain_applies_renders_and_un
     s.redo().unwrap();
     let json: Value = serde_json::from_str(&s.project.to_json()).unwrap();
     assert!(json.to_string().contains("film_grain"));
+}
+
+#[test]
+fn halation_and_diffusion_apply_by_name_change_the_frame_and_undo_exactly() {
+    for (name, id) in [("Halation", "halation"), ("Diffusion", "diffusion")] {
+        // a sunset: it has a bright sun for the glow to come from
+        let (mut s, clip) = session_with(DemoScene::OceanSunset);
+        let before = frame(&mut s, &format!("10-{id}-original"));
+        let undo0 = s.history.undo.len();
+        s.execute("effects.apply", json!({"clips": [clip], "effect": name})).unwrap();
+        let with = frame(&mut s, &format!("11-{id}"));
+        assert_ne!(before, with, "{name} changes the picture");
+        s.execute("effects.setParam", json!({"clip": clip, "effect": id, "param": "strength", "value": 0.0})).unwrap();
+        if id == "diffusion" {
+            s.execute("effects.setParam", json!({"clip": clip, "effect": id, "param": "black_lift", "value": 0.0})).unwrap();
+        }
+        assert_eq!(before, frame(&mut s, &format!("12-{id}-off")), "{name} at zero leaves the picture as it was");
+        while s.history.undo.len() > undo0 {
+            s.undo().unwrap();
+        }
+        assert_eq!(before, frame(&mut s, &format!("13-{id}-undone")));
+    }
 }

@@ -15,12 +15,15 @@ use crate::effects::{dec, enc, gaussian, hash3, noise_frame_seed};
 
 /// The ids this module implements.
 pub(super) fn handles(id: &str) -> bool {
-    matches!(id, "film_grain")
+    matches!(id, "film_grain" | "halation" | "diffusion")
 }
 
 pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    if e.effect == "film_grain" {
-        film_grain(img, e, cx);
+    match e.effect.as_str() {
+        "film_grain" => film_grain(img, e, cx),
+        "halation" => halation(img, e, cx),
+        "diffusion" => diffusion(img, e, cx),
+        _ => {}
     }
 }
 
@@ -141,4 +144,93 @@ pub fn film_grain(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             p[2] = o[2] * a;
         }
     });
+}
+
+// ------------------------------------------------------------------ halation and diffusion
+
+/// A blurred copy (sigma in working pixels).
+fn blurred_copy(src: &Image, sigma: f32) -> Image {
+    let mut g = src.clone();
+    if sigma > 0.3 {
+        gaussian(&mut g, sigma, sigma, true);
+    }
+    g
+}
+
+/// A radius control (full-resolution pixels) as a blur sigma in working pixels.
+fn sigma_of(radius: f32, cx: &FxCtx) -> f32 {
+    num(radius, 1.0).clamp(0.0, 600.0) * num(cx.px_scale, 1.0).clamp(0.05, 8.0) * 0.5
+}
+
+/// Halation: light from bright parts of the picture scatters back through the film and exposes
+/// the layer behind it, which gives a soft glow, red-orange in colour, around highlights. Only the
+/// highlights spread; the rest of the picture is untouched.
+pub fn halation(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let strength = frac(fv(e, "strength", cx));
+    if strength <= 0.0 || img.w == 0 || img.h == 0 {
+        return;
+    }
+    let threshold = frac(fv(e, "threshold", cx));
+    let soft = frac(fv(e, "softness", cx)).max(0.02);
+    let sigma = sigma_of(fv(e, "radius", cx), cx);
+    let tint_c = lin(cv(e, "tint", cx).map(|v| num(v, 1.0).clamp(0.0, 1.0)));
+    let hi = highlights(img, threshold, soft);
+    // a tight core and a broad skirt, as the real thing has
+    let core = blurred_copy(&hi, sigma * 0.5);
+    let skirt = blurred_copy(&hi, sigma * 1.6);
+    // the tint's own brightness is divided out so the strength means the same for any colour
+    let tl = luma(tint_c).max(1e-3);
+    let gain = [tint_c[0] / tl, tint_c[1] / tl, tint_c[2] / tl].map(|g| g * strength * 2.2);
+    let w = img.w;
+    img.px.par_chunks_mut(w * 4).zip(core.px.par_chunks(w * 4).zip(skirt.px.par_chunks(w * 4))).for_each(|(row, (c, s))| {
+        for x in 0..w {
+            let (c, s) = (&c[x * 4..x * 4 + 4], &s[x * 4..x * 4 + 4]);
+            // energy of the glow at this pixel, from the light that reached it
+            let l = (luma([c[0], c[1], c[2]]) * 0.45 + luma([s[0], s[1], s[2]]) * 0.55).max(0.0);
+            let p = &mut row[x * 4..x * 4 + 4];
+            if p[3] > 1e-6 {
+                add_light(p, [l * gain[0], l * gain[1], l * gain[2]]);
+            }
+        }
+    });
+}
+
+/// Diffusion: a soft filter in front of the lens. The picture softens a little, bright parts
+/// bloom, and the blacks lift to a faint haze.
+pub fn diffusion(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let strength = frac(fv(e, "strength", cx));
+    let lift = frac(fv(e, "black_lift", cx));
+    if (strength <= 0.0 && lift <= 0.0) || img.w == 0 || img.h == 0 {
+        return;
+    }
+    if strength > 0.0 {
+        let bias = frac(fv(e, "highlight_bias", cx));
+        let sigma = sigma_of(fv(e, "radius", cx), cx);
+        let soften = blurred_copy(img, sigma * 0.6);
+        let bloom = blurred_copy(&highlights(img, 0.55, 0.35), sigma * 1.4);
+        let mix = strength * (1.0 - bias) * 0.6;
+        let glow = strength * bias * 1.1;
+        img.px.par_chunks_mut(4).zip(soften.px.par_chunks(4).zip(bloom.px.par_chunks(4))).for_each(|(p, (s, b))| {
+            if p[3] <= 1e-6 {
+                return;
+            }
+            for k in 0..3 {
+                p[k] = (p[k] * (1.0 - mix) + s[k] * mix + b[k] * glow).max(0.0);
+            }
+        });
+    }
+    if lift > 0.0 {
+        // blacks rise towards a faint haze, in display space; whites do not move
+        img.px.par_chunks_mut(4).for_each(|p| {
+            let a = p[3];
+            if a <= 1e-6 {
+                return;
+            }
+            let c = enc([p[0] / a, p[1] / a, p[2] / a]);
+            let o = dec(c.map(|v| v + lift * 0.09 * (1.0 - v.clamp(0.0, 1.0)).powi(2)));
+            p[0] = o[0] * a;
+            p[1] = o[1] * a;
+            p[2] = o[2] * a;
+        });
+    }
 }
