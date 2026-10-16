@@ -2512,6 +2512,7 @@ dependencies = [
  "craft-ui",
  "edith-ai",
  "edith-net",
+ "edith-sources",
  "eframe",
  "egui",
  "egui_kittest",
@@ -2543,6 +2544,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "unicode-bidi",
  "web-time",
+ "zeroize",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ pub mod essential_sound;
 pub mod events;
 pub mod export_mode;
 pub mod file_dialogs;
+pub mod find_media;
 pub mod frame_export;
 pub mod graphics;
 pub mod graphics_templates;
@@ -113,6 +114,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::Connections => connections::show(app, ui, rect),
         PanelKind::Assistant => assistant::show(app, ui, rect),
         PanelKind::Rights => rights_panel::show(app, ui, rect),
+        PanelKind::FindMedia => find_media::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }

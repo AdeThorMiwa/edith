@@ -23,6 +23,8 @@ filmcraft-render = { workspace = true }
 filmcraft-text = { workspace = true }
 filmcraft-audio-dsp = { workspace = true }
 filmcraft-engine = { workspace = true }
+# fork: the Find Media panel names each site and what it asks to be shown (plain data, no network)
+edith-sources = { workspace = true }
 filmcraft-export = { workspace = true }
 filmcraft-gpu = { workspace = true }
 filmcraft-scopes = { workspace = true }
@@ -36,7 +38,7 @@ web-time = "1"
 # Unicode Bidirectional Algorithm for Arabic and Hebrew captions in reading order (MIT OR Apache-2.0).
 unicode-bidi = "0.3.18"
 # ArtCraft wordmark (PNG) for the About dialog and Home screen.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Thread/process CPU clocks for frame-job profiling (safe wrappers; see frames.rs).
 [target.'cfg(unix)'.dependencies]
@@ -57,6 +59,8 @@ egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
 filmcraft-engine = { workspace = true, features = ["net"] }
 edith-net = { workspace = true, features = ["keychain", "testserver"] }
 edith-ai = { workspace = true }
+edith-sources = { workspace = true, features = ["net"] }
+zeroize = "1"
 
 # build.rs bakes contributors/contributors.json into the binary (About ▸ Contributors).
 [build-dependencies]

@@ -182,6 +182,14 @@ impl Hub {
     }
 }
 
+impl Hub {
+    /// Without the network there are no pictures to fetch.
+    #[cfg(not(feature = "net"))]
+    pub fn thumbnail(&mut self, _c: &Candidate) -> Option<Arc<Vec<u8>>> {
+        None
+    }
+}
+
 fn request_from(p: &Value, cmd: &str) -> Result<Request> {
     let text = str_p(p, "text")
         .map(str::trim)

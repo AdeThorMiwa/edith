@@ -43,10 +43,11 @@ pub enum PanelKind {
     Connections,
     Assistant,
     Rights,
+    FindMedia,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 31] = [
+    pub const ALL: [PanelKind; 32] = [
         PanelKind::Project,
         PanelKind::MediaBrowser,
         PanelKind::Libraries,
@@ -78,6 +79,7 @@ impl PanelKind {
         PanelKind::Connections,
         PanelKind::Assistant,
         PanelKind::Rights,
+        PanelKind::FindMedia,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -112,6 +114,7 @@ impl PanelKind {
             PanelKind::Connections => "Connections",
             PanelKind::Assistant => "Assistant",
             PanelKind::Rights => "Credits and Rights",
+            PanelKind::FindMedia => "Find Media",
         }
     }
     pub fn id(self) -> String {
@@ -389,7 +392,7 @@ pub fn workspace(name: &str) -> DockNode {
             ),
             hsplit(
                 Ratio(0.29),
-                tabs(&[Project, MediaBrowser, Libraries, Info, Effects, Markers, History], 0),
+                tabs(&[Project, MediaBrowser, FindMedia, Libraries, Info, Effects, Markers, History], 0),
                 hsplit(FixedA(64.0), tabs(&[Tools], 0), hsplit(FixedB(116.0), tabs(&[Timeline], 0), tabs(&[AudioMeters], 0))),
             ),
         ),

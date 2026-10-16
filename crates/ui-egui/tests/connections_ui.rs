@@ -358,7 +358,7 @@ fn check_looks_for_a_local_server_once_and_reports_what_it_found() {
     assert!(!d.has("connections.openrouter.check") && !d.has("connections.anthropic.check"), "only local servers are checked");
     assert_eq!(server.hits(), 0, "nothing is looked for until the person asks");
     // the local servers are at the bottom of the list: scroll the panel until they are on screen
-    d.ok("ui.scroll", json!({"id": "connections.offline", "dy": -700.0}));
+    d.ok("ui.scroll", json!({"id": "connections.offline", "dy": -400.0}));
     d.frames(4);
     d.click("connections.ollama.check");
     let started = std::time::Instant::now();
