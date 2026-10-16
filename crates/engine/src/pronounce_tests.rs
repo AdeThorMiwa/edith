@@ -185,7 +185,7 @@ fn checking_a_script_says_so_when_the_natural_voices_are_not_installed() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
-/// With the natural voices installed on this machine: names are flagged, and fixing them changes
+/// With the natural voices installed on this machine: invented names are flagged (real ones like Kubrick are already in the dictionary), and fixing them changes
 /// the audio. Run it with `cargo test -p filmcraft-engine --features neural-voices --lib -- --ignored real_voices`.
 #[test]
 #[ignore = "needs the downloaded natural voices"]
@@ -196,11 +196,11 @@ fn real_voices_flag_names_and_a_fix_changes_the_audio() {
     };
     let _ = dir;
     let mut s = demo();
-    let text = "Kubrick filmed in Reykjavik with Zorblat.";
+    let text = "Zorblat filmed in Vlornak with Quenzel.";
     let r = s.execute("tts.checkScript", json!({"text": text})).unwrap();
     assert_eq!(r["available"], true, "{r}");
     let words: Vec<String> = r["words"].as_array().unwrap().iter().map(|w| w["word"].as_str().unwrap().to_lowercase()).collect();
-    for w in ["kubrick", "reykjavik", "zorblat"] {
+    for w in ["zorblat", "vlornak", "quenzel"] {
         assert!(words.contains(&w.to_string()), "{w} should be flagged: {words:?}");
     }
     assert!(!words.contains(&"filmed".to_string()) && !words.contains(&"with".to_string()), "{words:?}");
@@ -211,9 +211,9 @@ fn real_voices_flag_names_and_a_fix_changes_the_audio() {
         std::fs::read(&path).unwrap()
     };
     let before = wav(&mut s, "before");
-    set(&mut s, "kubrick", "koo brick", "project");
-    set(&mut s, "reykjavik", "rake yah veek", "project");
     set(&mut s, "zorblat", "zor blot", "project");
+    set(&mut s, "vlornak", "vuh lor nack", "project");
+    set(&mut s, "quenzel", "kwen zel", "project");
     let r = s.execute("tts.checkScript", json!({"text": text})).unwrap();
     assert!(r["words"].as_array().unwrap().is_empty(), "{r}");
     let after = wav(&mut s, "after");

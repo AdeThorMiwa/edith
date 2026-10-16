@@ -3712,3 +3712,20 @@
 	No folders yet.	还没有文件夹。
 	Add your footage folder…	添加你的素材文件夹…
 	Add a licensed folder…	添加已授权文件夹…
+	Pronunciation	发音
+	Teach the narrator names and places it would otherwise guess at. Spell the sound in plain words, for example "koo brick".	教旁白读出它本来只能猜的人名和地名。用简单的词拼出读音，例如 "koo brick"。
+	Check script	检查脚本
+	The script changed since the check. Check again.	检查之后脚本已更改。请重新检查。
+	Every word is known. Nothing to fix.	所有单词都已知，无需修正。
+	The voice would guess at these. Press one to fix it.	声音会猜这些词。点按一个来修正。
+	Word	单词
+	Say it like… (koo brick)	读作…（koo brick）
+	Play	播放
+	Save for this project	保存到此项目
+	Save for my channel	保存到我的频道
+	This project	此项目
+	My channel	我的频道
+	Remove this word	移除此单词
+	Saved. The narration on the timeline keeps its old sound until you regenerate it.	已保存。时间线上的旁白在你重新生成之前仍保持原来的声音。
+	Regenerate narration	重新生成旁白
+	Saved. New narrations will use it.	已保存。新的旁白将使用它。

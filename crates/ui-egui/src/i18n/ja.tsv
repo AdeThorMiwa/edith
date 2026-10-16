@@ -3736,3 +3736,20 @@
 	No folders yet.	フォルダーはまだありません。
 	Add your footage folder…	自分の素材フォルダーを追加…
 	Add a licensed folder…	ライセンス済みフォルダーを追加…
+	Pronunciation	発音
+	Teach the narrator names and places it would otherwise guess at. Spell the sound in plain words, for example "koo brick".	ナレーターが推測で読んでしまう名前や地名を教えます。音を簡単な言葉で書いてください。例: "koo brick"
+	Check script	台本をチェック
+	The script changed since the check. Check again.	チェック後に台本が変わりました。もう一度チェックしてください。
+	Every word is known. Nothing to fix.	すべての単語が既知です。修正の必要はありません。
+	The voice would guess at these. Press one to fix it.	音声が推測で読む単語です。押して修正してください。
+	Word	単語
+	Say it like… (koo brick)	読み方… (koo brick)
+	Play	再生
+	Save for this project	このプロジェクトに保存
+	Save for my channel	自分のチャンネルに保存
+	This project	このプロジェクト
+	My channel	自分のチャンネル
+	Remove this word	この単語を削除
+	Saved. The narration on the timeline keeps its old sound until you regenerate it.	保存しました。タイムライン上のナレーションは、再生成するまで以前の音のままです。
+	Regenerate narration	ナレーションを再生成
+	Saved. New narrations will use it.	保存しました。今後のナレーションに使われます。

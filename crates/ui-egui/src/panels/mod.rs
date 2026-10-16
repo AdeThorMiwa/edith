@@ -60,6 +60,7 @@ pub mod transform_handles;
 pub mod transition_controls;
 pub mod trim_monitor;
 pub mod tts;
+pub mod tts_words;
 pub mod voiceover;
 pub mod workspaces;
 

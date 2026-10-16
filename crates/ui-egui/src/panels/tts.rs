@@ -219,6 +219,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .map(|j| (j.progress.fraction(), j.progress.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()));
     let editing = app.ui.tts.loaded_from.map(|(c, _)| c);
     let mut actions: Vec<Action> = Vec::new();
+    let mut note: Option<String> = None;
     let auto = &mut app.auto;
     let d = &mut app.ui.tts;
 
@@ -380,7 +381,28 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             .char_limit(filmcraft_tts::MAX_TEXT_BYTES);
         let r = ui.add(te);
         auto.add("tts.text", visible(ui, r.rect), "Text");
+        ui.add_space(12.0);
+        for e in crate::panels::tts_words::show(ui, &t, auto, &mut app.session, &d.text, editing.is_some(), w) {
+            match e {
+                crate::panels::tts_words::Event::Audition { word, say } if voice_ready && !busy => {
+                    let p = json!({"text": word, "voice": d.voice, "pitch": d.pitch.id(), "pace": d.pace, "pronounce": {word.clone(): say}});
+                    actions.push(Action::Run("tts.preview", p, true));
+                }
+                crate::panels::tts_words::Event::Audition { .. } => note = Some("Pick an installed voice to hear a word".into()),
+                crate::panels::tts_words::Event::Regenerate => {
+                    if let Some(c) = editing {
+                        let mut p = d.params();
+                        p["clip"] = json!(c);
+                        actions.push(Action::Run("tts.edit", p, false));
+                    }
+                }
+                crate::panels::tts_words::Event::Status(m) => note = Some(m),
+            }
+        }
     });
+    if let Some(n) = note {
+        app.ui.status = n;
+    }
 
     // footer: Preview | Save
     let fy = rect.max.y - FOOTER_H + 10.0;
