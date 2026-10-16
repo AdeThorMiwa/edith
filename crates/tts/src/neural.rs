@@ -16,6 +16,12 @@ use crate::catalog;
 use crate::kokoro::{KOKORO_RATE, Kokoro, VoicePack};
 use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, check_text};
 
+/// How far a take moves the voice's prosody style (the style values have a spread of about 0.15):
+/// timing shifts a few percent and stress moves, while the voice stays itself.
+const TAKE_SIGMA: f32 = 0.1;
+/// Seeds of two takes are this far apart, so no sentence of one take repeats a seed of another.
+const TAKE_SEED_STEP: u64 = 100_000;
+
 /// Silence between sentences, ms.
 const SENTENCE_GAP_MS: u32 = 120;
 
@@ -134,7 +140,11 @@ impl Voice for NeuralVoice {
                     if spoke {
                         out.resize(out.len().saturating_add((SENTENCE_GAP_MS * rate / 1000) as usize), 0.0);
                     }
-                    let s = self.model.speak(p, &self.pack, params.pace, i as u64 + 1)?;
+                    // take 0 is the plain reading (as before takes existed); every take moves each
+                    // sentence's style by its own noise, seeded by the take and the sentence
+                    let seed = i as u64 + 1 + u64::from(params.take) * TAKE_SEED_STEP;
+                    let sigma = if params.take == 0 { 0.0 } else { TAKE_SIGMA };
+                    let s = self.model.speak_take(p, &self.pack, params.pace, seed, sigma)?;
                     out.extend_from_slice(&s);
                     spoke = true;
                 }

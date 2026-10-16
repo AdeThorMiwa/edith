@@ -106,7 +106,7 @@ fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
 /// Synthesize `n` (no cache).
 fn render(n: &Narration, models_dir: Option<&std::path::Path>, pron: &tts::Pronunciations) -> std::result::Result<tts::Audio, tts::TtsError> {
     let voice = tts::voice_in(&n.voice, models_dir)?;
-    voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace }, pron)
+    voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace, take: 0 }, pron)
 }
 
 fn synthesize(s: &Session, cmd: &str, n: &Narration, p: &Value) -> Result<Arc<tts::Audio>> {

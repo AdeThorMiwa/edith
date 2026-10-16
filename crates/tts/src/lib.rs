@@ -59,11 +59,18 @@ pub struct Params {
     pub semitones: f64,
     /// Speaking rate, [`MIN_PACE`]–[`MAX_PACE`] (1 = normal).
     pub pace: f64,
+    /// Which reading of the script: 0 is the voice's plain reading; 1 to [`MAX_TAKE`] are other
+    /// deliveries of the same words, with a little different timing and stress, each repeatable.
+    /// Only the natural voices have takes; the built-in voices say every take the same way.
+    pub take: u32,
 }
+
+/// The highest take number.
+pub const MAX_TAKE: u32 = 99;
 
 impl Default for Params {
     fn default() -> Self {
-        Params { semitones: 0.0, pace: 1.0 }
+        Params { semitones: 0.0, pace: 1.0, take: 0 }
     }
 }
 
@@ -74,6 +81,9 @@ impl Params {
         }
         if !(-MAX_SEMITONES..=MAX_SEMITONES).contains(&self.semitones) {
             return Err(TtsError::Invalid(format!("pitch must be within ±{MAX_SEMITONES} semitones")));
+        }
+        if self.take > MAX_TAKE {
+            return Err(TtsError::Invalid(format!("take must be 0 to {MAX_TAKE}")));
         }
         Ok(())
     }
@@ -343,6 +353,7 @@ mod tests {
             Params { pace: 0.1, ..Default::default() },
             Params { semitones: 40.0, ..Default::default() },
             Params { semitones: f64::INFINITY, ..Default::default() },
+            Params { take: MAX_TAKE + 1, ..Default::default() },
         ] {
             assert!(p.check().is_err(), "{p:?}");
         }

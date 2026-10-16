@@ -163,12 +163,33 @@ pub(crate) fn read_voice(path: &Path) -> Result<Vec<f32>, TtsError> {
     Ok(v)
 }
 
-/// The style vector for an input of `n` phonemes: `[1, 256]`.
-pub(crate) fn style_for(pack: &[f32], n: usize, dev: &Device) -> Result<Tensor, TtsError> {
+/// The style vector for an input of `n` phonemes: `[1, 256]`, with the prosody half moved a little
+/// by `sigma` of seeded noise (a take); `sigma` 0 is the voice's own style exactly.
+pub(crate) fn style_for_take(pack: &[f32], n: usize, sigma: f32, seed: u64, dev: &Device) -> Result<Tensor, TtsError> {
     let row = n.clamp(1, PACK_LEN) - 1;
     let s = pack.get(row * STYLE..(row + 1) * STYLE).ok_or_else(|| err("voice pack too short"))?;
-    Tensor::from_slice(s, (1, STYLE), dev).map_err(err)
+    let s = varied(s, sigma, seed);
+    Tensor::from_slice(&s, (1, STYLE), dev).map_err(err)
 }
+
+/// `style` with noise of size `sigma` added to its second half (the half that sets timing and
+/// pitch movement; the first half is the voice's timbre and stays). Deterministic for a `seed`;
+/// an unusable `sigma` (NaN, negative, zero) changes nothing and a large one is capped.
+pub(crate) fn varied(style: &[f32], sigma: f32, seed: u64) -> Vec<f32> {
+    let mut out = style.to_vec();
+    if sigma.is_nan() || sigma <= 0.0 {
+        return out;
+    }
+    let sigma = sigma.min(MAX_SIGMA);
+    let mut rng = super::dsp::Rng::new(seed ^ 0x7A4E_5EED_0B5E_55ED);
+    for x in out.iter_mut().skip(STYLE / 2) {
+        *x += sigma * rng.normal() as f32;
+    }
+    out
+}
+
+/// The most noise a take may add (the voice's style values have a spread of about 0.15).
+pub(crate) const MAX_SIGMA: f32 = 0.3;
 
 #[cfg(test)]
 mod tests {
@@ -209,12 +230,12 @@ mod tests {
         data[4 * STYLE * 4..4 * STYLE * 4 + 4].copy_from_slice(&7.0f32.to_le_bytes());
         let v = read_voice(&pack(&d, &data, "little")).unwrap();
         assert_eq!(v.len(), PACK_LEN * STYLE);
-        let s = style_for(&v, 5, &Device::Cpu).unwrap();
+        let s = style_for_take(&v, 5, 0.0, 0, &Device::Cpu).unwrap();
         assert_eq!(s.dims(), &[1, STYLE]);
         assert_eq!(s.to_vec2::<f32>().unwrap()[0][0], 7.0);
         // lengths outside 1..=510 clamp instead of failing
-        assert!(style_for(&v, 0, &Device::Cpu).is_ok());
-        assert!(style_for(&v, 100_000, &Device::Cpu).is_ok());
+        assert!(style_for_take(&v, 0, 0.0, 0, &Device::Cpu).is_ok());
+        assert!(style_for_take(&v, 100_000, 0.0, 0, &Device::Cpu).is_ok());
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -262,5 +283,23 @@ mod tests {
         std::fs::write(&p, vec![b' '; (1 << 20) + 1]).unwrap();
         assert!(read_config(&p).is_err(), "oversized");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_take_moves_only_the_prosody_half_and_is_repeatable() {
+        let style: Vec<f32> = (0..STYLE).map(|i| i as f32 / 1000.0).collect();
+        assert_eq!(varied(&style, 0.0, 5), style, "no noise, no change");
+        for bad in [f32::NAN, -1.0, f32::NEG_INFINITY] {
+            assert_eq!(varied(&style, bad, 5), style, "{bad}");
+        }
+        let a = varied(&style, 0.1, 5);
+        assert_eq!(a, varied(&style, 0.1, 5), "repeatable");
+        assert_ne!(a, varied(&style, 0.1, 6), "another seed, another take");
+        assert_eq!(a[..STYLE / 2], style[..STYLE / 2], "the voice's timbre stays");
+        assert_ne!(a[STYLE / 2..], style[STYLE / 2..]);
+        assert!(a.iter().all(|x| x.is_finite()));
+        // a huge or infinite request is capped, never unbounded
+        let big = varied(&style, f32::INFINITY, 5);
+        assert!(big.iter().all(|x| x.is_finite() && x.abs() < 3.0), "{:?}", big.iter().fold(0f32, |m, x| m.max(x.abs())));
     }
 }

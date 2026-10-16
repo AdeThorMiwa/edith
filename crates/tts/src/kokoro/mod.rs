@@ -53,6 +53,12 @@ impl Kokoro {
 
     /// Speak `phonemes` with `voice` at `speed` (0.5–2). Deterministic for a given `seed`.
     pub fn speak(&self, phonemes: &str, voice: &VoicePack, speed: f64, seed: u64) -> Result<Vec<f32>, TtsError> {
+        self.speak_take(phonemes, voice, speed, seed, 0.0)
+    }
+
+    /// [`Self::speak`] as a different take: the voice's prosody style is moved by `sigma` of noise
+    /// seeded with `seed`, so timing and stress shift a little. `sigma` 0 is [`Self::speak`].
+    pub fn speak_take(&self, phonemes: &str, voice: &VoicePack, speed: f64, seed: u64, sigma: f32) -> Result<Vec<f32>, TtsError> {
         if !(0.5..=2.0).contains(&speed) {
             return Err(TtsError::Invalid("speed must be between 0.5 and 2".into()));
         }
@@ -63,7 +69,7 @@ impl Kokoro {
         if ids.len() > MAX_PHONEMES {
             return Err(TtsError::Invalid(format!("at most {MAX_PHONEMES} phonemes per pass")));
         }
-        let style = weights::style_for(&voice.0, ids.len(), self.model.device())?;
+        let style = weights::style_for_take(&voice.0, ids.len(), sigma, seed, self.model.device())?;
         let out = self.model.forward(&ids, &style, speed, seed)?;
         if out.iter().any(|s| !s.is_finite()) {
             return Err(TtsError::Model("the model produced invalid samples".into()));
@@ -98,6 +104,20 @@ mod tests {
         let fast = k.speak(ph, &v, 2.0, 1).unwrap();
         let ratio = fast.len() as f64 / a.len() as f64;
         assert!((0.35..0.7).contains(&ratio), "{ratio}");
+    }
+
+    #[test]
+    fn a_take_changes_the_delivery_and_take_zero_is_the_plain_reading() {
+        let Some((k, v)) = model() else { return };
+        let ph = "ðə fˈɑɡ ɹˈOld ˈɪn ˈOvɚ ðə vˈæli.";
+        let plain = k.speak(ph, &v, 1.0, 1).unwrap();
+        assert_eq!(plain, k.speak_take(ph, &v, 1.0, 1, 0.0).unwrap(), "sigma 0 is the plain reading");
+        let t1 = k.speak_take(ph, &v, 1.0, 7, 0.1).unwrap();
+        assert_eq!(t1, k.speak_take(ph, &v, 1.0, 7, 0.1).unwrap(), "a take repeats");
+        assert_ne!(t1, plain);
+        assert_ne!(t1, k.speak_take(ph, &v, 1.0, 8, 0.1).unwrap(), "another seed is another take");
+        let secs = |x: &[f32]| x.len() as f64 / f64::from(KOKORO_RATE);
+        assert!((secs(&t1) / secs(&plain) - 1.0).abs() < 0.3, "still the same line: {} vs {}", secs(&t1), secs(&plain));
     }
 
     #[test]
