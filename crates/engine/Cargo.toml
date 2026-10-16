@@ -42,6 +42,7 @@ filmcraft-speech = { workspace = true }
 edith-net = { workspace = true }
 edith-ai = { workspace = true }
 edith-sources = { workspace = true }
+edith-planner = { workspace = true }
 filmcraft-tts = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
