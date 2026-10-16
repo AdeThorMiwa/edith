@@ -215,16 +215,7 @@ fn the_panel_opens_from_the_window_menu_and_points_to_connections_when_there_is_
         menu.as_array().unwrap().iter().filter(|m| m["path"] == json!(["Window"])).filter_map(|m| m["label"].as_str().map(str::to_string)).collect();
     assert!(window.iter().any(|w| w == "Assistant"), "{window:?}");
     d.open_assistant();
-    for id in [
-        "assistant.model",
-        "assistant.thread",
-        "assistant.new",
-        "assistant.input",
-        "assistant.send",
-        "assistant.chip.selection",
-        "assistant.chip.playhead",
-        "assistant.connect",
-    ] {
+    for id in ["assistant.model", "assistant.thread", "assistant.new", "assistant.input", "assistant.send", "assistant.connect"] {
         assert!(d.has(id), "{id} missing: {:?}", d.elements("assistant.").iter().map(|e| e["id"].clone()).collect::<Vec<_>>());
     }
     assert!(!d.has("assistant.starter.0"), "no starter prompts until it can answer");
@@ -383,9 +374,10 @@ fn the_chips_decide_what_is_sent_along_with_the_question() {
     let first = model.requests()[0].messages[0].text();
     assert!(first.contains("[selection]") && first.contains(&format!("#{}", clip.0)) && first.contains("[playhead]"), "{first}");
     // with both chips off nothing but the question goes
-    d.click("assistant.chip.selection");
-    d.click("assistant.chip.playhead");
-    assert_eq!(d.label("assistant.chip.selection"), "Selection off");
+    toggle_chip(&mut d, "selection");
+    toggle_chip(&mut d, "playhead");
+    assert_eq!(chip_label(&mut d, "selection"), "Selection off");
+    d.click("assistant.settings.menu");
     d.type_into_input("second");
     d.click("assistant.send");
     d.wait("the second answer", |d| d.entries().iter().any(|(_, l)| l == "b"));
@@ -496,11 +488,12 @@ fn the_transcript_markers_and_frame_chips_send_what_they_name_and_the_message_sa
     d.app().session.assistant.use_model(model.clone());
     d.open_assistant();
     d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
-    assert_eq!(d.label("assistant.chip.frame"), "Frame on", "a model that can see gets the frame by default");
+    assert_eq!(chip_label(&mut d, "frame"), "Frame on", "a model that can see gets the frame by default");
     for chip in ["transcript", "markers"] {
-        d.click(&format!("assistant.chip.{chip}"));
+        toggle_chip(&mut d, chip);
     }
-    assert_eq!(d.label("assistant.chip.frame"), "Frame on");
+    assert_eq!(chip_label(&mut d, "frame"), "Frame on");
+    d.click("assistant.settings.menu");
     d.type_into_input("what is on screen?");
     d.click("assistant.send");
     d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("sunset")));
@@ -549,6 +542,191 @@ fn the_assistant_has_a_home_on_the_right_in_every_workspace_and_a_shortcut() {
     assert_eq!(PanelKind::Assistant.window_shortcut(), Some("Shift+0"));
 }
 
+/// The Settings popup, opened if it is not already (clicking its button again would close it).
+fn open_settings(d: &mut Driver) {
+    if !d.has("assistant.settings.chip.frame") {
+        d.click("assistant.settings.menu");
+    }
+}
+
+fn chip_label(d: &mut Driver, name: &str) -> String {
+    open_settings(d);
+    d.label(&format!("assistant.settings.chip.{name}"))
+}
+
+fn toggle_chip(d: &mut Driver, name: &str) {
+    open_settings(d);
+    d.click(&format!("assistant.settings.chip.{name}"));
+}
+
+fn first_id(d: &mut Driver, prefix: &str) -> String {
+    d.elements(prefix).iter().filter_map(|e| e["id"].as_str().map(str::to_string)).find(|i| !i.ends_with("cancel")).unwrap_or_default()
+}
+
+fn thread_count(d: &mut Driver) -> usize {
+    d.exec("assistant.threads", json!({}))["threads"].as_array().map_or(0, Vec::len)
+}
+
+fn ask_and_wait(d: &mut Driver, q: &str, answer: &str) {
+    d.type_into_input(q);
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l == answer));
+}
+
+#[test]
+fn retry_and_edit_ask_again_in_a_new_thread_and_leave_the_old_one() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(scripted(vec![text_reply("first answer"), text_reply("retried answer"), text_reply("edited answer")]));
+    d.open_assistant();
+    ask_and_wait(&mut d, "what is the first shot?", "first answer");
+    let old = d.exec("assistant.threads", json!({}))["threads"][0]["id"].clone();
+    let old_events = d.exec("assistant.thread", json!({"thread": old}))["events"].as_array().unwrap().len();
+
+    // Retry: a second thread, the same question asked again
+    let retry = first_id(&mut d, "assistant.retry.");
+    assert!(!retry.is_empty(), "the latest answer offers Retry");
+    d.click(&retry);
+    d.wait("the retried answer", |d| d.entries().iter().any(|(_, l)| l == "retried answer"));
+    assert_eq!(thread_count(&mut d), 2);
+    assert!(d.entries().iter().any(|(_, l)| l == "what is the first shot?"), "the same question is shown again");
+
+    // Edit: the text comes back into the input with a banner; sending makes a third thread
+    let edit = first_id(&mut d, "assistant.edit.");
+    d.click(&edit);
+    assert!(d.has("assistant.edit.cancel"), "a banner says an earlier message is being edited");
+    d.click("assistant.input");
+    d.ok("ui.type", json!({"text": " Be brief."}));
+    d.frames(2);
+    d.click("assistant.send");
+    d.wait("the edited answer", |d| d.entries().iter().any(|(_, l)| l == "edited answer"));
+    assert_eq!(thread_count(&mut d), 3);
+    assert!(!d.has("assistant.edit.cancel"));
+    assert!(d.entries().iter().any(|(_, l)| l.contains("Be brief.")));
+    // the first thread is exactly as it was
+    assert_eq!(d.exec("assistant.thread", json!({"thread": old}))["events"].as_array().unwrap().len(), old_events);
+}
+
+#[test]
+fn cancelling_an_edit_drops_it_and_esc_does_the_same() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(scripted(vec![text_reply("an answer")]));
+    d.open_assistant();
+    ask_and_wait(&mut d, "a question", "an answer");
+    let edit = first_id(&mut d, "assistant.edit.");
+    d.click(&edit);
+    assert!(d.has("assistant.edit.cancel"));
+    d.click("assistant.edit.cancel");
+    assert!(!d.has("assistant.edit.cancel"));
+    d.click(&edit);
+    d.click("assistant.input");
+    d.ok("ui.key", json!({"key": "Escape"}));
+    d.frames(3);
+    assert!(!d.has("assistant.edit.cancel"), "Esc drops the edit");
+    assert_eq!(thread_count(&mut d), 1);
+}
+
+#[test]
+fn esc_stops_a_running_turn() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(Arc::new(WaitsForStop));
+    d.open_assistant();
+    d.type_into_input("hello");
+    d.click("assistant.send");
+    d.wait("Stop to appear", |d| d.has("assistant.stop"));
+    d.ok("ui.key", json!({"key": "Escape"}));
+    d.wait("the turn to end", |d| d.has("assistant.send") && d.entries().iter().any(|(_, l)| l == "Stopped."));
+}
+
+#[test]
+fn up_brings_back_your_earlier_questions_and_down_goes_forward() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(scripted(vec![text_reply("one"), text_reply("two")]));
+    d.open_assistant();
+    ask_and_wait(&mut d, "first question", "one");
+    ask_and_wait(&mut d, "second question", "two");
+    d.click("assistant.input");
+    d.ok("ui.key", json!({"key": "ArrowUp"}));
+    d.frames(3);
+    assert_eq!(draft(&mut d), "second question");
+    d.ok("ui.key", json!({"key": "ArrowUp"}));
+    d.frames(3);
+    assert_eq!(draft(&mut d), "first question");
+    d.ok("ui.key", json!({"key": "ArrowUp"}));
+    d.frames(3);
+    assert_eq!(draft(&mut d), "first question", "it stops at the oldest");
+    d.ok("ui.key", json!({"key": "ArrowDown"}));
+    d.frames(3);
+    assert_eq!(draft(&mut d), "second question");
+    d.ok("ui.key", json!({"key": "ArrowDown"}));
+    d.frames(3);
+    assert_eq!(draft(&mut d), "", "past the newest it is empty again");
+}
+
+/// The text in the input, read from the element the panel registers for it.
+fn draft(d: &mut Driver) -> String {
+    d.label("assistant.draft")
+}
+
+#[test]
+fn a_thread_is_renamed_from_the_menu_and_the_name_is_kept() {
+    let _g = guard();
+    let dir = std::env::temp_dir().join(format!("edith-ui-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    session.assistant.use_model(scripted(vec![text_reply("an answer")]));
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    ask_and_wait(&mut d, "a question to name", "an answer");
+    d.click("assistant.thread");
+    d.click("assistant.rename");
+    assert!(d.has("assistant.rename.field"), "the dropdown became a text field");
+    d.ok("ui.key", json!({"key": "Escape"}));
+    d.frames(3);
+    assert!(!d.has("assistant.rename.field") && d.has("assistant.thread"), "Esc leaves the name alone");
+    d.click("assistant.thread");
+    d.click("assistant.rename");
+    d.ok("ui.key", json!({"key": "Cmd+A"}));
+    d.ok("ui.type", json!({"text": "Opening shots"}));
+    d.ok("ui.key", json!({"key": "Enter"}));
+    d.wait("the new name", |d| d.label("assistant.thread").contains("Opening shots"));
+    let mut again = Session::default();
+    again.assistant.set_dir(&dir);
+    assert_eq!(again.execute("assistant.threads", json!({})).unwrap()["threads"][0]["title"], "Opening shots");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn copy_says_so_and_continue_appears_only_after_a_cut_off_reply() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let cut = (
+        vec![StreamEvent::Text("A long answer that".into())],
+        Response {
+            message: Message::assistant_text("A long answer that"),
+            stop_reason: StopReason::MaxTokens,
+            usage: Usage { input_tokens: 10, output_tokens: 10, ..Default::default() },
+            model: "claude-haiku-5-5".into(),
+        },
+    );
+    d.app().session.assistant.use_model(scripted(vec![cut, text_reply("...went on to the end.")]));
+    d.open_assistant();
+    d.type_into_input("tell me everything");
+    d.click("assistant.send");
+    d.wait("Continue", |d| d.has("assistant.continue"));
+    let copy = first_id(&mut d, "assistant.copy.");
+    d.click(&copy);
+    assert!(d.app().ui.status.contains("Copied"), "{}", d.app().ui.status);
+    d.click("assistant.continue");
+    d.wait("the rest", |d| d.entries().iter().any(|(_, l)| l.contains("went on to the end")));
+    assert!(!d.has("assistant.continue"), "a finished answer needs no Continue");
+}
+
 #[test]
 fn the_chips_are_saved_settings_so_a_choice_is_there_next_time() {
     let _g = guard();
@@ -563,9 +741,9 @@ fn the_chips_are_saved_settings_so_a_choice_is_there_next_time() {
     d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
     assert_eq!(d.exec("assistant.settings", json!({}))["settings"]["chips"]["frame"], true);
     // turn the frame off from its chip
-    d.click("assistant.chip.frame");
+    toggle_chip(&mut d, "frame");
     d.wait("the setting", |d| d.exec("assistant.settings", json!({}))["settings"]["chips"]["frame"] == false);
-    assert_eq!(d.label("assistant.chip.frame"), "Frame off");
+    assert_eq!(chip_label(&mut d, "frame"), "Frame off");
     // a new session on the same folder finds the choice
     let mut again = Session::default();
     again.assistant.set_dir(&dir);
@@ -585,7 +763,8 @@ fn a_model_that_cannot_see_has_the_frame_chip_disabled() {
     d.open_assistant();
     d.wait("the model list", |d| d.exec("assistant.models", json!({}))["models"].as_array().is_some_and(|m| !m.is_empty()));
     d.frames(6);
-    let chip = d.elements("assistant.chip.frame").into_iter().find(|e| e["id"] == "assistant.chip.frame").expect("the chip is there");
+    open_settings(&mut d);
+    let chip = d.elements("assistant.settings.chip.frame").into_iter().find(|e| e["id"] == "assistant.settings.chip.frame").expect("the checkbox is there");
     assert_eq!(chip["label"], "Frame off");
     assert_eq!(chip["enabled"], json!(false), "{chip}");
 }

@@ -3630,7 +3630,6 @@
 	Open Connections	Abrir Conexiones
 	Selection	Selección
 	Send	Enviar
-	Sends along:	Se envía junto con:
 	Settings	Ajustes
 	Show a summary of its thinking	Mostrar un resumen de su razonamiento
 	Stop a thread at about $	Detener un hilo en unos $
@@ -3667,3 +3666,10 @@
 	I can look at the project, the clips, the markers and any transcripts. I can't change anything.	Puedo mirar el proyecto, los clips, los marcadores y las transcripciones. No puedo cambiar nada.
 	Delete this thread	Eliminar este hilo
 	Choose a model below to start.	Elige un modelo abajo para empezar.
+	Copied to the clipboard.	Copiado al portapapeles.
+	Editing an earlier message. It is sent as a new thread.	Editando un mensaje anterior. Se envía como un hilo nuevo.
+	Let the model name new threads	Dejar que el modelo ponga nombre a los hilos nuevos
+	Rename this thread	Cambiar el nombre de este hilo
+	Retry	Reintentar
+	The clips you have selected.	Los clips que has seleccionado.
+	Where the playhead is.	Dónde está el cabezal.

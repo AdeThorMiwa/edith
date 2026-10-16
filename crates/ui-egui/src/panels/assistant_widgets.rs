@@ -168,3 +168,24 @@ pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Token
         }
     }
 }
+
+/// A small faint text link ("Copy", "Retry"): brighter under the pointer.
+pub fn action_link(ui: &mut Ui, label: &str, t: &Tokens) -> Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), Tokens::ui(SMALL), t.text_faint);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + vec2(8.0, 2.0), Sense::click());
+    let color = if resp.hovered() { t.text } else { t.text_faint };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, Tokens::ui(SMALL), color);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The row of links under a message. Always takes the same height, so nothing jumps when the links
+/// appear; they are drawn only when `shown`. Returns the row's area and one response per link
+/// (none when hidden).
+pub fn action_row(ui: &mut Ui, shown: bool, labels: &[&str], t: &Tokens) -> (egui::Rect, Vec<Response>) {
+    let out = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.set_min_height(16.0);
+        if shown { labels.iter().map(|l| action_link(ui, l, t)).collect::<Vec<_>>() } else { Vec::new() }
+    });
+    (out.response.rect, out.inner)
+}

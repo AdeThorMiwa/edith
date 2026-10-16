@@ -3632,7 +3632,6 @@
 	Open Connections	接続を開く
 	Selection	選択範囲
 	Send	送信
-	Sends along:	一緒に送るもの:
 	Settings	設定
 	Show a summary of its thinking	思考の要約を表示
 	Stop a thread at about $	スレッドを約 $ で停止
@@ -3669,3 +3668,10 @@
 	I can look at the project, the clips, the markers and any transcripts. I can't change anything.	プロジェクト、クリップ、マーカー、文字起こしを見ることができます。何も変更はできません。
 	Delete this thread	このスレッドを削除
 	Choose a model below to start.	始めるには、下でモデルを選んでください。
+	Copied to the clipboard.	クリップボードにコピーしました。
+	Editing an earlier message. It is sent as a new thread.	以前のメッセージを編集中です。新しいスレッドとして送信されます。
+	Let the model name new threads	新しいスレッドの名前をモデルに付けてもらう
+	Rename this thread	このスレッドの名前を変更
+	Retry	再試行
+	The clips you have selected.	選択中のクリップ。
+	Where the playhead is.	再生ヘッドの位置。

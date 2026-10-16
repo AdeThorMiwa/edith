@@ -3608,7 +3608,6 @@
 	Open Connections	打开“连接”
 	Selection	选区
 	Send	发送
-	Sends along:	一并发送:
 	Settings	设置
 	Show a summary of its thinking	显示其思考摘要
 	Stop a thread at about $	对话达到约 $ 时停止
@@ -3645,3 +3644,10 @@
 	I can look at the project, the clips, the markers and any transcripts. I can't change anything.	我可以查看项目、片段、标记和转录文本，但不能做任何更改。
 	Delete this thread	删除此对话
 	Choose a model below to start.	请先在下方选择一个模型。
+	Copied to the clipboard.	已复制到剪贴板。
+	Editing an earlier message. It is sent as a new thread.	正在编辑之前的消息，将作为新对话发送。
+	Let the model name new threads	让模型为新对话命名
+	Rename this thread	重命名此对话
+	Retry	重试
+	The clips you have selected.	你选中的片段。
+	Where the playhead is.	播放头所在的位置。

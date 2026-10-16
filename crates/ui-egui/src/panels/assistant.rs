@@ -9,8 +9,8 @@
 //!
 //! Automation ids: `assistant.input`, `assistant.send`, `assistant.stop`, `assistant.new`,
 //! `assistant.model` (and `assistant.model.<id>` for each choice), `assistant.thread` (and
-//! `assistant.thread.<id>`), `assistant.chip.selection`, `assistant.chip.playhead`,
-//! `assistant.starter.<n>`, `assistant.connect`, `assistant.cost`, `assistant.entry.<n>` (the text
+//! `assistant.thread.<id>`), `assistant.settings.chip.<name>` (what is sent with each question, in Settings),
+//! `assistant.draft` (the text being typed, as its label), `assistant.copy.<n>` / `assistant.retry.<n>` / `assistant.edit.<n>` (links under a message), `assistant.edit.cancel`, `assistant.continue`, `assistant.rename` / `assistant.rename.field`, `assistant.starter.<n>`, `assistant.connect`, `assistant.cost`, `assistant.entry.<n>` (the text
 //! of each message), `assistant.tool.<n>` (each tool card), `assistant.settings.thinking`,
 //! `assistant.settings.effort`, `assistant.settings.steps`, `assistant.settings.cost`.
 
@@ -48,6 +48,20 @@ struct Chat {
     delete_armed: Option<u64>,
     /// The latest thread was picked once at the start; after that "no thread" means "a new one".
     picked_initial: bool,
+    /// Renaming the open thread: the text so far.
+    renaming: Option<String>,
+    rename_fresh: bool,
+    /// Editing an earlier message (its turn number); Send then makes a new thread.
+    editing: Option<usize>,
+    /// Which earlier question Up has recalled (0 is the latest).
+    hist_pos: Option<usize>,
+    /// When the panel was last drawn: a gap means it was just opened, and the input takes the cursor.
+    last_shown: f64,
+    focus_input: bool,
+    /// How the last turn of the open thread ended (`done`, `cut_off`, `step_limit`, …).
+    finish_kind: String,
+    /// The message whose Copy / Retry / Edit links are showing.
+    hover_entry: Option<usize>,
 }
 
 impl Chat {
@@ -67,6 +81,14 @@ impl Chat {
             commands: Vec::new(),
             delete_armed: None,
             picked_initial: false,
+            renaming: None,
+            rename_fresh: false,
+            editing: None,
+            hist_pos: None,
+            last_shown: f64::NEG_INFINITY,
+            focus_input: true,
+            finish_kind: String::new(),
+            hover_entry: None,
         }
     }
 
@@ -104,6 +126,20 @@ enum Action {
     OpenConnections,
     SetInput(String),
     Delete(u64),
+    StartRename,
+    Rename(u64, String),
+    CancelRename,
+    /// Ask again in a new thread from the start of a turn: the same question, or an edited one.
+    Branch {
+        turn: usize,
+        text: Option<String>,
+    },
+    StartEdit {
+        turn: usize,
+        text: String,
+    },
+    CancelEdit,
+    Copy(String),
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -146,6 +182,7 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
             }
             log.next = v["next"].as_u64().unwrap_or(since);
             chat.running = v["running"].as_bool().unwrap_or(false);
+            chat.finish_kind = v["finish"]["kind"].as_str().unwrap_or("").to_string();
             chat.usage_text = v["usageText"].as_str().unwrap_or("").to_string();
         }
     }
@@ -208,8 +245,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let shared: Shared = ui.data_mut(|d| d.get_temp_mut_or_insert_with(egui::Id::new("assistant-chat"), || Arc::new(Mutex::new(Chat::new()))).clone());
     let mut chat = lock(&shared);
     refresh(app, &mut chat, now, ui.ctx());
+    // just opened (or its tab came forward): the cursor goes to the input
+    if now - chat.last_shown > 0.4 {
+        chat.focus_input = true;
+    }
+    chat.last_shown = now;
 
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(10.0, 8.0))));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min + vec2(10.0, 8.0), rect.max - vec2(10.0, 4.0))));
     let ui = &mut child;
     ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
     let mut elems: Vec<(String, egui::Response, String)> = Vec::new();
@@ -237,14 +279,41 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let title = chat.thread.and_then(|id| threads.iter().find(|t| t.0 == id)).map_or(tl!("New thread").to_string(), |t| t.1.clone());
         let w = (ui.available_width() - 100.0).clamp(80.0, 260.0);
         let (trect, _) = ui.allocate_exact_size(vec2(w, 24.0), egui::Sense::hover());
-        let tresp = crate::widgets::dropdown_text(ui, trect, &short(&title, 34), &t, egui::Id::new("assistant-thread-dd"));
-        elems.push(("assistant.thread".into(), tresp.clone(), format!("Thread {title}")));
+        if let Some(buf) = chat.renaming.as_mut() {
+            let field = ui.put(trect, egui::TextEdit::singleline(buf).id(egui::Id::new("assistant-rename-field")).font(Tokens::ui(12.0)).desired_width(w));
+            if chat.rename_fresh {
+                field.request_focus();
+                chat.rename_fresh = false;
+            }
+            elems.push(("assistant.rename.field".into(), field.clone(), "Thread name".into()));
+            if field.lost_focus() {
+                match (ui.input(|i| i.key_pressed(Key::Enter)), chat.thread) {
+                    (true, Some(id)) => actions.push(Action::Rename(id, chat.renaming.clone().unwrap_or_default())),
+                    _ => actions.push(Action::CancelRename),
+                }
+            }
+        }
+        let tresp = if chat.renaming.is_some() {
+            ui.interact(egui::Rect::NOTHING, egui::Id::new("assistant-thread-dd-hidden"), egui::Sense::hover())
+        } else {
+            let r = crate::widgets::dropdown_text(ui, trect, &short(&title, 34), &t, egui::Id::new("assistant-thread-dd"));
+            elems.push(("assistant.thread".into(), r.clone(), format!("Thread {title}")));
+            r
+        };
         egui::Popup::menu(&tresp).show(|ui| {
             for (id, title) in threads.iter().rev() {
                 let r = ui.selectable_label(chat.thread == Some(*id), short(title, 40));
                 elems.push((format!("assistant.thread.{id}"), r.clone(), title.clone()));
                 if r.clicked() {
                     actions.push(Action::SelectThread(*id));
+                }
+            }
+            if chat.thread.is_some_and(|id| threads.iter().any(|t| t.0 == id)) {
+                ui.separator();
+                let r = ui.button(tl!("Rename this thread"));
+                elems.push(("assistant.rename".into(), r.clone(), "Rename this thread".into()));
+                if r.clicked() {
+                    actions.push(Action::StartRename);
                 }
             }
         });
@@ -278,6 +347,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             elems.push(("assistant.settings.thinking".into(), r.clone(), "Show thinking".into()));
             if r.changed() {
                 actions.push(Action::Settings(json!({"showThinking": thinking})));
+            }
+            let mut auto = chat.setting("autoTitle").as_bool().unwrap_or(true);
+            let r = ui.checkbox(&mut auto, tl!("Let the model name new threads"));
+            elems.push(("assistant.settings.autotitle".into(), r.clone(), "Name threads automatically".into()));
+            if r.changed() {
+                actions.push(Action::Settings(json!({"autoTitle": auto})));
             }
             let effort = chat.setting("effort").as_str().map(str::to_string);
             ui.horizontal(|ui| {
@@ -321,16 +396,26 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             });
             ui.separator();
             ui.label(RichText::new(tl!("Sent with each question")).size(11.0).color(t.text_faint));
-            for (name, label) in [
-                ("selection", tl!("Selection")),
-                ("playhead", tl!("Playhead")),
-                ("transcript", tl!("Transcript")),
-                ("markers", tl!("Markers")),
-                ("frame", tl!("Frame")),
+            for (name, label, english, hover) in [
+                ("selection", tl!("Selection"), "Selection", tl!("The clips you have selected.")),
+                ("playhead", tl!("Playhead"), "Playhead", tl!("Where the playhead is.")),
+                ("transcript", tl!("Transcript"), "Transcript", tl!("What is said within 20 seconds of the playhead.")),
+                ("markers", tl!("Markers"), "Markers", tl!("Every marker in this sequence.")),
+                (
+                    "frame",
+                    tl!("Frame"),
+                    "Frame",
+                    if sees {
+                        tl!("A picture of the Program monitor at the playhead. Costs more than text.")
+                    } else {
+                        tl!("This model cannot look at pictures.")
+                    },
+                ),
             ] {
+                let enabled = name != "frame" || sees;
                 let mut on = chat.chip(name);
-                let r = ui.checkbox(&mut on, label);
-                elems.push((format!("assistant.settings.chip.{name}"), r.clone(), format!("Send {name} by default")));
+                let r = ui.add_enabled(enabled, egui::Checkbox::new(&mut on, label)).on_hover_text(hover).on_disabled_hover_text(hover);
+                elems.push((format!("assistant.settings.chip.{name}"), r.clone(), format!("{english} {}", if on && enabled { "on" } else { "off" })));
                 if r.changed() {
                     actions.push(Action::Settings(json!({"chips": {name: on}})));
                 }
@@ -370,13 +455,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 
     // ---- what the composer below will take: its height decides how tall the conversation is ----
-    let composer_h = 112.0;
-    let chips_h = 26.0;
+    let composer_h = 90.0;
     let hint_h = if ready && chat.needs_model() { 18.0 } else { 0.0 };
     let slash_h = if chat.input.starts_with('/') && !chat.input.contains(char::is_whitespace) && ready { 30.0 } else { 0.0 };
 
     // ---- the conversation ----
-    let transcript_h = (ui.available_height() - composer_h - chips_h - hint_h - slash_h - 18.0).max(40.0);
+    let mut new_hover: Option<usize> = None;
+    let transcript_h = (ui.available_height() - composer_h - hint_h - slash_h - 8.0).max(40.0);
     let thread = chat.thread;
     let empty = thread.is_none_or(|id| chat.logs.get(&id).is_none_or(|l| l.entries.is_empty()));
     egui::ScrollArea::vertical().id_salt("assistant-scroll").max_height(transcript_h).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
@@ -404,6 +489,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if let Some(log) = thread.and_then(|id| chat.logs.get(&id)) {
             ui.spacing_mut().item_spacing.y = 6.0;
             let last = log.entries.len().saturating_sub(1);
+            let last_user = log.entries.iter().rposition(|e| matches!(e, Entry::User(_)));
+            let last_answer = log.entries.iter().rposition(|e| matches!(e, Entry::Assistant(_)));
+            let mut turn = 0usize;
             for (i, e) in log.entries.iter().enumerate() {
                 match e {
                     Entry::User(text) => {
@@ -419,10 +507,36 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             ui.set_width(ui.available_width());
                             ui.add(egui::Label::new(RichText::new(text).size(super::assistant_widgets::BODY).color(t.text)).wrap());
                         });
+                        let this_turn = turn;
+                        turn += 1;
+                        let shown = !running && (last_user == Some(i) || chat.hover_entry == Some(i));
+                        let (row, links) = super::assistant_widgets::action_row(ui, shown, &[tl!("Edit"), tl!("Copy")], &t);
+                        for (n, r) in links.iter().enumerate() {
+                            let (id, label) = if n == 0 { ("edit", "Edit message") } else { ("copy", "Copy message") };
+                            elems.push((format!("assistant.{id}.{i}"), r.clone(), label.to_string()));
+                            if r.clicked() {
+                                actions.push(if n == 0 { Action::StartEdit { turn: this_turn, text: text.clone() } } else { Action::Copy(text.clone()) });
+                            }
+                        }
+                        if ui.rect_contains_pointer(r.response.rect.union(row)) {
+                            new_hover = Some(i);
+                        }
                         elems.push((format!("assistant.entry.{i}"), r.response, text.clone()));
                     }
                     Entry::Assistant(text) => {
                         let r = ui.scope(|ui| super::assistant_widgets::answer(ui, (thread, i), &super::assistant_view::blocks(text), &t)).response;
+                        let shown = !running && (last_answer == Some(i) || chat.hover_entry == Some(i));
+                        let (row, links) = super::assistant_widgets::action_row(ui, shown, &[tl!("Copy"), tl!("Retry")], &t);
+                        for (n, l) in links.iter().enumerate() {
+                            let (id, label) = if n == 0 { ("copy", "Copy answer") } else { ("retry", "Ask again") };
+                            elems.push((format!("assistant.{id}.{i}"), l.clone(), label.to_string()));
+                            if l.clicked() {
+                                actions.push(if n == 0 { Action::Copy(text.clone()) } else { Action::Branch { turn: turn.saturating_sub(1), text: None } });
+                            }
+                        }
+                        if ui.rect_contains_pointer(r.rect.union(row)) {
+                            new_hover = Some(i);
+                        }
                         elems.push((format!("assistant.entry.{i}"), r, text.clone()));
                     }
                     Entry::Thinking(text) => {
@@ -482,50 +596,21 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             ui.label(RichText::new(e).size(12.0).color(WARN));
         }
         if running {
-            ui.label(RichText::new(tl!("Working…")).size(11.5).color(t.text_faint));
+            let line = if chat.usage_text.is_empty() { tl!("Working…").to_string() } else { format!("{} · {}", tl!("Working…"), chat.usage_text) };
+            ui.label(RichText::new(line).size(11.5).color(t.text_faint));
+        } else if thread.is_some() && matches!(chat.finish_kind.as_str(), "cut_off" | "step_limit") {
+            let r = ui.button(tl!("Continue"));
+            elems.push(("assistant.continue".into(), r.clone(), "Continue".into()));
+            if r.clicked() {
+                actions.push(Action::Send("Please continue.".to_string()));
+            }
         }
     });
+    chat.hover_entry = new_hover;
 
     if hint_h > 0.0 {
         ui.label(RichText::new(tl!("Choose a model below to start.")).size(11.0).color(WARN));
     }
-
-    // ---- what goes along with the question: small pill toggles ----
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        ui.label(RichText::new(tl!("Sends along:")).size(11.0).color(t.text_faint));
-        let blocks = context_blocks(app, Chips { selection: true, playhead: true, transcript: false, markers: false, frame: false });
-        let text_of = |label: &str| blocks.iter().find(|b| b["label"] == label).and_then(|b| b["text"].as_str()).unwrap_or("nothing selected").to_string();
-        let mut chip = |ui: &mut egui::Ui, name: &str, label: &str, hover: &str, enabled: bool| {
-            let on = chat.chip(name) && enabled;
-            let r = super::assistant_widgets::pill(ui, label, on, enabled, &t).on_hover_text(hover);
-            elems.push((
-                format!("assistant.chip.{name}"),
-                r.clone(),
-                format!(
-                    "{} {}",
-                    match name {
-                        "selection" => "Selection",
-                        "playhead" => "Playhead",
-                        "transcript" => "Transcript",
-                        "markers" => "Markers",
-                        _ => "Frame",
-                    },
-                    if on { "on" } else { "off" }
-                ),
-            ));
-            if r.clicked() && enabled {
-                actions.push(Action::Settings(json!({"chips": {name: !chat.chip(name)}})));
-            }
-        };
-        chip(ui, "selection", tl!("Selection"), &text_of("selection"), true);
-        chip(ui, "playhead", tl!("Playhead"), &text_of("playhead"), true);
-        chip(ui, "transcript", tl!("Transcript"), tl!("What is said within 20 seconds of the playhead."), true);
-        chip(ui, "markers", tl!("Markers"), tl!("Every marker in this sequence."), true);
-        let hover =
-            if sees { tl!("A picture of the Program monitor at the playhead. Costs more than text.") } else { tl!("This model cannot look at pictures.") };
-        chip(ui, "frame", tl!("Frame"), hover, sees);
-    });
 
     // ---- slash commands, while the message is just "/something" ----
     let typing_slash = chat.input.starts_with('/') && !chat.input.contains(char::is_whitespace);
@@ -545,7 +630,52 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
 
     // ---- the composer: one dark field holding the text, and under it the provider, the model and Send ----
     let input_id = egui::Id::new("assistant-input-field");
+    if chat.focus_input && ready {
+        ui.memory_mut(|m| m.request_focus(input_id));
+        chat.focus_input = false;
+    }
     let focused = ui.memory(|m| m.has_focus(input_id));
+    // Esc stops a turn that is running, or drops an edit; taken before the field, which would let go of focus
+    let nothing_focused = ui.memory(|m| m.focused().is_none());
+    if (running || chat.editing.is_some()) && (focused || nothing_focused) && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        actions.push(if running { Action::Stop } else { Action::CancelEdit });
+    }
+    // Up in an empty input brings back your last question, again for older ones; Down goes forward
+    if focused && ready && !running {
+        let asked: Vec<String> = thread
+            .and_then(|id| chat.logs.get(&id))
+            .map(|l| l.entries.iter().rev().filter_map(|e| if let Entry::User(t) = e { Some(t.clone()) } else { None }).collect())
+            .unwrap_or_default();
+        let at_recalled = chat.hist_pos.and_then(|p| asked.get(p)).is_some_and(|t| *t == chat.input);
+        if (chat.input.is_empty() || at_recalled) && !asked.is_empty() {
+            if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
+                let p = chat.hist_pos.map_or(0, |p| p + 1).min(asked.len() - 1);
+                chat.input = asked[p].clone();
+                chat.hist_pos = Some(p);
+            } else if at_recalled && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
+                match chat.hist_pos {
+                    Some(0) | None => {
+                        chat.input.clear();
+                        chat.hist_pos = None;
+                    }
+                    Some(p) => {
+                        chat.input = asked[p - 1].clone();
+                        chat.hist_pos = Some(p - 1);
+                    }
+                }
+            }
+        }
+    }
+    if chat.editing.is_some() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tl!("Editing an earlier message. It is sent as a new thread.")).size(11.0).color(WARN));
+            let r = ui.small_button(tl!("Cancel"));
+            elems.push(("assistant.edit.cancel".into(), r.clone(), "Cancel editing".into()));
+            if r.clicked() {
+                actions.push(Action::CancelEdit);
+            }
+        });
+    }
     // Enter sends; Shift+Enter makes a new line. Taken before the field sees the key.
     let enter = focused && ready && !running && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
     let border = if focused { t.accent } else { t.field_border };
@@ -561,6 +691,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 .font(Tokens::ui(super::assistant_widgets::BODY))
                 .hint_text(RichText::new(tl!("Ask Edith about your edit…")).color(t.text_faint)),
         );
+        elems.push(("assistant.draft".into(), r.clone(), chat.input.clone()));
         elems.push(("assistant.input".into(), r, "Message".into()));
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -633,7 +764,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     let r = super::assistant_widgets::round_button(ui, false, can, &t).on_hover_text(tl!("Send"));
                     elems.push(("assistant.send".into(), r.clone(), "Send".into()));
                     if (r.clicked() && can) || (enter && can) {
-                        actions.push(Action::Send(chat.input.trim().to_string()));
+                        let text = chat.input.trim().to_string();
+                        actions.push(match chat.editing {
+                            Some(turn) => Action::Branch { turn, text: Some(text) },
+                            None => Action::Send(text),
+                        });
                     }
                 }
             });
@@ -665,6 +800,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         chat.thread = v["thread"].as_u64();
                         chat.running = true;
                         chat.input.clear();
+                        chat.hist_pos = None;
+                        chat.finish_kind.clear();
                         chat.error = None;
                         chat.status_at = f64::NEG_INFINITY;
                         chat.polled_at = f64::NEG_INFINITY;
@@ -675,6 +812,56 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             Action::Stop => {
                 if let Some(id) = chat.thread {
                     let _ = app.session.execute("assistant.cancel", json!({"thread": id}));
+                }
+            }
+            Action::StartRename => {
+                let title = chat.thread.and_then(|id| threads.iter().find(|t| t.0 == id)).map(|t| t.1.clone()).unwrap_or_default();
+                chat.renaming = Some(title);
+                chat.rename_fresh = true;
+            }
+            Action::CancelRename => chat.renaming = None,
+            Action::Rename(id, title) => {
+                match app.session.execute("assistant.renameThread", json!({"thread": id, "title": title})) {
+                    Ok(_) => chat.error = None,
+                    Err(e) => chat.error = Some(e.to_string()),
+                }
+                chat.renaming = None;
+                chat.status_at = f64::NEG_INFINITY;
+            }
+            Action::StartEdit { turn, text } => {
+                chat.editing = Some(turn);
+                chat.input = text;
+                chat.focus_input = true;
+            }
+            Action::CancelEdit => {
+                chat.editing = None;
+                chat.input.clear();
+            }
+            Action::Copy(text) => {
+                ctx.copy_text(text);
+                app.ui.status = tl!("Copied to the clipboard.").to_string();
+            }
+            Action::Branch { turn, text } => {
+                let Some(from) = chat.thread else { continue };
+                let mut params = json!({"thread": from, "turn": turn, "context": context_blocks(app, chips)});
+                if let Some(t) = &text {
+                    params["text"] = json!(t);
+                }
+                match app.session.execute("assistant.branch", params) {
+                    Ok(v) => {
+                        chat.thread = v["thread"].as_u64();
+                        chat.running = true;
+                        chat.editing = None;
+                        chat.hist_pos = None;
+                        if text.is_some() {
+                            chat.input.clear();
+                        }
+                        chat.error = None;
+                        chat.finish_kind.clear();
+                        chat.status_at = f64::NEG_INFINITY;
+                        chat.polled_at = f64::NEG_INFINITY;
+                    }
+                    Err(e) => chat.error = Some(e.to_string()),
                 }
             }
             Action::NewThread => {
