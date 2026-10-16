@@ -393,6 +393,43 @@ mod tests {
         }
     }
 
+    /// The two sources that need no key, asked for real (no keychain involved): one search each, and
+    /// one real download of a small file from each. `cargo test -p edith-sources --features net -- --ignored real_open_sites`
+    #[test]
+    #[ignore = "uses the real network (Wikimedia Commons and the Internet Archive; no key)"]
+    fn real_open_sites_answer_and_serve_a_file() {
+        let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
+        let sources = Sources::new(Arc::new(Client::new(ClientConfig::default(), Arc::new(NetState::new()))), no_key);
+        let dir = std::env::temp_dir().join(format!("edith-real-open-{}", std::process::id()));
+        for (id, kinds) in [("wikimedia", vec![Kind::Image, Kind::Video, Kind::Audio]), ("archive", vec![Kind::Video, Kind::Audio])] {
+            let req = Request { text: "fog over a valley".into(), kinds, count: 5, ..Request::default() };
+            let p = sources.search(id, &req, &cancel()).unwrap();
+            eprintln!("{id}: {} results", p.candidates.len());
+            for c in p.candidates.iter().take(6) {
+                eprintln!(
+                    "  {:?} | {} | {} | {} | {:?} | by {}",
+                    c.kind,
+                    c.id,
+                    c.title,
+                    c.rights.name,
+                    (c.rights.commercial, c.rights.attribution_required),
+                    c.author
+                );
+            }
+            assert!(!p.candidates.is_empty(), "{id} returned nothing");
+            // the smallest picture or sound of the lot, downloaded for real
+            let pick = p.candidates.iter().filter(|c| c.kind != Kind::Video).find(|c| c.download.is_some());
+            if let Some(c) = pick {
+                let ext = c.download.as_ref().map(|d| d.ext.clone()).unwrap_or_default();
+                match sources.download(c, &dir.join(format!("{id}.{ext}")), &cancel(), |_, _| {}) {
+                    Ok(d) => eprintln!("  downloaded {} ({} bytes, sha256 {}…)", c.id, d.bytes, &d.sha256[..12]),
+                    Err(e) => panic!("{id} download of {}: {e}", c.id),
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn rebasing_keeps_the_path_and_query() {
         assert_eq!(rebase("https://api.pexels.com/v1/search?query=a%20b", "http://127.0.0.1:5"), "http://127.0.0.1:5/v1/search?query=a%20b");
