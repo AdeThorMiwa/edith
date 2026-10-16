@@ -1,5 +1,5 @@
 //! Headless UI test of the Pronunciation section of the Text to Speech panel (fork roadmap F06.1):
-//! open it, write a word and how to say it, save it for the project and for the channel, see it
+//! open it, write a word and how to say it, save it for the project and for all projects, see it
 //! listed, and remove it. Checking a script works with whatever voices this machine has: with the
 //! natural voices the made-up names (real ones are in the dictionary already) are offered as chips, without them the panel says why not.
 
@@ -103,14 +103,14 @@ impl Driver {
 }
 
 #[test]
-fn words_are_saved_for_the_project_and_the_channel_listed_and_removed() {
+fn words_are_saved_for_the_project_and_all_projects_listed_and_removed() {
     let mut d = Driver::new();
     d.exec("window.panel.TextToSpeech", json!({}));
     d.frames(3);
     assert!(d.has("tts.words"), "{:?}", d.ids("tts."));
     assert!(!d.has("tts.words.check"), "the section starts closed");
     d.open_section();
-    for id in ["tts.words.check", "tts.words.word", "tts.words.say", "tts.words.play", "tts.words.save.project", "tts.words.save.channel"] {
+    for id in ["tts.words.check", "tts.words.word", "tts.words.say", "tts.words.play", "tts.words.save.project", "tts.words.save.global"] {
         assert!(d.has(id), "missing {id}: {:?}", d.ids("tts.words"));
     }
     // a word for this project
@@ -122,20 +122,20 @@ fn words_are_saved_for_the_project_and_the_channel_listed_and_removed() {
     assert_eq!((listed["project"][0]["word"].clone(), listed["project"][0]["say"].clone()), (json!("kubrick"), json!("koo brick")), "{listed}");
     assert!(d.has("tts.words.remove.project.kubrick"));
     // the fields are emptied, and the project has a saved word that undo takes away again
-    assert!(d.exec("tts.pronunciations", json!({}))["channel"].as_array().unwrap().is_empty());
-    // a word for the whole channel
+    assert!(d.exec("tts.pronunciations", json!({}))["global"].as_array().unwrap().is_empty());
+    // a word for every project
     d.type_into("tts.words.word", "Reykjavik");
     d.type_into("tts.words.say", "rake yah veek");
-    d.click("tts.words.save.channel");
+    d.click("tts.words.save.global");
     let listed = d.exec("tts.pronunciations", json!({}));
-    assert_eq!(listed["channel"][0]["word"], "reykjavik", "{listed}");
-    assert!(d.has("tts.words.remove.channel.reykjavik"));
+    assert_eq!(listed["global"][0]["word"], "reykjavik", "{listed}");
+    assert!(d.has("tts.words.remove.global.reykjavik"));
     // removing
     d.scroll_down();
     d.click("tts.words.remove.project.kubrick");
-    d.click("tts.words.remove.channel.reykjavik");
+    d.click("tts.words.remove.global.reykjavik");
     let listed = d.exec("tts.pronunciations", json!({}));
-    assert!(listed["project"].as_array().unwrap().is_empty() && listed["channel"].as_array().unwrap().is_empty(), "{listed}");
+    assert!(listed["project"].as_array().unwrap().is_empty() && listed["global"].as_array().unwrap().is_empty(), "{listed}");
     // saving needs both fields
     d.type_into("tts.words.word", "Zorblat");
     d.click("tts.words.save.project");

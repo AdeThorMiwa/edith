@@ -25,7 +25,7 @@ One person can run a faceless YouTube channel at a cinematic, A24-like standard 
 The target workflow:
 
 1. **Plan.** Pick a Format Pack (Mystery or Explainer to start) and write the treatment: beats with a purpose, an intensity and a runtime budget. Ask the assistant to critique it when you want a second opinion.
-2. **Write and voice.** Write the narration per beat in the A/V script. Fix names in the pronunciation dictionary, audition takes, and run the voice through your channel voice so it sounds like *your* narrator.
+2. **Write and voice.** Write the narration per beat in the A/V script. Fix names in the pronunciation dictionary, audition takes, and run the voice through your narrator voice so it sounds like *your* narrator.
 3. **Source.** Each narration line owns a *slot*. The Source Hub fills slots in the background with licensed B-roll from free sources. You shortlist and choose. Nothing is accepted for you.
 4. **Rough cut.** Ask for a rough cut. You get a *proposal*: cuts on sentence boundaries, B-roll placed, ambience under, music ducked. Preview it against your current cut, then accept all, part or none, as one undo step.
 5. **Craft.** Add the film finish (grain, halation, diffusion), run the consistency checker, read the sound map and spotting sheet. The coach and your reference fingerprint show in plain numbers where the pacing drifts from the style you are aiming for.
@@ -60,7 +60,7 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 | F03 | Assistant pane: connect, chat, mentor | Must | L | F02 |
 | F04 | Provenance and license ledger | Must | M | F01 |
 | F05 | Source Hub and Find Media panel | Must | L | F02, F04 |
-| F06 | Narration upgrades: pronunciation, takes, channel voice | Must | M | F01 |
+| F06 | Narration upgrades: pronunciation, takes, saved voice | Must | M | F01 |
 | F07 | Look Pack: film texture and the A24 stack | Must | L | F01 |
 | | **Phase 2: plan and understand** | | | |
 | F08 | Planner core and Format Packs | Must | L | F01 |
@@ -421,17 +421,17 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Needs:** F01 · **Unlocks:** F16, F19.
 
-**What it does.** Makes the built-in narration usable for real videos: names and terms pronounced correctly, several takes to choose from, direction per sentence, and a saved "channel voice" so every video has the same narrator.
+**What it does.** Makes the built-in narration usable for real videos: names and terms pronounced correctly, several takes to choose from, direction per sentence, and a saved "narrator voice" so every video has the same narrator.
 
 **How it works.**
-- **F06.1 Pronunciation dictionary.** ✅ **Built 2026-10-16** (three commits): `tts-text` finds the words the voice would only guess at (`unknown_words`; real names such as Kubrick and Reykjavik are already in CMUdict, so what gets flagged is genuinely unknown: made-up or rare names, brands, terms) and a name's possessive follows its fix; commands `tts.pronunciations|setPronunciation|removePronunciation|checkScript` and a `pronounce` trial parameter on `tts.preview|render|create|edit`; a project list (saved in the project, undoable) and a channel list (`edith-pronunciations.json`, every project), the project's winning; a Pronunciation section in the Text to Speech panel (Check script, chips for the flagged words, a word and "say it like" row with Play, Save for this project / my channel, the saved list, Regenerate narration). Changing a word never re-renders old narration by itself: use Save / Regenerate. Checked with the real voices: invented names are flagged, fixing them changes the audio, and it is repeatable. The check needs the downloaded natural voices (they carry the dictionary). A lexicon (project and global) of word → respelling or phonemes, applied before the phonemizer. Words missing from the built-in dictionary (CMUdict) are flagged *before* rendering; "fix this word" lets you edit and audition. Lives in `crates/tts-text` (`normalize.rs`, `phonemize.rs`) and the narration settings.
+- **F06.1 Pronunciation dictionary.** ✅ **Built 2026-10-16** (three commits): `tts-text` finds the words the voice would only guess at (`unknown_words`; real names such as Kubrick and Reykjavik are already in CMUdict, so what gets flagged is genuinely unknown: made-up or rare names, brands, terms) and a name's possessive follows its fix; commands `tts.pronunciations|setPronunciation|removePronunciation|checkScript` and a `pronounce` trial parameter on `tts.preview|render|create|edit`; a project list (saved in the project, undoable) and a global list (`edith-pronunciations.json`, every project), the project's winning; a Pronunciation section in the Text to Speech panel (Check script, chips for the flagged words, a word and "say it like" row with Play, Save for this project / all projects, the saved list, Regenerate narration). Changing a word never re-renders old narration by itself: use Save / Regenerate. Checked with the real voices: invented names are flagged, fixing them changes the audio, and it is repeatable. The check needs the downloaded natural voices (they carry the dictionary). A lexicon (project and global) of word → respelling or phonemes, applied before the phonemizer. Words missing from the built-in dictionary (CMUdict) are flagged *before* rendering; "fix this word" lets you edit and audition. Lives in `crates/tts-text` (`normalize.rs`, `phonemize.rs`) and the narration settings.
 - **F06.2 Takes.** The vocoder's noise is seeded, so a seed can stand for a take. Generate N takes of a line, pick one, store its seed; re-rendering stays deterministic. The seed needs exposing in `tts.create` and `tts.edit`.
 - **F06.3 Direction.** Per-sentence pace, pitch and pauses (extends the `[pause 1s]` marker), as chunk-level settings because the model takes pace per call.
-- **F06.4 Channel voice.** A saved preset: base voice, pace, pitch and a track insert chain built from existing effects (EQ, compressor, de-esser, room reverb), plus an optional procedurally generated room-tone bed. Applied to the narration track, with A/B against the dry voice.
+- **F06.4 Narrator voice** (saved voice preset, global across projects). A saved preset: base voice, pace, pitch and a track insert chain built from existing effects (EQ, compressor, de-esser, room reverb), plus an optional procedurally generated room-tone bed. Applied to the narration track, with A/B against the dry voice.
 
 **Where it lives.** `crates/tts-text`, `crates/engine/src/narration.rs` and `Narration` in `filmcraft-project`, `panels/tts.rs`; presets through the mixer inserts.
 
-**Done when.** A script with five proper nouns renders correctly after you fix them once; takes are repeatable; one click applies your channel voice to a new narration track.
+**Done when.** A script with five proper nouns renders correctly after you fix them once; takes are repeatable; one click applies your narrator voice to a new narration track.
 
 **Notes.** Natural voices are US English only and have no pitch input (pitch is a post shift), per `crates/tts/README.md`. Room-tone samples must be generated in code or openly licensed with attribution (AGENTS.md §1).
 
@@ -634,7 +634,7 @@ Each suggestion says why in plain words (the mentor idea).
 
 **Needs:** F06.
 
-**What it does.** Design a voice that is yours: pick base voices, blend them, audition the same sentence, and save the result as the channel's narrator.
+**What it does.** Design a voice that is yours: pick base voices, blend them, audition the same sentence, and save the result as your default narrator.
 
 **How it works.**
 - **Blending (spike first).** Each Kokoro voice is a `[510, 1, 256]` float table of style vectors (`crates/tts/src/kokoro/weights.rs`). A weighted average of two or three tables should yield a new voice. Spike: blend 50/50, listen, and measure intelligibility with the Whisper word-error-rate method already described in `crates/tts/README.md`.

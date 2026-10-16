@@ -3,10 +3,10 @@
 //! between slashes; the natural voices then say it that way, and its possessive (`Kubrick's`)
 //! follows.
 //!
-//! Two lists, the project's winning over the channel's:
+//! Two lists, the project's winning over the global one:
 //! - the **project** list is in the project (`Project::ext["edith.pronunciations"]`), so it is
 //!   undone, saved and recovered with the project;
-//! - the **channel** list is yours for every project, kept in `edith-pronunciations.json` beside the
+//! - the **global** list is yours for every project (all projects, now and later), kept in `edith-pronunciations.json` beside the
 //!   preferences (in memory only when there is no data directory, as in tests).
 //!
 //! Nothing here re-renders a narration that already exists: change a word, then run Edit Narration
@@ -14,8 +14,8 @@
 //!
 //! | command | does |
 //! |---|---|
-//! | `tts.pronunciations` | the project list, the channel list and how many words apply |
-//! | `tts.setPronunciation {word, say, scope?}` | adds or changes a word (`scope` `project` (default) or `channel`); a project change is one undo step |
+//! | `tts.pronunciations` | the project list, the global list and how many words apply |
+//! | `tts.setPronunciation {word, say, scope?}` | adds or changes a word (`scope` `project` (default) or `global`); a project change is one undo step |
 //! | `tts.removePronunciation {word, scope?}` | takes a word out of that list |
 //! | `tts.checkScript {text?, clip?}` | the words of a script (or a narration clip) the voice would guess at, each once with how often it appears; `available: false` with a reason when the natural voices are not installed |
 //!
@@ -43,9 +43,9 @@ pub(crate) const FILE: &str = "edith-pronunciations.json";
 /// Largest file read.
 const MAX_FILE: u64 = 1024 * 1024;
 
-/// The channel list, read from disk the first time it is needed.
+/// The global list, read from disk the first time it is needed.
 #[derive(Default)]
-pub struct Channel {
+pub struct Global {
     words: Mutex<Option<BTreeMap<String, String>>>,
 }
 
@@ -78,13 +78,13 @@ fn read_file(s: &Session) -> BTreeMap<String, String> {
     tidy(map.iter().map(|(w, say)| (w.as_str(), say.as_str())))
 }
 
-/// The channel list.
-fn channel(s: &Session) -> BTreeMap<String, String> {
+/// The global list.
+fn global(s: &Session) -> BTreeMap<String, String> {
     let mut g = s.pronounce.words.lock().unwrap_or_else(PoisonError::into_inner);
     g.get_or_insert_with(|| read_file(s)).clone()
 }
 
-fn set_channel(s: &Session, words: BTreeMap<String, String>) {
+fn set_global(s: &Session, words: BTreeMap<String, String>) {
     if let Some(p) = file_path(s)
         && let Ok(json) = serde_json::to_string_pretty(&words)
     {
@@ -110,9 +110,9 @@ fn put_project(p: &mut Project, words: &BTreeMap<String, String>) {
     }
 }
 
-/// Every word that applies now: the channel's, then the project's over them.
+/// Every word that applies now: the global list, then the project's over them.
 pub fn effective(s: &Session) -> Pronunciations {
-    let mut all = channel(s);
+    let mut all = global(s);
     all.extend(project_words(&s.project));
     while all.len() > Pronunciations::MAX_ENTRIES {
         let Some(k) = all.keys().next_back().cloned() else { break };
@@ -145,8 +145,8 @@ fn scope(cmd: &str, p: &Value) -> Result<bool> {
     match p.get("scope") {
         None | Some(Value::Null) => Ok(true),
         Some(Value::String(v)) if v == "project" => Ok(true),
-        Some(Value::String(v)) if v == "channel" => Ok(false),
-        Some(_) => Err(bad(cmd, "`scope` must be `project` or `channel`")),
+        Some(Value::String(v)) if v == "global" => Ok(false),
+        Some(_) => Err(bad(cmd, "`scope` must be `project` or `global`")),
     }
 }
 
@@ -155,7 +155,7 @@ fn rows(m: &BTreeMap<String, String>) -> Vec<Value> {
 }
 
 fn list_json(s: &Session) -> Value {
-    json!({"project": rows(&project_words(&s.project)), "channel": rows(&channel(s)), "count": effective(s).0.len()})
+    json!({"project": rows(&project_words(&s.project)), "global": rows(&global(s)), "count": effective(s).0.len()})
 }
 
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -169,7 +169,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (word, say) = Pronunciations::checked_entry(word, say).map_err(|e| bad(cmd, e))?;
     let in_project = scope(cmd, p)?;
-    let mut words = if in_project { project_words(&s.project) } else { channel(s) };
+    let mut words = if in_project { project_words(&s.project) } else { global(s) };
     let before = words.insert(word.clone(), say.clone());
     if words.len() > Pronunciations::MAX_ENTRIES {
         return Err(bad(cmd, format!("at most {} words per list", Pronunciations::MAX_ENTRIES)));
@@ -181,13 +181,13 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(())
             })?;
         } else {
-            set_channel(s, words);
+            set_global(s, words);
         }
     }
     let mut r = list_json(s);
     r["word"] = json!(word);
     r["say"] = json!(say);
-    r["scope"] = json!(if in_project { "project" } else { "channel" });
+    r["scope"] = json!(if in_project { "project" } else { "global" });
     r["changed"] = json!(before.as_deref() != Some(say.as_str()));
     Ok(r)
 }
@@ -196,9 +196,9 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tts.removePronunciation";
     let word = str_p(p, "word").ok_or_else(|| bad(cmd, "`word` is required text"))?.trim().to_lowercase();
     let in_project = scope(cmd, p)?;
-    let mut words = if in_project { project_words(&s.project) } else { channel(s) };
+    let mut words = if in_project { project_words(&s.project) } else { global(s) };
     if words.remove(&word).is_none() {
-        return Err(bad(cmd, format!("there is no pronunciation for \"{word}\" in the {} list", if in_project { "project" } else { "channel" })));
+        return Err(bad(cmd, format!("there is no pronunciation for \"{word}\" in the {} list", if in_project { "project" } else { "global" })));
     }
     if in_project {
         s.edit("Remove Pronunciation", |pr, _| {
@@ -206,7 +206,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(())
         })?;
     } else {
-        set_channel(s, words);
+        set_global(s, words);
     }
     Ok(list_json(s))
 }
@@ -251,8 +251,8 @@ pub fn commands() -> Vec<CommandSpec> {
     };
     vec![
         spec("tts.pronunciations", "List Pronunciations", "{}", list, false),
-        spec("tts.setPronunciation", "Set Pronunciation", r#"{"word":str,"say":str,"scope":"project|channel"?}"#, set, true),
-        spec("tts.removePronunciation", "Remove Pronunciation", r#"{"word":str,"scope":"project|channel"?}"#, remove, true),
+        spec("tts.setPronunciation", "Set Pronunciation", r#"{"word":str,"say":str,"scope":"project|global"?}"#, set, true),
+        spec("tts.removePronunciation", "Remove Pronunciation", r#"{"word":str,"scope":"project|global"?}"#, remove, true),
         spec("tts.checkScript", "Check Narration Words", r#"{"text":str?,"clip":id?,"pronounce":{word:str}?}"#, check_script, false),
     ]
 }

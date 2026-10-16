@@ -1,4 +1,4 @@
-//! Tests of [`crate::pronounce`]: the project and channel lists, their precedence, undo, saving,
+//! Tests of [`crate::pronounce`]: the project and global lists, their precedence, undo, saving,
 //! hostile input, and that a changed word changes what a narration is rendered from.
 
 use super::*;
@@ -66,14 +66,14 @@ fn a_project_word_is_saved_in_the_project_and_is_one_undo_step() {
 }
 
 #[test]
-fn the_channel_list_is_remembered_and_the_project_wins_over_it() {
-    let data = scratch("channel");
+fn the_global_list_is_remembered_and_the_project_wins_over_it() {
+    let data = scratch("global");
     let mut s = Session { prefs_path: Some(data.join("preferences.json")), ..Default::default() };
     s.execute("file.openDemoProject", json!({})).unwrap();
     let steps = s.history.undo.len();
-    set(&mut s, "reykjavik", "rake yah veek", "channel");
-    set(&mut s, "kubrick", "koo brick", "channel");
-    assert_eq!(s.history.undo.len(), steps, "the channel list is not part of any project's history");
+    set(&mut s, "reykjavik", "rake yah veek", "global");
+    set(&mut s, "kubrick", "koo brick", "global");
+    assert_eq!(s.history.undo.len(), steps, "the global list is not part of any project's history");
     assert!(!s.project.ext.contains_key(KEY));
     // a new session on the same data folder finds them
     let mut again = Session { prefs_path: Some(data.join("preferences.json")), ..Default::default() };
@@ -84,8 +84,8 @@ fn the_channel_list_is_remembered_and_the_project_wins_over_it() {
     assert_eq!(say_of(&again, "kubrick").as_deref(), Some("kyoo brick"));
     assert_eq!(say_of(&again, "reykjavik").as_deref(), Some("rake yah veek"));
     let r = again.execute("tts.pronunciations", json!({})).unwrap();
-    assert_eq!((r["project"].as_array().unwrap().len(), r["channel"].as_array().unwrap().len(), r["count"].clone()), (1, 2, json!(2)));
-    again.execute("tts.removePronunciation", json!({"word": "kubrick", "scope": "channel"})).unwrap();
+    assert_eq!((r["project"].as_array().unwrap().len(), r["global"].as_array().unwrap().len(), r["count"].clone()), (1, 2, json!(2)));
+    again.execute("tts.removePronunciation", json!({"word": "kubrick", "scope": "global"})).unwrap();
     assert_eq!(say_of(&again, "kubrick").as_deref(), Some("kyoo brick"), "still the project's");
     let _ = std::fs::remove_dir_all(&data);
 }

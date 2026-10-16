@@ -460,8 +460,8 @@ pub struct Session {
     pub assistant: assistant::AssistantHub,
     /// The Source Hub: media searches, the shortlist and downloads in progress (fork; roadmap F05).
     pub hub: hub::Hub,
-    /// How the narrator says your words: the channel list (fork; roadmap F06.1).
-    pub pronounce: pronounce::Channel,
+    /// How the narrator says your words: the global list (fork; roadmap F06.1).
+    pub pronounce: pronounce::Global,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).

@@ -2,7 +2,7 @@
 //! how to say names and places. **Check script** lists the words the voice would only guess at as
 //! chips; pressing a chip puts the word in the editor row, where you write how it sounds in plain
 //! words ("koo brick"), press **Play** to hear just that word, and save it **for this project** or
-//! **for your channel**. Saved words are listed below with a Remove button. Every action is a
+//! **for all projects**. Saved words are listed below with a Remove button. Every action is a
 //! `tts.*` command (`tts.checkScript`, `tts.setPronunciation`, `tts.removePronunciation`).
 //!
 //! Saving never re-renders a narration that already exists; when one is loaded in the panel, a
@@ -10,7 +10,7 @@
 //!
 //! Automation ids: `tts.words` (twirl), `tts.words.check`, `tts.words.chip.<word>`,
 //! `tts.words.word`, `tts.words.say`, `tts.words.play`, `tts.words.save.project`,
-//! `tts.words.save.channel`, `tts.words.remove.<project|channel>.<word>`, `tts.words.regenerate`.
+//! `tts.words.save.global`, `tts.words.remove.<project|global>.<word>`, `tts.words.regenerate`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -169,7 +169,7 @@ pub fn show(ui: &mut egui::Ui, t: &Tokens, auto: &mut Registry, session: &mut Se
             events.push(Event::Audition { word: st.word.trim().to_string(), say: st.say.trim().to_string() });
         }
         for (scope, label, id) in
-            [("project", tl!("Save for this project"), "tts.words.save.project"), ("channel", tl!("Save for my channel"), "tts.words.save.channel")]
+            [("project", tl!("Save for this project"), "tts.words.save.project"), ("global", tl!("Save for all projects"), "tts.words.save.global")]
         {
             let b = ui.add_enabled(ready, egui::Button::new(label));
             auto.add(id, visible(ui, b.rect), label);
@@ -193,7 +193,7 @@ pub fn show(ui: &mut egui::Ui, t: &Tokens, auto: &mut Registry, session: &mut Se
     // ---- what is saved ----
     let listed = session.execute("tts.pronunciations", json!({})).unwrap_or(Value::Null);
     let mut remove: Option<(&'static str, String)> = None;
-    for (scope, title) in [("project", tl!("This project")), ("channel", tl!("My channel"))] {
+    for (scope, title) in [("project", tl!("This project")), ("global", tl!("All projects"))] {
         let list = rows(&listed, scope);
         if list.is_empty() {
             continue;
