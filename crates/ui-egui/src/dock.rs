@@ -42,10 +42,11 @@ pub enum PanelKind {
     ProjectNotes,
     Connections,
     Assistant,
+    Rights,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 30] = [
+    pub const ALL: [PanelKind; 31] = [
         PanelKind::Project,
         PanelKind::MediaBrowser,
         PanelKind::Libraries,
@@ -76,6 +77,7 @@ impl PanelKind {
         PanelKind::ProjectNotes,
         PanelKind::Connections,
         PanelKind::Assistant,
+        PanelKind::Rights,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -109,6 +111,7 @@ impl PanelKind {
             PanelKind::ProjectNotes => "Project Notes",
             PanelKind::Connections => "Connections",
             PanelKind::Assistant => "Assistant",
+            PanelKind::Rights => "Credits and Rights",
         }
     }
     pub fn id(self) -> String {
@@ -382,7 +385,7 @@ pub fn workspace(name: &str) -> DockNode {
                 FixedB(450.0),
                 hsplit(Ratio(0.5), tabs(&[Source, EffectControls, AudioClipMixer, Metadata], 0), tabs(&[Program], 0)),
                 // the Assistant sits in the wide right-hand group, a tab away from Properties
-                tabs(&[Properties, EssentialGraphics, Text, Assistant], 0),
+                tabs(&[Properties, EssentialGraphics, Text, Assistant, Rights], 0),
             ),
             hsplit(
                 Ratio(0.29),

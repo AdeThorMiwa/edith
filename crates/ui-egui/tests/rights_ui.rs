@@ -112,3 +112,65 @@ fn a_badge_shows_for_an_item_with_a_record_and_says_what_it_means() {
     d.exec("provenance.set", json!({"item": ids[0], "clear": true}));
     assert_eq!(d.badges().len(), 2);
 }
+
+impl Driver {
+    fn click(&mut self, id: &str) {
+        self.ok("ui.click", json!({"id": id}));
+        self.frames(3);
+    }
+
+    fn label(&mut self, id: &str) -> String {
+        self.ok("ui.elements", json!({"prefix": id}))
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .find(|e| e["id"] == json!(id))
+            .and_then(|e| e["label"].as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    fn has(&mut self, id: &str) -> bool {
+        self.ok("ui.elements", json!({"prefix": id})).as_array().is_some_and(|a| a.iter().any(|e| e["id"] == json!(id)))
+    }
+}
+
+#[test]
+fn the_panel_shows_the_policy_the_check_and_the_credits_and_follows_changes() {
+    let mut d = Driver::new();
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.Rights"}));
+    d.frames(4);
+    assert!(d.has("rights.policy.commercial") && d.has("rights.summary"));
+    assert!(d.label("rights.summary").contains("to check"), "no records: every clip is a warning: {}", d.label("rights.summary"));
+    let ids: Vec<u64> = d.exec("provenance.list", json!({}))["items"].as_array().unwrap().iter().map(|i| i["item"].as_u64().unwrap()).collect();
+    // a non-commercial clip is an error under the default (commercial) policy; the panel notices the change
+    d.exec("provenance.set", json!({"item": ids[0], "source": "web", "license": {"name": "CC BY-NC", "commercial": false}}));
+    d.exec(
+        "provenance.set",
+        json!({"item": ids[1], "source": "pexels", "author": "Jane Doe", "license": {"name": "CC BY 4.0", "commercial": true, "attributionRequired": true}}),
+    );
+    d.frames(3);
+    assert!(d.label("rights.summary").starts_with("1 to fix"), "{}", d.label("rights.summary"));
+    assert!(d.label("rights.finding.0").starts_with("error:"), "errors come first: {}", d.label("rights.finding.0"));
+    // turning "commercial" off from the panel changes the project's policy and clears the error
+    assert!(d.label("rights.policy.commercial").ends_with("on"));
+    d.click("rights.policy.commercial");
+    assert_eq!(d.exec("provenance.policy", json!({}))["policy"]["commercial"], false);
+    assert!(d.label("rights.summary").starts_with("0 to fix"), "{}", d.label("rights.summary"));
+    d.snapshot("rights-panel");
+    // the credits block lists the one clip that asks for a credit, in each format
+    d.ok("ui.scroll", json!({"id": "rights.summary", "dy": -900.0}));
+    d.frames(3);
+    assert!(d.has("rights.credits") && d.label("rights.credits").contains("by Jane Doe"), "{}", d.label("rights.credits"));
+    d.click("rights.format.youtube");
+    assert!(d.label("rights.credits").starts_with("Credits:"), "{}", d.label("rights.credits"));
+    d.click("rights.format.markdown");
+    assert!(d.label("rights.credits").starts_with("- "), "{}", d.label("rights.credits"));
+    d.click("rights.copy");
+    // undo of the policy is followed too
+    d.exec("edit.undo", json!({}));
+    d.exec("edit.undo", json!({}));
+    d.exec("edit.undo", json!({}));
+    d.frames(3);
+    assert!(d.label("rights.summary").contains("to check"), "{}", d.label("rights.summary"));
+}

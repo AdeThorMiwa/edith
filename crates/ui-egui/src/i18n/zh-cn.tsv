@@ -3659,3 +3659,25 @@
 	My footage	我的素材
 	Licensed to me	已授权给我
 	Clear the record	清除记录
+	What this project allows	此项目允许的内容
+	This video is commercial (monetized)	此视频用于商业（已开启盈利）
+	Material that is not licensed for commercial use is then an error.	未获商业使用授权的素材将被视为错误。
+	Allow material that needs a credit	允许需要署名的素材
+	Off: anything that asks for a credit is an error.	关闭：任何要求署名的素材都视为错误。
+	Allow AI-generated material	允许 AI 生成的素材
+	Off: anything marked AI-generated is an error.	关闭：任何标记为 AI 生成的素材都视为错误。
+	Open a sequence to check its rights.	打开一个序列以检查其权利。
+	All {n} clips in this edit are clear.	此剪辑中的 {n} 个片段均无问题。
+	{errors} to fix · {warnings} to check · {notes} notes, across {n} clips	{errors} 项待修复 · {warnings} 项待检查 · {notes} 条说明，共 {n} 个片段
+	At	位置
+	Click to go there	点击跳转
+	Plain	纯文本
+	Markdown	Markdown
+	YouTube	YouTube
+	Nothing in this edit needs a credit.	此剪辑中没有需要署名的内容。
+	{n} credit lines have no author or credit text. Add one so the line is complete.	{n} 行署名没有作者或署名文字，请补充使其完整。
+	{n} clips in this edit have no record, so no credit can be listed for them.	此剪辑中有 {n} 个片段没有记录，因此无法列出署名。
+	This reports what each source says about itself. It is not legal advice.	这里报告的是各来源的自我声明，不构成法律意见。
+	Credits and Rights	署名与权利
+	Provenance	来源
+	Rights Policy	权利政策

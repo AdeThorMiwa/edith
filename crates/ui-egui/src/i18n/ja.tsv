@@ -3683,3 +3683,25 @@
 	My footage	自分の映像
 	Licensed to me	自分にライセンスされた素材
 	Clear the record	記録を消去
+	What this project allows	このプロジェクトで許可すること
+	This video is commercial (monetized)	この動画は商用（収益化）です
+	Material that is not licensed for commercial use is then an error.	商用利用が許可されていない素材はエラーになります。
+	Allow material that needs a credit	クレジット表記が必要な素材を許可
+	Off: anything that asks for a credit is an error.	オフ: クレジットを求めるものはすべてエラーです。
+	Allow AI-generated material	AI生成の素材を許可
+	Off: anything marked AI-generated is an error.	オフ: AI生成と記録された素材はすべてエラーです。
+	Open a sequence to check its rights.	シーケンスを開くと権利を確認できます。
+	All {n} clips in this edit are clear.	この編集の {n} 個のクリップはすべて問題ありません。
+	{errors} to fix · {warnings} to check · {notes} notes, across {n} clips	要修正 {errors} · 要確認 {warnings} · メモ {notes}（{n} クリップ）
+	At	位置
+	Click to go there	クリックして移動
+	Plain	テキスト
+	Markdown	Markdown
+	YouTube	YouTube
+	Nothing in this edit needs a credit.	この編集にクレジットが必要なものはありません。
+	{n} credit lines have no author or credit text. Add one so the line is complete.	{n} 件のクレジット行に作者名もクレジット文もありません。追加して完成させてください。
+	{n} clips in this edit have no record, so no credit can be listed for them.	この編集の {n} 個のクリップには記録がないため、クレジットを一覧にできません。
+	This reports what each source says about itself. It is not legal advice.	各ソースが自己申告した内容を示すものです。法的助言ではありません。
+	Credits and Rights	クレジットと権利
+	Provenance	出所
+	Rights Policy	権利ポリシー

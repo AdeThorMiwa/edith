@@ -3681,3 +3681,25 @@
 	My footage	Mi material
 	Licensed to me	Con licencia para mí
 	Clear the record	Borrar el registro
+	What this project allows	Lo que permite este proyecto
+	This video is commercial (monetized)	Este vídeo es comercial (monetizado)
+	Material that is not licensed for commercial use is then an error.	El material sin licencia para uso comercial pasa a ser un error.
+	Allow material that needs a credit	Permitir material que requiere crédito
+	Off: anything that asks for a credit is an error.	Desactivado: todo lo que pide crédito es un error.
+	Allow AI-generated material	Permitir material generado por IA
+	Off: anything marked AI-generated is an error.	Desactivado: todo lo marcado como generado por IA es un error.
+	Open a sequence to check its rights.	Abre una secuencia para revisar sus derechos.
+	All {n} clips in this edit are clear.	Los {n} clips de este montaje están en regla.
+	{errors} to fix · {warnings} to check · {notes} notes, across {n} clips	{errors} por corregir · {warnings} por revisar · {notes} notas, en {n} clips
+	At	En
+	Click to go there	Haz clic para ir allí
+	Plain	Texto
+	Markdown	Markdown
+	YouTube	YouTube
+	Nothing in this edit needs a credit.	Nada en este montaje requiere crédito.
+	{n} credit lines have no author or credit text. Add one so the line is complete.	{n} líneas de crédito no tienen autor ni texto de crédito. Añade uno para completarlas.
+	{n} clips in this edit have no record, so no credit can be listed for them.	{n} clips de este montaje no tienen registro, así que no se puede listar un crédito para ellos.
+	This reports what each source says about itself. It is not legal advice.	Esto indica lo que cada fuente dice de sí misma. No es asesoramiento legal.
+	Credits and Rights	Créditos y derechos
+	Provenance	Procedencia
+	Rights Policy	Política de derechos

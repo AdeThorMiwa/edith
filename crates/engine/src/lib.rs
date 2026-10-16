@@ -48,6 +48,7 @@ pub mod provenance;
 pub mod proxies;
 pub mod relink;
 pub mod remix;
+pub mod rights;
 pub mod scene_detect;
 pub mod scopes;
 pub mod sequence_extras;
@@ -1299,6 +1300,8 @@ mod proxies_tests;
 mod relink_tests;
 #[cfg(test)]
 mod remix_tests;
+#[cfg(test)]
+mod rights_tests;
 #[cfg(test)]
 mod ripple_delete_tests;
 #[cfg(test)]

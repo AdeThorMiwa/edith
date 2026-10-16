@@ -845,7 +845,7 @@ impl FilmcraftApp {
         if !self.ui.dock.contains(p) && !self.ui.floating.iter().any(|group| group.panels.contains(&p)) {
             let near = match p {
                 // a side panel beside Properties (or Essential Sound), never over the Program monitor
-                PanelKind::TextToSpeech | PanelKind::Assistant => {
+                PanelKind::TextToSpeech | PanelKind::Assistant | PanelKind::Rights => {
                     [PanelKind::Properties, PanelKind::EssentialSound, PanelKind::EssentialGraphics, PanelKind::LumetriColor]
                         .into_iter()
                         .find(|k| self.ui.dock.contains(*k))
