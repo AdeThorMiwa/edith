@@ -3820,7 +3820,6 @@
 	Number of repeating beats	Número de tramos repetidos
 	Plan a video before you cut it. Pick the kind of video and how long it should be, and the beats are laid out for you to edit.	Planifica un vídeo antes de editarlo. Elige el tipo de vídeo y su duración, y los tramos se preparan para que los edites.
 	Puts a marker for every beat on the timeline, and a placeholder clip for every planned shot. Run it again after changing the plan: markers move, nothing is doubled.	Pone un marcador por cada tramo en la línea de tiempo y un clip provisional por cada plano previsto. Vuelve a ejecutarlo tras cambiar el plan: los marcadores se mueven y nada se duplica.
-	Removes the plan. Undo brings it back.	Quita el plan. Deshacer lo recupera.
 	Scales every beat in proportion so they add up to the length.	Escala cada tramo en proporción para que sumen la duración.
 	Skeleton built: {m} markers, {p} placeholders	Esqueleto creado: {m} marcadores, {p} clips provisionales
 	Skipped pack file	Archivo de paquete omitido
@@ -3832,5 +3831,6 @@
 	What changes here?	¿Qué cambia aquí?
 	Write a length like 12:00, 90 (seconds) or 1.5m	Escribe una duración como 12:00, 90 (segundos) o 1.5m
 	Write the length as a number of minutes, from 1 to 600.	Escribe la duración como un número de minutos, de 1 a 600.
-	yours	tuyo
 	{beats} beats · {planned} planned of {target}	{beats} tramos · {planned} planificados de {target}
+	custom	personalizado
+	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	Quita el plan y los marcadores y clips provisionales que puso en la línea de tiempo. Deshacer lo recupera todo.

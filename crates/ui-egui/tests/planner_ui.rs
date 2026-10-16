@@ -152,4 +152,6 @@ fn create_a_mystery_plan_edit_a_beat_and_build_the_skeleton() {
     d.click("planner.clear");
     assert_eq!(d.exec("planner.get", json!({}))["exists"], false);
     assert!(d.has("planner.create"));
+    let after = d.exec("sequence.inspect", json!({}))["markers"].as_array().map_or(0, Vec::len);
+    assert_eq!(after, before, "Start over also took away the markers the plan had put on the timeline");
 }

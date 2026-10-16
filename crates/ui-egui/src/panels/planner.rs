@@ -149,7 +149,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
             if b.clicked() {
                 commands.push(("planner.buildSkeleton", json!({})));
             }
-            let b = ui.button(tl!("Start over")).on_hover_text(tl!("Removes the plan. Undo brings it back."));
+            let b = ui.button(tl!("Start over")).on_hover_text(tl!("Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back."));
             elems.push(("planner.clear".into(), b.clone(), "Remove the plan".into()));
             if b.clicked() {
                 commands.push(("planner.clear", json!({})));
@@ -218,8 +218,8 @@ fn create_form(
     let cb = egui::ComboBox::from_id_salt("planner-pack").selected_text(current["name"].as_str().unwrap_or("")).width(ui.available_width()).show_ui(ui, |ui| {
         for p in &list {
             let id = p["id"].as_str().unwrap_or("");
-            let label = if p["source"] == "yours" {
-                format!("{} ({})", p["name"].as_str().unwrap_or(id), tl!("yours"))
+            let label = if p["source"] == "custom" {
+                format!("{} ({})", p["name"].as_str().unwrap_or(id), tl!("custom"))
             } else {
                 p["name"].as_str().unwrap_or(id).to_string()
             };

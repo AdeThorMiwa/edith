@@ -3798,7 +3798,6 @@
 	Number of repeating beats	重复段落的数量
 	Plan a video before you cut it. Pick the kind of video and how long it should be, and the beats are laid out for you to edit.	剪辑之前先规划视频。选择视频类型和时长，各段落就会排好供你编辑。
 	Puts a marker for every beat on the timeline, and a placeholder clip for every planned shot. Run it again after changing the plan: markers move, nothing is doubled.	在时间线上为每个段落放置标记，并为每个计划镜头放置占位片段。修改计划后可再次运行：标记会移动，不会重复。
-	Removes the plan. Undo brings it back.	移除计划。撤销即可恢复。
 	Scales every beat in proportion so they add up to the length.	按比例缩放每个段落，使其总和等于时长。
 	Skeleton built: {m} markers, {p} placeholders	已生成骨架：{m} 个标记，{p} 个占位片段
 	Skipped pack file	已跳过的格式包文件
@@ -3810,5 +3809,6 @@
 	What changes here?	这里发生了什么变化？
 	Write a length like 12:00, 90 (seconds) or 1.5m	请输入类似 12:00、90（秒）或 1.5m 的时长
 	Write the length as a number of minutes, from 1 to 600.	请以分钟数输入时长，范围 1 到 600。
-	yours	自定义
 	{beats} beats · {planned} planned of {target}	{beats} 个段落 · 已规划 {planned} / {target}
+	custom	自定义
+	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	移除计划，以及它放在时间线上的标记和占位片段。撤销即可全部恢复。

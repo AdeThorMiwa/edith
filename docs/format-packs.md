@@ -8,7 +8,7 @@ Two packs ship with the program, **Mystery** and **Explainer**. You can write yo
 
 - Shipped packs are built in.
 - Yours go in a folder called `format-packs` next to your preferences (the same folder as `edith-narrator-voices.json`). Each file ends in `.toml`.
-- A pack of yours with the same `id` as a shipped one **replaces** it.
+- A pack of yours (the Planner marks it "(custom)") with the same `id` as a shipped one **replaces** it.
 - A file that does not check out is skipped, and the Planner says which and why. It never stops the others loading.
 
 ## The format

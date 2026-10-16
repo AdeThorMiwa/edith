@@ -87,8 +87,8 @@ fn the_shipped_packs_are_listed_your_own_replace_or_add_and_a_broken_file_is_nam
         .iter()
         .map(|p| (p["id"].as_str().unwrap().into(), p["name"].as_str().unwrap().into(), p["source"].as_str().unwrap().into()))
         .collect();
-    assert!(list.contains(&("travel".into(), "Travel".into(), "yours".into())));
-    assert!(list.contains(&("mystery".into(), "My Mystery".into(), "yours".into())), "yours replaces the shipped one: {list:?}");
+    assert!(list.contains(&("travel".into(), "Travel".into(), "custom".into())));
+    assert!(list.contains(&("mystery".into(), "My Mystery".into(), "custom".into())), "a custom pack replaces the shipped one: {list:?}");
     assert!(!list.iter().any(|(id, name, _)| id == "mystery" && name == "Mystery"));
     let problems: Vec<&str> = r["problems"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
     assert_eq!(problems.len(), 2, "{problems:?}");
@@ -615,4 +615,53 @@ fn the_title_and_length_can_change_and_the_beats_can_be_fitted_to_a_new_length_e
     }
     assert_eq!(*s.project, before);
     assert!(Session::default().execute("planner.update", json!({"title": "x"})).is_err(), "no plan");
+}
+
+#[test]
+fn starting_over_removes_the_markers_and_placeholders_the_plan_made_and_nothing_else() {
+    let mut s = sequence();
+    mystery(&mut s, 2.0);
+    let cold = beat_id(&s, "Cold open");
+    s.execute("planner.addShot", json!({"beat": cold, "intent": "A bell"})).unwrap();
+    s.execute("planner.addShot", json!({"beat": cold, "intent": "A rope"})).unwrap();
+    // things of yours: a marker, a clip, and a placeholder you have since moved to another place
+    s.execute("markers.add", json!({"seconds": 1.0, "name": "Mine"})).unwrap();
+    let item = s.execute("file.newOfflineFile", json!({"seconds": 4, "audio": false, "name": "Mine"})).unwrap()["item"].as_u64().unwrap();
+    s.execute("timeline.place", json!({"item": item, "track": "V1", "time": 0, "audio": false})).unwrap();
+    s.execute("planner.buildSkeleton", json!({})).unwrap();
+    let items_before = s.project.items.len();
+    assert_eq!((markers(&s).len(), clips(&s).len()), (13, 3));
+    let undo = s.history.undo.len();
+    let r = s.execute("planner.clear", json!({})).unwrap();
+    assert_eq!((r["markersRemoved"].clone(), r["placeholdersRemoved"].clone()), (json!(12), json!(2)));
+    assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
+    assert_eq!(s.execute("planner.get", json!({})).unwrap()["exists"], false);
+    // only your own marker and clip are left, and the two placeholder files are gone from the project
+    assert_eq!(markers(&s).iter().map(|m| m.2.as_str()).collect::<Vec<_>>(), ["Mine"]);
+    assert_eq!(clips(&s).len(), 1);
+    assert_eq!(s.project.items.len(), items_before - 2);
+    // undo brings the plan, the markers and the placeholders all back
+    s.undo().unwrap();
+    assert_eq!((markers(&s).len(), clips(&s).len()), (13, 3));
+    assert!(get(&s.project).is_some());
+    // keepTimeline leaves the timeline alone
+    let r = s.execute("planner.clear", json!({"keepTimeline": true})).unwrap();
+    assert_eq!((r["markersRemoved"].clone(), r["placeholdersRemoved"].clone()), (json!(0), json!(0)));
+    assert_eq!((markers(&s).len(), clips(&s).len()), (13, 3));
+    // a placeholder that has been replaced by real media is not a placeholder any more: it stays
+    let mut t = sequence();
+    mystery(&mut t, 2.0);
+    t.execute("planner.addShot", json!({"beat": beat_id(&t, "Cold open"), "intent": "A bell"})).unwrap();
+    t.execute("planner.buildSkeleton", json!({})).unwrap();
+    let clip = clips(&t)[0].1;
+    let item = t.active_sequence().unwrap().find_item(filmcraft_project::ClipId(clip)).unwrap().1.item;
+    std::sync::Arc::make_mut(&mut t.project).item_mut(item).unwrap().as_media_mut().unwrap().offline = false;
+    let r = t.execute("planner.clear", json!({})).unwrap();
+    assert_eq!(r["placeholdersRemoved"], 0, "a clip that is no longer the offline placeholder is left");
+    assert_eq!(clips(&t).len(), 1);
+    // bad parameter
+    let mut u = sequence();
+    mystery(&mut u, 2.0);
+    assert!(u.execute("planner.clear", json!({"keepTimeline": "yes"})).is_err());
+    assert!(get(&u.project).is_some());
 }

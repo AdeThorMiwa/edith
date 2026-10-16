@@ -3822,7 +3822,6 @@
 	Number of repeating beats	繰り返しビートの数
 	Plan a video before you cut it. Pick the kind of video and how long it should be, and the beats are laid out for you to edit.	編集する前に動画を計画します。動画の種類と長さを選ぶと、編集用のビートが並びます。
 	Puts a marker for every beat on the timeline, and a placeholder clip for every planned shot. Run it again after changing the plan: markers move, nothing is doubled.	各ビートのマーカーと、予定した各ショットの仮クリップをタイムラインに置きます。プランを変えたらもう一度実行してください。マーカーは移動し、重複しません。
-	Removes the plan. Undo brings it back.	プランを削除します。元に戻すと復活します。
 	Scales every beat in proportion so they add up to the length.	すべてのビートを比率どおりに調整し、合計を長さに合わせます。
 	Skeleton built: {m} markers, {p} placeholders	骨組みを作成しました：マーカー {m} 個、仮クリップ {p} 個
 	Skipped pack file	スキップしたパックファイル
@@ -3834,5 +3833,6 @@
 	What changes here?	ここで何が変わりますか？
 	Write a length like 12:00, 90 (seconds) or 1.5m	12:00、90（秒）、1.5m のように長さを入力してください
 	Write the length as a number of minutes, from 1 to 600.	長さを1〜600の分数で入力してください。
-	yours	自作
 	{beats} beats · {planned} planned of {target}	{beats} ビート · {target} のうち {planned} を計画済み
+	custom	カスタム
+	Removes the plan and the markers and placeholder clips it put on the timeline. Undo brings it all back.	プランと、プランがタイムラインに置いたマーカーと仮クリップを削除します。元に戻すとすべて復活します。

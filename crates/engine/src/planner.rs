@@ -6,10 +6,10 @@
 //! | command | does |
 //! |---|---|
 //! | `planner.get` | the plan, with its totals (planned against target length, beats by status) |
-//! | `planner.packs` | the Format Packs available (shipped and yours), and any pack file that was skipped |
+//! | `planner.packs` | the Format Packs available (shipped and custom), and any pack file that was skipped |
 //! | `planner.create {pack?, minutes\|seconds\|ticks, title?, clues?, replace?}` | a plan, empty or from a pack |
 //! | `planner.applyPack {pack, minutes\|seconds\|ticks?, clues?, keepNarration?}` | lay a pack's structure over the plan (keeping the writing of beats with the same name when asked) |
-//! | `planner.clear` | remove the plan |
+//! | `planner.clear {keepTimeline?}` | remove the plan, and the markers and placeholder clips `buildSkeleton` put on the timeline (not clips you placed yourself); `keepTimeline: true` leaves them |
 //! | `planner.update {title?, minutes\|seconds\|ticks?, fit?}` | the plan's title and video length; `fit: true` rescales the beats to the new length (in proportion, exactly) |
 //! | `planner.addSection {name, at?}`, `planner.updateSection {section, name}` | sections |
 //! | `planner.addBeat {section, name, at?, …fields}`, `planner.updateBeat {beat, …fields}` | beats; fields: `name`, `purpose`, `intensity` (0 to 10), `minutes`/`seconds`/`ticks`, `narration`, `visualIntent`, `soundNote`, `status` |
@@ -24,7 +24,7 @@
 //! is untrusted: text is checked against its limit (refused, not cut) and every count and length
 //! against the planner's limits.
 //!
-//! Format Packs: the shipped ones are built in; yours are `*.toml` files in a `format-packs` folder
+//! Format Packs: the shipped ones are built in; your own (custom) ones are `*.toml` files in a `format-packs` folder
 //! beside the preferences (see `docs/format-packs.md`). One with the same id replaces the shipped
 //! one; a file that does not check out is skipped and named in `planner.packs`.
 
@@ -296,7 +296,7 @@ fn packs_cmd(s: &mut Session, _p: &Value) -> Result<Value> {
                 "id": p.id,
                 "name": p.name,
                 "summary": p.summary,
-                "source": if l.yours { "yours" } else { "shipped" },
+                "source": if l.yours { "custom" } else { "shipped" },
                 "sections": p.sections.len(),
                 "beats": beats,
                 "typicalMinutes": p.typical_minutes.as_ref().map(|m| json!({"min": m.min, "max": m.max})),
@@ -535,15 +535,67 @@ fn apply_pack(s: &mut Session, p: &Value) -> Result<Value> {
     store(s, "Apply Format Pack", plan, cmd)
 }
 
-fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    if get(&s.project).is_none() && !s.project.ext.contains_key(KEY) {
-        return Err(bad("planner.clear", "there is no plan"));
+fn clear(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.clear";
+    let keep = match p.get("keepTimeline") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(cmd, "`keepTimeline` must be true or false")),
+    };
+    let plan = get(&s.project);
+    if plan.is_none() && !s.project.ext.contains_key(KEY) {
+        return Err(bad(cmd, "there is no plan"));
     }
-    s.edit("Remove Plan", |pr, _| {
-        put(pr, None);
-        Ok(())
+    // what buildSkeleton made: the markers, and the placeholder clips that are still placeholders
+    let markers: Vec<u64> = plan.iter().flat_map(|pl| pl.beats().filter_map(|b| b.link.and_then(|l| l.marker))).collect();
+    let shot_clips: Vec<(u64, u64)> = plan.iter().flat_map(|pl| pl.beats().flat_map(|b| b.shots.iter().filter_map(|x| x.clip.map(|c| (x.id, c))))).collect();
+    let (removed_markers, removed_clips) = s.edit_group("Remove Plan", |s| {
+        let (mut m, mut c) = (0usize, 0usize);
+        if !keep {
+            if !markers.is_empty() {
+                let ids: Vec<filmcraft_project::ItemId> = s.project.sequences().map(|it| it.id).collect();
+                s.edit("Remove Plan Markers", |pr, _| {
+                    for sid in &ids {
+                        if let Some(q) = pr.sequence_mut(*sid) {
+                            let before = q.markers.len();
+                            q.markers.retain(|mk| !markers.contains(&mk.id.0));
+                            m += before - q.markers.len();
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+            // a clip counts as a placeholder only while it still plays the offline file made for that shot
+            let placeholders: Vec<(ClipId, filmcraft_project::ItemId)> = s
+                .active_sequence()
+                .map(|q| {
+                    shot_clips
+                        .iter()
+                        .filter_map(|(shot, clip)| {
+                            let item = q.find_item(ClipId(*clip))?.1.item;
+                            let media = s.project.item(item)?.as_media()?;
+                            let is_ours =
+                                media.offline && matches!(&media.media, filmcraft_project::MediaRef::File { path } if *path == format!("plan-shot-{shot}.mov"));
+                            is_ours.then_some((ClipId(*clip), item))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !placeholders.is_empty() {
+                let clips: Vec<u64> = placeholders.iter().map(|(c, _)| c.0).collect();
+                s.execute("edit.clear", json!({"clips": clips}))?;
+                let items: Vec<u64> = placeholders.iter().map(|(_, i)| i.0).collect();
+                s.execute("project.delete", json!({"items": items}))?;
+                c = placeholders.len();
+            }
+        }
+        s.edit("Remove Plan Data", |pr, _| {
+            put(pr, None);
+            Ok(())
+        })?;
+        Ok((m, c))
     })?;
-    Ok(json!({"exists": false}))
+    Ok(json!({"exists": false, "markersRemoved": removed_markers, "placeholdersRemoved": removed_clips}))
 }
 
 fn update_plan(s: &mut Session, p: &Value) -> Result<Value> {
@@ -849,7 +901,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("planner.packs", "List Format Packs", "{}", packs_cmd, false),
         spec("planner.create", "Create Plan", r#"{"pack":str?,"minutes"|"seconds"|"ticks":n?,"title":str?,"clues":n?,"replace":bool?}"#, create, true),
         spec("planner.applyPack", "Apply Format Pack", r#"{"pack":str,"minutes"|"seconds"|"ticks":n?,"clues":n?,"keepNarration":bool?}"#, apply_pack, true),
-        spec("planner.clear", "Remove Plan", "{}", clear, true),
+        spec("planner.clear", "Remove Plan", r#"{"keepTimeline":bool?}"#, clear, true),
         spec("planner.update", "Edit Plan", r#"{"title":str?,"minutes"|"seconds"|"ticks":n?,"fit":bool?}"#, update_plan, true),
         spec("planner.addSection", "Add Plan Section", r#"{"name":str,"at":n?}"#, add_section, true),
         spec("planner.updateSection", "Rename Plan Section", r#"{"section":id,"name":str}"#, update_section, true),
