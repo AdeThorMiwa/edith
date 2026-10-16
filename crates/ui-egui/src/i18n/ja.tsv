@@ -3753,3 +3753,7 @@
 	Saved. The narration on the timeline keeps its old sound until you regenerate it.	保存しました。タイムライン上のナレーションは、再生成するまで以前の音のままです。
 	Regenerate narration	ナレーションを再生成
 	Saved. New narrations will use it.	保存しました。今後のナレーションに使われます。
+	Take	テイク
+	Take {n}	テイク {n}
+	Other deliveries of the same words, with a little different timing and stress. The take is saved with the narration.	同じ言葉の別の読み方で、間の取り方や強調が少し変わります。テイクはナレーションと一緒に保存されます。
+	Takes need a natural voice.	テイクにはナチュラルボイスが必要です。

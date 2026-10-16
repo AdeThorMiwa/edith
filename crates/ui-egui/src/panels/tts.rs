@@ -33,6 +33,8 @@ pub struct TtsDraft {
     pub voice: String,
     pub pitch: VocalPitch,
     pub pace: f64,
+    /// Which delivery of the script (0 is the plain reading); natural voices only.
+    pub take: u32,
     pub advanced_open: bool,
     /// The narration clip and item the draft was loaded from (None: a new narration).
     pub loaded_from: Option<(u64, u64)>,
@@ -63,6 +65,7 @@ impl Default for TtsDraft {
             voice: if natural_installed() { "kokoro-heart".into() } else { filmcraft_tts::default_voice_id().into() },
             pitch: VocalPitch::Default,
             pace: 1.0,
+            take: 0,
             advanced_open: true,
             loaded_from: None,
             pending: None,
@@ -74,7 +77,7 @@ impl Default for TtsDraft {
 
 impl TtsDraft {
     fn params(&self) -> serde_json::Value {
-        json!({"text": self.text, "voice": self.voice, "pitch": self.pitch.id(), "pace": self.pace})
+        json!({"text": self.text, "voice": self.voice, "pitch": self.pitch.id(), "pace": self.pace, "take": self.take})
     }
 }
 
@@ -182,6 +185,7 @@ pub fn follow_selection(app: &mut FilmcraftApp) {
                 d.voice = n.voice;
                 d.pitch = n.pitch;
                 d.pace = n.pace;
+                d.take = n.take;
                 d.loaded_from = Some((clip.0, item));
                 if first_time {
                     app.show_panel(crate::dock::PanelKind::TextToSpeech);
@@ -321,7 +325,36 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         let voice_ready = !natural || installed;
         ui.add_space(4.0);
-        let (r, resp) = ui.allocate_exact_size(vec2(130.0, 22.0), Sense::click());
+        let take_on = filmcraft_tts::catalog::find(&d.voice).is_some();
+        let (r, resp) = ui
+            .horizontal(|ui| {
+                let (r, resp) = ui.allocate_exact_size(vec2(130.0, 22.0), Sense::click());
+                // the take stepper shares the row: Take  -  Standard  +
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_enabled_ui(take_on, |ui| {
+                        let next = ui.small_button("+");
+                        auto.add("tts.take.next", visible(ui, next.rect), "Next take");
+                        if next.clicked() {
+                            d.take = (d.take + 1).min(filmcraft_tts::MAX_TAKE);
+                        }
+                        let name = if d.take == 0 { tl!("Standard").to_string() } else { tlf!("Take {n}", n = d.take) };
+                        let l = ui.label(egui::RichText::new(name).color(t.text).size(12.0));
+                        auto.add("tts.take", visible(ui, l.rect), "Take");
+                        l.on_hover_text(if take_on {
+                            tl!("Other deliveries of the same words, with a little different timing and stress. The take is saved with the narration.")
+                        } else {
+                            tl!("Takes need a natural voice.")
+                        });
+                        let prev = ui.small_button("-");
+                        auto.add("tts.take.prev", visible(ui, prev.rect), "Previous take");
+                        if prev.clicked() {
+                            d.take = d.take.saturating_sub(1);
+                        }
+                    });
+                });
+                (r, resp)
+            })
+            .inner;
         let col = if resp.hovered() { t.accent_hover } else { t.accent };
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 8.0, r.center().y), vec2(14.0, 14.0)), Icon::Play, col);
         ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, "Hear this voice", Tokens::semibold(12.0), col);

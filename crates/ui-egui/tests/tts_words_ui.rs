@@ -1,4 +1,5 @@
-//! Headless UI test of the Pronunciation section of the Text to Speech panel (fork roadmap F06.1):
+//! Headless UI tests of the Text to Speech panel's fork additions: the Pronunciation section (F06.1)
+//! and the Take stepper (F06.2). The pronunciation tests:
 //! open it, write a word and how to say it, save it for the project and for all projects, see it
 //! listed, and remove it. Checking a script works with whatever voices this machine has: with the
 //! natural voices the made-up names (real ones are in the dictionary already) are offered as chips, without them the panel says why not.
@@ -82,13 +83,15 @@ impl Driver {
 
     /// The panel is short: scroll the section's header into reach, open it, and scroll to its end.
     fn open_section(&mut self) {
-        self.scroll_down();
+        self.scroll_down("tts.voice");
         self.click("tts.words");
-        self.scroll_down();
+        self.scroll_down("tts.words");
     }
 
-    fn scroll_down(&mut self) {
-        self.ok("ui.scroll", json!({"id": "tts.text", "dx": 0.0, "dy": -2000.0}));
+    /// Scroll the panel to its end with the pointer on `anchor`, which must be inside the panel's
+    /// visible part (a clipped element has no usable position).
+    fn scroll_down(&mut self, anchor: &str) {
+        self.ok("ui.scroll", json!({"id": anchor, "dx": 0.0, "dy": -2000.0}));
         self.frames(3);
     }
 
@@ -131,7 +134,7 @@ fn words_are_saved_for_the_project_and_all_projects_listed_and_removed() {
     assert_eq!(listed["global"][0]["word"], "reykjavik", "{listed}");
     assert!(d.has("tts.words.remove.global.reykjavik"));
     // removing
-    d.scroll_down();
+    d.scroll_down("tts.words");
     d.click("tts.words.remove.project.kubrick");
     d.click("tts.words.remove.global.reykjavik");
     let listed = d.exec("tts.pronunciations", json!({}));
@@ -168,4 +171,27 @@ fn checking_a_script_offers_the_unknown_words_or_says_why_it_cannot() {
     } else {
         assert!(chips.is_empty(), "without the natural voices nothing can be checked: {chips:?}");
     }
+}
+
+#[test]
+fn the_take_stepper_moves_between_standard_and_other_deliveries_for_natural_voices_only() {
+    let mut d = Driver::new();
+    d.exec("window.panel.TextToSpeech", json!({}));
+    d.frames(3);
+    let ids = d.ids("tts.take");
+    for id in ["tts.take", "tts.take.prev", "tts.take.next"] {
+        assert!(ids.contains(&id.to_string()), "missing {id}: {ids:?}");
+    }
+    let state = |d: &mut Driver| d.ok("ui.inspect", json!({}))["ui"]["tts"].clone();
+    let natural = filmcraft_tts::catalog::find(state(&mut d)["voice"].as_str().unwrap_or("")).is_some();
+    assert_eq!(state(&mut d)["take"], 0);
+    d.click("tts.take.next");
+    d.click("tts.take.next");
+    d.click("tts.take.prev");
+    // the built-in voices have no takes: the buttons do nothing there
+    assert_eq!(state(&mut d)["take"], if natural { 1 } else { 0 });
+    d.snapshot("tts-take");
+    d.click("tts.take.prev");
+    d.click("tts.take.prev");
+    assert_eq!(state(&mut d)["take"], 0, "never below the standard reading");
 }
