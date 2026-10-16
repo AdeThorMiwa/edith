@@ -1256,6 +1256,8 @@ mod export_tests;
 #[cfg(test)]
 mod file_tests;
 #[cfg(test)]
+mod film_look_tests;
+#[cfg(test)]
 mod gap_selection_tests;
 #[cfg(all(test, feature = "net"))]
 mod hub_tests;

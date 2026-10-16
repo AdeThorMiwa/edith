@@ -1264,7 +1264,8 @@ mod tests {
         // nothing else sits in the current folders
         for d in effect_defs().iter().filter(|d| d.kind == EffectKind::Video && d.category.first() == Some(&"Video Effects")) {
             let f = d.category[1];
-            if f == "Obsolete" {
+            // the fork's own folder (docs/fork.md) is not part of Premiere's list
+            if f == "Obsolete" || f == "Film Look" {
                 continue;
             }
             let listed = CATALOGUE.iter().any(|(cf, names)| *cf == f && names.contains(&d.name));

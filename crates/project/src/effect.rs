@@ -16,6 +16,9 @@ mod audio;
 use crate::mask::Mask;
 pub use audio::{GEQ10_LABELS, GEQ20_LABELS, GEQ30_LABELS, PREMIERE_AUDIO_EFFECTS};
 
+mod film;
+pub use film::{GRAIN_STOCK_VALUES, GRAIN_STOCKS};
+
 mod vfx;
 pub use vfx::{EASINGS, ECHO_OPERATORS, FRAME_LAYOUTS, LIGHT_IDS, SIMPLE_BLEND, TRACK_CHOICES, auto_point, ultra_key_setting};
 
@@ -839,6 +842,7 @@ fn build_effects() -> Vec<EffectDef> {
     ];
     v.extend(audio::defs());
     v.extend(vfx::defs());
+    v.extend(film::defs());
     vfx::extend_core(&mut v);
     v.extend(crate::vtransition::video_transition_defs());
     v.extend(crate::graphic::layer_defs());

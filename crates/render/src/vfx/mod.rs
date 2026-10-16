@@ -15,12 +15,15 @@ mod blur;
 mod color;
 pub(crate) use color::cdl;
 mod distort;
+mod film;
 mod immersive;
 mod lights;
 mod stylize;
 mod temporal;
 mod text;
 
+#[cfg(test)]
+mod film_tests;
 #[cfg(test)]
 mod tests;
 
@@ -525,6 +528,7 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         // Text
         "simple_text" => text::simple_text(img, e, cx),
         "metadata_burnin" => text::metadata_burnin(img, e, cx),
+        id if film::handles(id) => film::apply(img, e, cx),
         id if id.starts_with("vr_") => immersive::apply(img, e, cx),
         _ => return false,
     }
