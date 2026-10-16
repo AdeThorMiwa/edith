@@ -502,6 +502,40 @@ fn the_transcript_markers_and_frame_chips_send_what_they_name_and_the_message_sa
 }
 
 #[test]
+fn the_assistant_has_a_home_on_the_right_in_every_workspace_and_a_shortcut() {
+    use filmcraft_ui_egui::dock::PanelKind;
+    let _g = guard();
+    let mut d = Driver::new();
+    // the default layout already holds it, in the wide right-hand group with Properties
+    assert!(d.app().ui.dock.contains(PanelKind::Assistant));
+    d.open_assistant();
+    assert!(d.app().ui.dock.is_visible(PanelKind::Assistant), "Window > Assistant brings its tab forward");
+    // a workspace that does not hold it gets it beside that workspace's side panel, not in a corner
+    for (workspace, side) in [("Color", PanelKind::LumetriColor), ("Audio", PanelKind::EssentialSound), ("Captions and Graphics", PanelKind::EssentialGraphics)]
+    {
+        d.app().set_workspace(workspace);
+        assert!(!d.app().ui.dock.contains(PanelKind::Assistant), "{workspace} starts without it");
+        d.app().show_panel(PanelKind::Assistant);
+        d.frames(2);
+        assert!(d.app().ui.dock.is_visible(PanelKind::Assistant), "{workspace}");
+        let mut group = Vec::new();
+        fn find(n: &filmcraft_ui_egui::dock::DockNode, p: PanelKind, out: &mut Vec<PanelKind>) {
+            match n {
+                filmcraft_ui_egui::dock::DockNode::Tabs { panels, .. } if panels.contains(&p) => out.extend(panels.iter().copied()),
+                filmcraft_ui_egui::dock::DockNode::Split { a, b, .. } => {
+                    find(a, p, out);
+                    find(b, p, out);
+                }
+                _ => {}
+            }
+        }
+        find(&d.app().ui.dock, PanelKind::Assistant, &mut group);
+        assert!(group.contains(&side), "{workspace}: the Assistant joins the group of {side:?}, got {group:?}");
+    }
+    assert_eq!(PanelKind::Assistant.window_shortcut(), Some("Shift+0"));
+}
+
+#[test]
 fn the_chips_are_saved_settings_so_a_choice_is_there_next_time() {
     let _g = guard();
     let dir = std::env::temp_dir().join(format!("edith-ui-chips-{}", std::process::id()));

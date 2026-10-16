@@ -845,10 +845,12 @@ impl FilmcraftApp {
         if !self.ui.dock.contains(p) && !self.ui.floating.iter().any(|group| group.panels.contains(&p)) {
             let near = match p {
                 // a side panel beside Properties (or Essential Sound), never over the Program monitor
-                PanelKind::TextToSpeech => [PanelKind::Properties, PanelKind::EssentialSound, PanelKind::EssentialGraphics]
-                    .into_iter()
-                    .find(|k| self.ui.dock.contains(*k))
-                    .unwrap_or(PanelKind::Program),
+                PanelKind::TextToSpeech | PanelKind::Assistant => {
+                    [PanelKind::Properties, PanelKind::EssentialSound, PanelKind::EssentialGraphics, PanelKind::LumetriColor]
+                        .into_iter()
+                        .find(|k| self.ui.dock.contains(*k))
+                        .unwrap_or(PanelKind::Program)
+                }
                 PanelKind::LumetriColor | PanelKind::EssentialGraphics | PanelKind::EssentialSound | PanelKind::Properties => PanelKind::Program,
                 PanelKind::Source
                 | PanelKind::EffectControls

@@ -130,6 +130,7 @@ impl PanelKind {
             PanelKind::Effects => Some("Shift+7"),
             PanelKind::MediaBrowser => Some("Shift+8"),
             PanelKind::AudioTrackMixer => Some("Shift+6"),
+            PanelKind::Assistant => Some("Shift+0"),
             _ => None,
         }
     }
@@ -380,7 +381,8 @@ pub fn workspace(name: &str) -> DockNode {
             hsplit(
                 FixedB(450.0),
                 hsplit(Ratio(0.5), tabs(&[Source, EffectControls, AudioClipMixer, Metadata], 0), tabs(&[Program], 0)),
-                tabs(&[Properties, EssentialGraphics, Text], 0),
+                // the Assistant sits in the wide right-hand group, a tab away from Properties
+                tabs(&[Properties, EssentialGraphics, Text, Assistant], 0),
             ),
             hsplit(
                 Ratio(0.29),
