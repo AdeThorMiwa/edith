@@ -435,7 +435,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Notes.** Natural voices are US English only and have no pitch input (pitch is a post shift), per `crates/tts/README.md`. Room-tone samples must be generated in code or openly licensed with attribution (AGENTS.md §1).
 
-### F07 Look Pack: film texture and the A24 stack · Must · L · ⬜
+### F07 Look Pack: film texture and the A24 stack · Must · L · ✅
 
 **Needs:** F01 (independent; can be pulled forward at any time).
 
@@ -449,7 +449,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 - F07.5 **Anamorphic streak**.
 - F07.6 **Lens fringing** (radial).
 - F07.7 ✅ (2026-10-16) **Cinema Look** (the roadmap's working title was "A24 stack"; A24 is a company, so the app says Cinema Look): one effect with a **Film Look** slider (0 to 100; 0 is exactly the original picture) that lays on lens fringing, diffusion, halation, gate flutter and grain, each also scaled by its own Mix control (0 to 200%), plus a **Letterbox** choice (None, 2.39:1, 1.85:1; bars are exact: 2.39:1 on 1920x1080 leaves 803 rows of picture; a frame wider than the ratio gets side bars). A built-in preset *Cinema Look* (Presets bin) applies it at 60 in one click and undoes in one step. Original text: **A24 stack** preset (through `presets.*`) with one *film look* macro slider and a letterbox option (2.39:1, 1.85:1).
-- F07.8 **Camera moves for stills**: duration-aware keyframes (slow push-in, drift, handheld sway) from a command `motion.cameraMove`. Depth-map parallax is a later experiment.
+- F07.8 ✅ (2026-10-16) **Camera moves**: `motion.cameraMove {clip?, move, amount?, seed?}` with `pushIn`, `pullOut`, `driftLeft`, `driftRight` and `sway`; keyframes on Motion position and scale from the clip's first frame to its last (placed in the clip's own media time, so trimmed and retimed clips work), eased, one undo step, replacing the clip's earlier position and scale keyframes. Amount is a share of the frame, and every move enlarges the picture enough that the frame edges stay covered (checked for every move and amount). Original text: **Camera moves for stills**: duration-aware keyframes (slow push-in, drift, handheld sway) from a command `motion.cameraMove`. Depth-map parallax is a later experiment.
 
 **Done when.** Each effect has golden tests; the CPU path previews acceptably on the architect's Mac (a real-time GPU path may follow); the A24 stack turns a flat stock clip into a convincing film look in one click.
 

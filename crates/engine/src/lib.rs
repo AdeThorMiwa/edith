@@ -15,6 +15,7 @@ pub mod assistant;
 mod assistant_store;
 mod assistant_tools;
 pub mod autosave;
+pub mod camera_moves;
 pub mod captions;
 pub mod clip_ops;
 pub mod color;
@@ -1243,6 +1244,8 @@ mod audio_placement_tests;
 mod autosave_tests;
 #[cfg(test)]
 mod avi_import_tests;
+#[cfg(test)]
+mod camera_moves_tests;
 #[cfg(test)]
 mod clip_ops_tests;
 #[cfg(test)]
