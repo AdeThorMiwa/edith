@@ -3857,3 +3857,8 @@
 	Use the clip selected in the Project panel as this shot's picture.	プロジェクトパネルで選択中のクリップをこのショットの映像にします。
 	What the picture shows	映像の内容
 	Whole beat	ビート全体
+	Beat Lane	ビートレーン
+	No plan yet: open Window ▸ Planner	プランはまだありません：ウィンドウ ▸ プランナーを開いてください
+	Plan	プラン
+	{name}: planned {planned}. {purpose}	{name}：予定 {planned}。{purpose}
+	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}：予定 {planned}、タイムライン上 {actual}。{purpose}

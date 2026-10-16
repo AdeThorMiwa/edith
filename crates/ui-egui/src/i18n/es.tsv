@@ -3855,3 +3855,8 @@
 	Use the clip selected in the Project panel as this shot's picture.	Usa el clip seleccionado en el panel Proyecto como imagen de este plano.
 	What the picture shows	Qué muestra la imagen
 	Whole beat	Tramo completo
+	Beat Lane	Carril de tramos
+	No plan yet: open Window ▸ Planner	Aún no hay plan: abre Ventana ▸ Planificador
+	Plan	Plan
+	{name}: planned {planned}. {purpose}	{name}: previsto {planned}. {purpose}
+	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}: previsto {planned}, en la línea de tiempo {actual}. {purpose}

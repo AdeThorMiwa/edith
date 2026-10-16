@@ -38,7 +38,12 @@ fn secs_text(seconds: f64) -> String {
 
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
-    let got = app.session.execute("planner.lines", json!({})).unwrap_or(Value::Null);
+    // only ask when there is a plan: a command that fails is logged as an error event
+    let got = if filmcraft_engine::planner::get(&app.session.project).is_some() {
+        app.session.execute("planner.lines", json!({})).unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min + vec2(10.0, 8.0), rect.max - vec2(10.0, 4.0))));
     let ui = &mut child;
     let ctx = ui.ctx().clone();

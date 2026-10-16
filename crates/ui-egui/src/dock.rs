@@ -46,10 +46,11 @@ pub enum PanelKind {
     FindMedia,
     Planner,
     AvScript,
+    BeatLane,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 34] = [
+    pub const ALL: [PanelKind; 35] = [
         PanelKind::Project,
         PanelKind::MediaBrowser,
         PanelKind::Libraries,
@@ -84,6 +85,7 @@ impl PanelKind {
         PanelKind::FindMedia,
         PanelKind::Planner,
         PanelKind::AvScript,
+        PanelKind::BeatLane,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -121,6 +123,7 @@ impl PanelKind {
             PanelKind::FindMedia => "Find Media",
             PanelKind::Planner => "Planner",
             PanelKind::AvScript => "A/V Script",
+            PanelKind::BeatLane => "Beat Lane",
         }
     }
     pub fn id(self) -> String {
@@ -399,7 +402,12 @@ pub fn workspace(name: &str) -> DockNode {
             hsplit(
                 Ratio(0.29),
                 tabs(&[Project, MediaBrowser, FindMedia, Libraries, Info, Effects, Markers, History], 0),
-                hsplit(FixedA(64.0), tabs(&[Tools], 0), hsplit(FixedB(116.0), tabs(&[Timeline], 0), tabs(&[AudioMeters], 0))),
+                // the beat lane is a strip above the timeline, on the timeline's own scale
+                hsplit(
+                    FixedA(64.0),
+                    tabs(&[Tools], 0),
+                    hsplit(FixedB(116.0), vsplit(FixedA(84.0), tabs(&[BeatLane], 0), tabs(&[Timeline], 0)), tabs(&[AudioMeters], 0)),
+                ),
             ),
         ),
     }

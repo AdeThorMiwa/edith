@@ -3833,3 +3833,8 @@
 	Use the clip selected in the Project panel as this shot's picture.	将项目面板中选中的片段用作此镜头的画面。
 	What the picture shows	画面内容
 	Whole beat	整个段落
+	Beat Lane	段落轨
+	No plan yet: open Window ▸ Planner	还没有计划：请打开「窗口 ▸ 策划」
+	Plan	计划
+	{name}: planned {planned}. {purpose}	{name}：计划 {planned}。{purpose}
+	{name}: planned {planned}, on the timeline {actual}. {purpose}	{name}：计划 {planned}，时间线上 {actual}。{purpose}
