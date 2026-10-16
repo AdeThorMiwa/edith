@@ -1,6 +1,6 @@
 # Upcoming features
 
-> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-15 · **Change:** F02 built (network, secrets, sign-in pieces, Connections panel; final check pending), D5 and D11 decided; earlier: F01 done (speech on by default, `upstream` remote, fork rules in fork.md, `CLAUDE.md` pointer); new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
+> **Last reviewed:** 2026-10-12 (against upstream 0.7.2) · **Last updated:** 2026-10-16 · **Change:** F02 and F03 done: the full `cargo xtask ci` is green (3,564 tests, 0 failed, 2026-10-16); F03.3, F03.6 and F03.7 built, F03.4 and F03.5 parked; earlier: F02 built (network, secrets, sign-in pieces, Connections panel; final check pending), D5 and D11 decided; earlier: F01 done (speech on by default, `upstream` remote, fork rules in fork.md, `CLAUDE.md` pointer); new file (direction for the creator layer: assistant, sourcing, planning, analysis, voices, look)
 
 The plan for what this fork adds on top of FilmCraft, in the order we intend to build it. It is the working agreement between the **architect** (product design and architecture decisions) and the **builder** (agents, one feature at a time). Upstream's own plan stays in [roadmap.md](roadmap.md) and [gaps.md](gaps.md); this file does not replace it.
 
@@ -213,7 +213,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 **Notes.** Defaults add candle to every build, so compiles get longer: a cold full `cargo xtask ci` took 106 minutes on the author's MacBook, and the app alone builds in about 3.5 minutes warm. Use current stable (checked on 1.99.0; see [fork.md](fork.md)). Building the CLI after the app still recompiles most of the engine, so build the one you need. `whisper-base` is modest on run-together speech; `whisper-small` (967 MB) is the next step up if accuracy matters. The web app is a separate crate and is unaffected.
 
-### F02 Network, secrets and OAuth foundation · Must · M · 🟡
+### F02 Network, secrets and OAuth foundation · Must · M · ✅
 
 **Needs:** F01 · **Unlocks:** F03, F05, F25.
 
@@ -242,7 +242,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 ### Phase 1: first-video kit
 
-### F03 Assistant pane: connect, chat, mentor · Must · L · yours · 🟡
+### F03 Assistant pane: connect, chat, mentor · Must · L · yours · ✅
 
 **Needs:** F02 · **Unlocks:** F15, F21, and a home for every later feature's tools.
 
@@ -264,8 +264,8 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
   - F03.3c ✅ the sign-in building blocks: a `localhost` redirect that also listens on `::1`, a refusal without `state` ends the wait (and can never yield a code), any cancel check plugs in (`wait_until`), and `edith-ai::connect::OpenRouter` (address + key exchange, feature `signin`). Not yet checked against the real OpenRouter page: whether it returns `state` on approval as documented. The first live Connect will show it; if not, only the receiver's `state` rule needs a decision.
   - F03.3d ✅ `connections.connect|disconnect` (a cancellable job; the key never appears in a result, job record or log) and the Connect / Waiting / Disconnect buttons on the Connections panel. Needs one live check by you: click Connect on OpenRouter and approve in the browser.
   - F03.3e ✅ `connections.probe` and a Check button for Ollama and LM Studio (once, on request, logged like any request); Ollama models get their tools/vision/thinking/context badges from `/api/show`, LM Studio's from `/api/v0/models` (tool support there is not documented, so it stays unknown); embedding models are left out of the chat list; an unreachable server is described as "not running".
-- F03.4 Gemini (free tier) and any OpenAI-compatible endpoint.
-- F03.5 ChatGPT and Google sign-in, once access is confirmed (D2).
+- F03.4 Gemini (free tier) and any OpenAI-compatible endpoint. **Parked 2026-10-16** at the architect's request (Claude is enough for now; the OpenAI-compatible client from F03.3 already reaches OpenRouter, OpenAI, Ollama and LM Studio).
+- F03.5 ChatGPT and Google sign-in, once access is confirmed (D2). **Parked 2026-10-16**, same reason.
 - F03.6 ✅ **The agent evaluation suite** (§4.8), built 2026-10-16 on the scripted model and trace recorder from F03.1.
   - **Tasks and graders** (`edith_agent::eval`, pure code): a built-in suite `core` of nine questions on the demo project (orientation, reading clips and counts, markers and times, what is on screen at a marker, transitions, pacing without invented times, declining to edit, ignoring instructions planted in a marker). Graders: tools called, names mentioned (groups of alternatives), phrases avoided, **every time the answer cites lies inside the edit**, budget (steps, tokens, dollars), project unchanged. Two checks always run: the turn finished normally and no tool that changes the project was called. Grading reads only the run's trace, so it needs no model and no network.
   - **Runner** (`assistant.eval`): each question runs in a session of its own on a fresh fixture, so your project and threads are never touched; a background job (`jobs.list`, cancellable) that saves `report.json`, `report.md` and one replayable `traces/<task>.jsonl` per question. It calls the configured model, which costs money, so it refuses unless `live: true`. `promptPack` tries another prompt file, `model` another model, `tasks` a subset. `fromTraces` grades saved runs again for free (after a grader changes). `assistant.evalCompare` puts several reports side by side and marks tasks that were fixed or regressed.
