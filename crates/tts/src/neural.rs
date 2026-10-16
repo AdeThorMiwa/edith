@@ -50,17 +50,32 @@ fn loaded_for<'a>(guard: &'a mut Option<Loaded>, dir: &Path) -> Result<&'a mut L
     guard.as_mut().ok_or_else(|| TtsError::Model("voice package not loaded".into()))
 }
 
+/// The dictionary of the package in `dir`, without loading the voice model (which takes seconds):
+/// the one the voices already hold when there is one, else read once and kept.
+fn lexicon_only(dir: &Path) -> Result<Arc<Lexicon>, TtsError> {
+    static ALONE: OnceLock<Mutex<Option<(PathBuf, Arc<Lexicon>)>>> = OnceLock::new();
+    if let Some(l) = cache().lock().unwrap_or_else(PoisonError::into_inner).as_ref().filter(|l| l.dir == dir) {
+        return Ok(l.lexicon.clone());
+    }
+    let mut alone = ALONE.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((d, l)) = alone.as_ref()
+        && d == dir
+    {
+        return Ok(l.clone());
+    }
+    let bytes = std::fs::read(dir.join("cmudict.dict")).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?;
+    let lexicon = Arc::new(Lexicon::parse_cmudict(&bytes).map_err(|e| TtsError::Model(format!("cmudict.dict: {e}")))?);
+    *alone = Some((dir.to_path_buf(), lexicon.clone()));
+    Ok(lexicon)
+}
+
 /// The words of `text` the voices would guess at; see [`crate::check_words`].
 pub fn check_words(text: &str, models_dir: &Path, pronounce: &Pronunciations) -> Result<Vec<UnknownWord>, TtsError> {
     crate::check_text(text)?;
     if !catalog::installed(models_dir) {
         return Err(TtsError::NotInstalled);
     }
-    let dir = catalog::package_dir(models_dir);
-    let lexicon = {
-        let mut guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
-        loaded_for(&mut guard, &dir)?.lexicon.clone()
-    };
+    let lexicon = lexicon_only(&catalog::package_dir(models_dir))?;
     let found = filmcraft_tts_text::unknown_words(text, Lang::EnUs, &lexicon, &overrides_of(pronounce)).map_err(|e| TtsError::Invalid(e.to_string()))?;
     Ok(found.into_iter().map(|u| UnknownWord { word: u.word, count: u.count }).collect())
 }

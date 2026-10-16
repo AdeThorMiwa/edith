@@ -92,8 +92,8 @@ fn settings(cmd: &str, p: &Value, base: Option<&Narration>) -> Result<Narration>
 pub type SynthCache = Arc<Mutex<Vec<(String, Arc<tts::Audio>)>>>;
 const CACHE_ENTRIES: usize = 6;
 
-fn cache_key(n: &Narration) -> String {
-    format!("{}\u{1f}{}\u{1f}{}\u{1f}{}", n.voice, n.pitch.id(), n.pace.to_bits(), n.text)
+pub(crate) fn cache_key(n: &Narration, pron: &tts::Pronunciations) -> String {
+    format!("{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}", n.voice, n.pitch.id(), n.pace.to_bits(), n.text, pron.fingerprint())
 }
 
 fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
@@ -104,17 +104,18 @@ fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
 }
 
 /// Synthesize `n` (no cache).
-fn render(n: &Narration, models_dir: Option<&std::path::Path>) -> std::result::Result<tts::Audio, tts::TtsError> {
+fn render(n: &Narration, models_dir: Option<&std::path::Path>, pron: &tts::Pronunciations) -> std::result::Result<tts::Audio, tts::TtsError> {
     let voice = tts::voice_in(&n.voice, models_dir)?;
-    voice.synthesize(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace })
+    voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace }, pron)
 }
 
-fn synthesize(s: &Session, cmd: &str, n: &Narration) -> Result<Arc<tts::Audio>> {
-    let key = cache_key(n);
+fn synthesize(s: &Session, cmd: &str, n: &Narration, p: &Value) -> Result<Arc<tts::Audio>> {
+    let pron = crate::pronounce::for_call(s, cmd, p)?;
+    let key = cache_key(n, &pron);
     if let Some(a) = s.tts_cache.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone()) {
         return Ok(a);
     }
-    let a = Arc::new(render(n, crate::transcript::models_dir().as_deref()).map_err(|e| tts_err(cmd, e))?);
+    let a = Arc::new(render(n, crate::transcript::models_dir().as_deref(), &pron).map_err(|e| tts_err(cmd, e))?);
     cache_put(&s.tts_cache, key, a.clone());
     Ok(a)
 }
@@ -164,7 +165,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         q["text"] = json!(tts::SAMPLE_SENTENCE);
     }
     let n = settings(cmd, &q, base.as_ref())?;
-    let audio = synthesize(s, cmd, &n)?;
+    let audio = synthesize(s, cmd, &n, p)?;
     let seconds = audio.seconds();
     let samples = audio.samples.len();
     let rate = audio.sample_rate;
@@ -230,7 +231,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if at < Tick::ZERO {
         return Err(bad(cmd, "the start time cannot be negative"));
     }
-    let audio = synthesize(s, cmd, &n)?;
+    let audio = synthesize(s, cmd, &n, p)?;
     let rate = audio.sample_rate.max(1);
     let dur = Tick::from_units(audio.samples.len() as i64, i64::from(rate));
     n.speech_duration = dur;
@@ -316,7 +317,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let (old_item, clip_dur, speed) = (it.item, it.duration, it.speed);
     let base = s.project.narrations.get(&old_item).cloned().ok_or_else(|| bad(cmd, "the clip is not a narration"))?;
     let mut n = settings(cmd, p, Some(&base))?;
-    let audio = synthesize(s, cmd, &n)?;
+    let audio = synthesize(s, cmd, &n, p)?;
     let rate = audio.sample_rate.max(1);
     let speech = audio.samples.len();
     n.speech_duration = Tick::from_units(speech as i64, i64::from(rate));
@@ -423,7 +424,8 @@ fn render_job(s: &mut Session, p: &Value) -> Result<Value> {
         q["text"] = json!(tts::SAMPLE_SENTENCE);
     }
     let n = settings(cmd, &q, base.as_ref())?;
-    let key = cache_key(&n);
+    let pron = crate::pronounce::for_call(s, cmd, p)?;
+    let key = cache_key(&n, &pron);
     if s.tts_cache.lock().unwrap_or_else(PoisonError::into_inner).iter().any(|(k, _)| *k == key) {
         return Ok(json!({"job": null, "cached": true}));
     }
@@ -433,7 +435,7 @@ fn render_job(s: &mut Session, p: &Value) -> Result<Value> {
     let id = spawn(s, job, wait, "filmcraft-tts", move || {
         let t0 = web_time::Instant::now();
         *prog.status.lock().unwrap_or_else(PoisonError::into_inner) = "Synthesizing…".into();
-        let r = match render(&n, crate::transcript::models_dir().as_deref()) {
+        let r = match render(&n, crate::transcript::models_dir().as_deref(), &pron) {
             Ok(a) => {
                 let secs = a.seconds();
                 cache_put(&cache, key, Arc::new(a));
@@ -505,7 +507,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.preview",
             "Preview Narration",
-            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"sample":bool?,"clip":id?,"path":str?}"#,
+            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"sample":bool?,"clip":id?,"path":str?,"pronounce":{word:str}?}"#,
             always,
             preview,
             false,
@@ -523,7 +525,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.render",
             "Synthesize Narration",
-            r#"{"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"sample":bool?,"clip":id?,"wait":bool?}"#,
+            r#"{"text":str?,"voice":str?,"pitch":str?,"pace":f64?,"sample":bool?,"clip":id?,"wait":bool?,"pronounce":{word:str}?}"#,
             always,
             render_job,
             false,

@@ -46,6 +46,7 @@ pub mod previews;
 pub mod project_manager;
 pub mod project_panel;
 pub mod project_tools;
+pub mod pronounce;
 pub mod provenance;
 pub mod proxies;
 pub mod relink;
@@ -459,6 +460,8 @@ pub struct Session {
     pub assistant: assistant::AssistantHub,
     /// The Source Hub: media searches, the shortlist and downloads in progress (fork; roadmap F05).
     pub hub: hub::Hub,
+    /// How the narrator says your words: the channel list (fork; roadmap F06.1).
+    pub pronounce: pronounce::Channel,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -553,6 +556,7 @@ impl Session {
             media_scan: None,
             assistant: Default::default(),
             hub: Default::default(),
+            pronounce: Default::default(),
         }
     }
 
@@ -1299,6 +1303,8 @@ mod previews_tests;
 mod project_manager_tests;
 #[cfg(test)]
 mod project_panel_tests;
+#[cfg(test)]
+mod pronounce_tests;
 #[cfg(test)]
 mod provenance_tests;
 #[cfg(test)]

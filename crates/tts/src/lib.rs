@@ -122,6 +122,49 @@ pub struct VoiceInfo {
 pub struct Pronunciations(pub BTreeMap<String, String>);
 
 impl Pronunciations {
+    /// Longest word, longest way of saying it, and most entries kept.
+    pub const MAX_WORD: usize = 40;
+    pub const MAX_SAY: usize = 200;
+    pub const MAX_ENTRIES: usize = 1_000;
+
+    /// A word and how to say it, checked and tidied: the word lowercased (letters, apostrophes and
+    /// hyphens only), the way of saying it trimmed, either plain English words or phonemes between
+    /// slashes (`/kjuːbɹɪk/` style, using only the symbols the voice knows).
+    pub fn checked_entry(word: &str, say: &str) -> Result<(String, String), String> {
+        let word = word.trim().to_lowercase();
+        let n = word.chars().count();
+        if n == 0
+            || n > Self::MAX_WORD
+            || !word.chars().all(|c| c.is_alphabetic() || matches!(c, '\'' | '\u{2019}' | '-'))
+            || !word.chars().any(char::is_alphabetic)
+        {
+            return Err(format!("a word is 1 to {} letters (apostrophes and hyphens allowed)", Self::MAX_WORD));
+        }
+        let say = say.trim().to_string();
+        let n = say.chars().count();
+        if n == 0 || n > Self::MAX_SAY || say.chars().any(char::is_control) {
+            return Err(format!("how to say it is 1 to {} characters", Self::MAX_SAY));
+        }
+        if say.starts_with('/') {
+            let inner = say.strip_prefix('/').and_then(|r| r.strip_suffix('/')).filter(|i| !i.is_empty());
+            let ok = inner.is_some_and(|i| {
+                #[cfg(feature = "kokoro")]
+                {
+                    i.chars().all(|c| filmcraft_tts_text::SYMBOLS.contains(c))
+                }
+                #[cfg(not(feature = "kokoro"))]
+                {
+                    let _ = i;
+                    true
+                }
+            });
+            if !ok {
+                return Err("phonemes go between two slashes and use only the voice's own symbols; otherwise write the sound in plain words".into());
+            }
+        }
+        Ok((word, say))
+    }
+
     /// A short stable text for the list, to tell two lists apart (a cache key).
     pub fn fingerprint(&self) -> String {
         self.0.iter().map(|(w, s)| format!("{w}\u{1e}{s}")).collect::<Vec<_>>().join("\u{1d}")
@@ -237,6 +280,33 @@ mod tests {
         let other = Pronunciations([("kubrick".to_string(), "kyoo brick".to_string())].into_iter().collect());
         assert_ne!(list.fingerprint(), other.fingerprint());
         assert_eq!(list.fingerprint(), list.clone().fingerprint());
+    }
+
+    #[test]
+    fn an_entry_is_tidied_and_hostile_ones_are_refused() {
+        assert_eq!(Pronunciations::checked_entry("  Kubrick ", " koo brick ").unwrap(), ("kubrick".to_string(), "koo brick".to_string()));
+        assert!(Pronunciations::checked_entry("Reykjavík", "rake yah veek").is_ok());
+        assert!(Pronunciations::checked_entry("O'Brien", "oh bry en").is_ok() && Pronunciations::checked_entry("Jean-Luc", "zhon luke").is_ok());
+        for (w, say) in [
+            ("", "x"),
+            ("   ", "x"),
+            ("two words", "x"),
+            ("a1", "x"),
+            ("'-'", "x"),
+            ("x", ""),
+            ("x", "   "),
+            ("x", "bad\u{7}control"),
+            ("x", "/"),
+            ("x", "//"),
+            ("x", "/unterminated"),
+        ] {
+            assert!(Pronunciations::checked_entry(w, say).is_err(), "{w:?} {say:?}");
+        }
+        assert!(Pronunciations::checked_entry(&"w".repeat(41), "x").is_err() && Pronunciations::checked_entry("w", &"x".repeat(201)).is_err());
+        if cfg!(feature = "kokoro") {
+            assert!(Pronunciations::checked_entry("x", "/kjuːbɹɪk/").is_err(), "a symbol the voice does not have (the length mark)");
+            assert!(Pronunciations::checked_entry("x", "/kjˈubɹɪk/").is_ok());
+        }
     }
 
     #[test]
