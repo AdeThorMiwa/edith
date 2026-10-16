@@ -233,7 +233,7 @@ fn a_narrator_voice_is_saved_used_compared_and_deleted_from_the_panel() {
     let clip = made["clip"].as_u64().unwrap();
     d.frames(4);
     let chain = |d: &mut Driver| d.exec("tts.voicePresets", json!({"clip": clip}));
-    assert_eq!(chain(&mut d)["track"], json!({"inserts": 4, "plain": false}));
+    assert_eq!((chain(&mut d)["track"]["inserts"].clone(), chain(&mut d)["track"]["plain"].clone()), (json!(4), json!(false)));
     // open the section
     d.ok("ui.scroll", json!({"id": "tts.voice", "dx": 0.0, "dy": -2000.0}));
     d.frames(3);
@@ -271,4 +271,9 @@ fn a_narrator_voice_is_saved_used_compared_and_deleted_from_the_panel() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(chain(&mut d)["track"]["inserts"], 5, "Documentary has five effects");
+    d.frames(3);
+    let status = d.ok("ui.inspect", json!({}))["ui"]["status"].as_str().unwrap_or("").to_string();
+    assert!(status.contains("Documentary applied: 5 effects on A"), "{status}");
+    assert!(d.has("tts.voice.chain"), "the effects on the track are listed");
+    d.snapshot("tts-narrator-chain");
 }

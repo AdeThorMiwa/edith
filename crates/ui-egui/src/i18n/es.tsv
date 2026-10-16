@@ -3774,3 +3774,6 @@
 	Hear plain voice	Escuchar la voz sin efectos
 	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	Activa o desactiva los efectos de la pista de esta narración para oír lo que hacen. Reproduce la línea de tiempo como siempre.
 	Hear Plain Voice	Escuchar la voz sin efectos
+	Playing through {name}	Reproduciendo con {name}
+	{name} will be used for the next narration you add	Se usará {name} en la próxima narración que añadas
+	On this narration's track	En la pista de esta narración

@@ -3752,3 +3752,6 @@
 	Hear plain voice	听原声
 	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	开关此旁白轨道上的效果，以便听出它们的作用。照常播放时间线即可。
 	Hear Plain Voice	听原声
+	Playing through {name}	通过 {name} 播放
+	{name} will be used for the next narration you add	{name} 将用于你接下来添加的旁白
+	On this narration's track	此旁白轨道上

@@ -177,6 +177,12 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let n = settings(cmd, &q, base.as_ref())?;
     let audio = synthesize(s, cmd, &n, p)?;
+    // `through`: play the voice through a narrator voice's effects, or those on the narration's track
+    let through = crate::narrator::through(s, cmd, p)?;
+    let audio = match &through {
+        Some((effects, _)) => Arc::new(crate::narrator::run_effects(&audio, effects)),
+        None => audio,
+    };
     let seconds = audio.seconds();
     let samples = audio.samples.len();
     let rate = audio.sample_rate;
@@ -187,7 +193,7 @@ fn preview(s: &mut Session, p: &Value) -> Result<Value> {
         path = json!(dest);
     }
     s.tts_preview = Some(audio);
-    Ok(json!({"seconds": seconds, "samples": samples, "sampleRate": rate, "voice": n.voice, "path": path}))
+    Ok(json!({"seconds": seconds, "samples": samples, "sampleRate": rate, "voice": n.voice, "path": path, "through": through.map(|t| t.1)}))
 }
 
 /// Write `samples` as a new WAV and import it (its own undo step; callers collapse history).
@@ -524,7 +530,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "tts.preview",
             "Preview Narration",
-            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"take":0..99?,"sample":bool?,"clip":id?,"path":str?,"pronounce":{word:str}?}"#,
+            r#"{"text":str?,"voice":str?,"pitch":"default"?,"pace":f64?,"take":0..99?,"sample":bool?,"clip":id?,"path":str?,"pronounce":{word:str}?,"through":"voice name"|"track"?}"#,
             always,
             preview,
             false,

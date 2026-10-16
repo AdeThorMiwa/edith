@@ -164,6 +164,17 @@ pub fn show(
     {
         let plain = track["plain"].as_bool().unwrap_or(false);
         ui.add_space(8.0);
+        ui.label(RichText::new(tl!("On this narration's track")).size(11.0).color(t.text_faint));
+        let effects = track["effects"].as_array().cloned().unwrap_or_default();
+        let row = ui.horizontal_wrapped(|ui| {
+            for e in &effects {
+                let on = e["enabled"].as_bool().unwrap_or(true);
+                let text = RichText::new(e["name"].as_str().unwrap_or("")).size(11.5).color(if on { t.text } else { t.text_faint });
+                ui.label(if on { text } else { text.strikethrough() });
+            }
+        });
+        auto.add("tts.voice.chain", visible(ui, row.response.rect), "Effects on this narration's track");
+        ui.add_space(4.0);
         let b = ui
             .button(if plain { tl!("Hear with effects") } else { tl!("Hear plain voice") })
             .on_hover_text(tl!("Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual."));

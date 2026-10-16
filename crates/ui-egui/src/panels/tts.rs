@@ -136,12 +136,19 @@ fn run_now(app: &mut FilmcraftApp, cmd: &str, params: serde_json::Value, play: b
     match app.session.execute(cmd, params) {
         Ok(r) => {
             if play {
-                if let Err(e) = app.play_tts_preview() {
-                    app.ui.status = e;
+                match app.play_tts_preview() {
+                    Ok(_) => {
+                        app.ui.status = match r["through"].as_str() {
+                            Some(name) => tlf!("Playing through {name}", name = name),
+                            None => String::new(),
+                        }
+                    }
+                    Err(e) => app.ui.status = e,
                 }
             } else {
                 app.ui.status = match cmd {
                     "tts.create" => format!("Narration added on {}", r["track"].as_str().unwrap_or("an audio track")),
+                    "tts.applyVoicePreset" => r["summary"].as_str().unwrap_or("Narrator voice applied").to_string(),
                     _ => "Narration updated".into(),
                 };
             }
@@ -238,6 +245,16 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .and_then(|id| app.session.jobs.iter().find(|j| j.id == id))
         .map(|j| (j.progress.fraction(), j.progress.status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()));
     let editing = app.ui.tts.loaded_from.map(|(c, _)| c);
+    // Preview plays through the narrator voice chosen for a new narration, or through the effects on
+    // the loaded narration's track, so the effects can be heard without playing the timeline
+    let through: Option<serde_json::Value> = match (editing, app.ui.tts.preset.clone()) {
+        (Some(c), _) => {
+            let has = app.session.execute("tts.voicePresets", json!({"clip": c})).map(|r| r["track"]["inserts"].as_u64().unwrap_or(0) > 0).unwrap_or(false);
+            has.then(|| json!({"through": "track", "clip": c}))
+        }
+        (None, Some(name)) => Some(json!({"through": name})),
+        (None, None) => None,
+    };
     let mut actions: Vec<Action> = Vec::new();
     let mut note: Option<String> = None;
     let auto = &mut app.auto;
@@ -476,6 +493,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         d.pitch = p;
                     }
                     d.preset = Some(name.clone());
+                    if editing.is_none() {
+                        note = Some(tlf!("{name} will be used for the next narration you add", name = name));
+                    }
                     if let Some(c) = editing {
                         // render the narration with the voice's settings first, then apply the voice
                         let render = json!({"clip": c, "text": d.text, "voice": d.voice, "pitch": d.pitch.id(), "pace": d.pace, "take": d.take});
@@ -497,7 +517,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let can_say = filmcraft_tts::check_text(&d.text).is_ok() && (!natural || installed) && !busy;
     let pr = Rect::from_min_size(pos2(rect.min.x + PAD, fy), vec2(half, 28.0));
     if button(ui, &t, pr, Icon::Play, if busy { "Synthesizing…" } else { "Preview" }, false, can_say, "tts-preview").clicked() && can_say {
-        actions.push(Action::Run("tts.preview", d.params(), true));
+        let mut p = d.params();
+        if let (Some(t), Some(o)) = (&through, p.as_object_mut()) {
+            o.extend(t.as_object().cloned().unwrap_or_default());
+        }
+        actions.push(Action::Run("tts.preview", p, true));
     }
     auto.add("tts.preview", pr, "Preview");
     let sr = Rect::from_min_size(pos2(pr.max.x + 10.0, fy), vec2(half, 28.0));

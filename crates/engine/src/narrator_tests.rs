@@ -70,8 +70,8 @@ fn a_voice_saved_from_one_narration_is_applied_to_another_as_one_undo_step() {
     let (a, strip_a) = narrate(&mut s, &dir, 1.0, json!({"voice": "basic-female", "pace": 1.2, "pitch": "low"}));
     // build a chain on the first narration's track by applying a built-in, then change a value
     s.execute("tts.applyVoicePreset", json!({"name": "Documentary", "clip": a, "dir": dir.to_string_lossy()})).unwrap();
-    assert_eq!(inserts(&s, &strip_a).iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["highpass", "parametric_eq", "dynamics", "deesser", "studio_reverb"]);
-    s.execute("mixer.setInsert", json!({"strip": strip_a, "slot": 2, "params": {"ratio": 5.0}})).unwrap();
+    assert_eq!(inserts(&s, &strip_a).iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["parametric_eq", "dynamics", "deesser", "studio_reverb", "amplify"]);
+    s.execute("mixer.setInsert", json!({"strip": strip_a, "slot": 1, "params": {"ratio": 5.0}})).unwrap();
     let saved = s.execute("tts.saveVoicePreset", json!({"name": "  My narrator ", "clip": a})).unwrap();
     assert_eq!((saved["saved"].clone(), saved["replaced"].clone()), (json!("My narrator"), json!(false)));
     let mine = find(&s, "my narrator").unwrap();
@@ -85,7 +85,7 @@ fn a_voice_saved_from_one_narration_is_applied_to_another_as_one_undo_step() {
     assert_eq!((r["applied"].clone(), r["inserts"].clone()), (json!("My narrator"), json!(5)));
     assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
     assert_eq!(inserts(&s, &strip_b), inserts(&s, &strip_a));
-    assert_eq!(param(&s, &strip_b, 2, "ratio"), 5.0);
+    assert_eq!(param(&s, &strip_b, 1, "ratio"), 5.0);
     let item = s.active_sequence().unwrap().find_item(filmcraft_project::ClipId(b)).unwrap().1.item;
     let n = &s.project.narrations[&item];
     assert_eq!((n.voice.as_str(), n.pace, n.pitch), ("basic-female", 1.2, filmcraft_project::VocalPitch::Low));
@@ -143,7 +143,8 @@ fn hearing_the_plain_voice_switches_the_effects_off_and_back_on() {
     let mut s = demo();
     let (a, strip) = narrate(&mut s, &dir, 1.0, json!({"preset": "Clean"}));
     assert!(inserts(&s, &strip).iter().all(|x| x.1));
-    assert_eq!(s.execute("tts.voicePresets", json!({"clip": a})).unwrap()["track"], json!({"inserts": 4, "plain": false}));
+    let track = s.execute("tts.voicePresets", json!({"clip": a})).unwrap()["track"].clone();
+    assert_eq!((track["inserts"].clone(), track["plain"].clone(), track["effects"].as_array().unwrap().len()), (json!(4), json!(false), 4));
     let undo = s.history.undo.len();
     assert_eq!(s.execute("tts.compareVoice", json!({"clip": a})).unwrap()["plain"], true, "without `plain` it flips");
     assert_eq!(s.history.undo.len(), undo + 1);
@@ -301,4 +302,149 @@ fn real_voices_through_the_built_in_chains() {
         let _ = std::fs::remove_dir_all(&wavs);
     }
     assert!(hashes[0] != hashes[1] && hashes[0] != hashes[2] && hashes[1] != hashes[2], "each chain changes the sound");
+    // the panel's Preview: the same voice, plain and through each chain, with how much they differ
+    let mut s = demo();
+    let mut stats = Vec::new();
+    for (name, through) in [("preview-plain", None), ("preview-documentary", Some("Documentary")), ("preview-clean", Some("Clean"))] {
+        let path = out.join(format!("{name}.wav"));
+        let mut p = json!({"text": line, "voice": voice, "path": path.to_string_lossy()});
+        if let Some(t) = through {
+            p["through"] = json!(t);
+        }
+        s.execute("tts.preview", p).unwrap();
+        let x = s.tts_preview.as_ref().unwrap().samples.clone();
+        let rms = (x.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
+        let peak = x.iter().fold(0f32, |m, v| m.max(v.abs()));
+        // energy in the changes between samples: a rough measure of the treble
+        let hf = (x.windows(2).map(|w| f64::from(w[1] - w[0]).powi(2)).sum::<f64>() / x.len() as f64).sqrt();
+        println!("{name}: rms {rms:.4} peak {peak:.3} treble {hf:.4} seconds {:.2}", x.len() as f64 / 24_000.0);
+        stats.push((rms, hf));
+    }
+    assert!((stats[1].1 / stats[0].1 - 1.0).abs() > 0.05 || (stats[1].0 / stats[0].0 - 1.0).abs() > 0.02, "Documentary is measurably different: {stats:?}");
+    // a fair comparison: the processed voice is about as loud as the plain one (within about 1 dB)
+    for (i, name) in [(1, "Documentary"), (2, "Clean")] {
+        let ratio = stats[i].0 / stats[0].0;
+        assert!((0.89..=1.12).contains(&ratio), "{name} level is {ratio:.2} of the plain voice: {stats:?}");
+    }
+}
+
+fn preview(s: &mut Session, extra: Value) -> Value {
+    let mut p = json!({"text": "The fog rolled in over the valley. Nobody woke.", "voice": "basic-female"});
+    for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+        p[k] = v;
+    }
+    s.execute("tts.preview", p).unwrap()
+}
+
+fn previewed(s: &Session) -> Vec<f32> {
+    s.tts_preview.as_ref().unwrap().samples.clone()
+}
+
+fn rms(x: &[f32]) -> f64 {
+    (x.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / x.len().max(1) as f64).sqrt()
+}
+
+#[test]
+fn a_preview_can_be_played_through_a_narrator_voice_or_the_narrations_track() {
+    let dir = scratch("through");
+    let mut s = demo();
+    preview(&mut s, json!({}));
+    let plain = previewed(&s);
+    let r = preview(&mut s, json!({"through": "Documentary"}));
+    assert_eq!(r["through"], "Documentary");
+    let doc = previewed(&s);
+    assert!(doc != plain, "the effects change the sound");
+    assert!(
+        doc.len() >= plain.len() && doc.len() as f64 <= plain.len() as f64 + 24_000.0,
+        "the room adds at most a short tail: {} vs {}",
+        doc.len(),
+        plain.len()
+    );
+    assert!(doc.iter().all(|x| x.is_finite() && x.abs() <= 0.98 + 1e-6), "never clips");
+    assert!(
+        doc == {
+            preview(&mut s, json!({"through": "documentary"}));
+            previewed(&s)
+        },
+        "repeatable, and the name is not case-sensitive"
+    );
+    // the cleaner chain differs from the documentary one
+    preview(&mut s, json!({"through": "Clean"}));
+    assert!(previewed(&s) != doc);
+    // a voice with no effects, and no `through` at all, play the voice as it is
+    s.execute("tts.saveVoicePreset", json!({"name": "Bare", "voice": "basic-male"})).unwrap();
+    assert_eq!(preview(&mut s, json!({"through": "Bare"}))["through"], Value::Null);
+    assert!(previewed(&s) == plain);
+    // "track": the narration's own effects, honouring an effect switched off
+    let (clip, strip) =
+        narrate(&mut s, &dir, 1.0, json!({"voice": "basic-female", "text": "The fog rolled in over the valley. Nobody woke.", "preset": "Documentary"}));
+    preview(&mut s, json!({"through": "track", "clip": clip}));
+    let on_track = previewed(&s);
+    assert!(on_track != plain && on_track.len() > plain.len() - 1);
+    s.execute("tts.compareVoice", json!({"clip": clip, "plain": true})).unwrap();
+    assert_eq!(preview(&mut s, json!({"through": "track", "clip": clip}))["through"], Value::Null, "all effects off: the plain voice");
+    assert!(previewed(&s).len() == plain.len() || previewed(&s) != on_track);
+    s.execute("tts.compareVoice", json!({"clip": clip, "plain": false})).unwrap();
+    s.execute("mixer.setInsert", json!({"strip": strip, "slot": 4, "enabled": false})).unwrap();
+    preview(&mut s, json!({"through": "track", "clip": clip}));
+    assert!(previewed(&s) != on_track, "one effect off changes the sound");
+    // errors change nothing
+    for p in [json!({"through": "nope"}), json!({"through": 5}), json!({"through": ["Clean"]}), json!({"through": "track"})] {
+        let mut empty = demo();
+        assert!(
+            empty
+                .execute("tts.preview", {
+                    let mut q = json!({"text": "Hi there.", "voice": "basic-female"});
+                    q["through"] = p["through"].clone();
+                    q
+                })
+                .is_err(),
+            "{p}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn running_audio_through_effects_is_safe_for_tiny_silent_and_long_audio() {
+    use crate::narrator::run_effects;
+    let chain: Vec<filmcraft_project::EffectInstance> =
+        builtins()[0].inserts.iter().filter_map(|i| filmcraft_project::find_effect(&i.effect)).map(|d| d.instance()).collect();
+    for samples in [vec![], vec![0.5f32], vec![0.0; 24_000], vec![f32::NAN, 1.0, -1.0, 50.0]] {
+        let out = run_effects(&filmcraft_tts::Audio { samples: samples.clone(), sample_rate: 24_000 }, &chain);
+        assert!(out.samples.iter().all(|x| x.is_finite() && x.abs() <= 0.98 + 1e-6), "{:?}", samples.len());
+        assert_eq!(out.sample_rate, 24_000);
+    }
+    // an empty chain returns the same audio (apart from the headroom rule)
+    let a = filmcraft_tts::Audio { samples: (0..2400).map(|i| (i as f32 * 0.05).sin() * 0.5).collect(), sample_rate: 24_000 };
+    assert_eq!(run_effects(&a, &[]).samples, a.samples);
+    // sixty seconds of speech-like audio is processed in a few seconds at most
+    let long =
+        filmcraft_tts::Audio { samples: (0..24_000 * 60).map(|i| (i as f32 * 0.03).sin() * 0.4 * ((i / 6000) % 2) as f32).collect(), sample_rate: 24_000 };
+    let t = std::time::Instant::now();
+    let out = run_effects(&long, &chain);
+    assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());
+    assert!(out.samples.len() >= long.samples.len());
+}
+
+#[test]
+fn documentary_is_audibly_different_from_the_plain_voice_and_applying_says_what_it_did() {
+    let mut s = demo();
+    // measured, since it cannot be heard here: the chain adds body and presence, so the level moves
+    preview(&mut s, json!({}));
+    let plain = previewed(&s);
+    preview(&mut s, json!({"through": "Documentary"}));
+    let doc = previewed(&s);
+    let n = plain.len().min(doc.len());
+    let diff: Vec<f32> = (0..n).map(|i| doc[i] - plain[i]).collect();
+    assert!(rms(&diff) > rms(&plain) * 0.15, "the difference is at least 15% of the voice: {} vs {}", rms(&diff), rms(&plain));
+    // applying to a narration reports it
+    let dir = scratch("summary");
+    let (clip, strip) = narrate(&mut s, &dir, 1.0, json!({"voice": "basic-female"}));
+    let r = s.execute("tts.applyVoicePreset", json!({"name": "Documentary", "clip": clip, "dir": dir.to_string_lossy()})).unwrap();
+    assert_eq!(r["summary"], format!("Documentary applied: 5 effects on {strip}, narration rendered again"));
+    let listed = s.execute("tts.voicePresets", json!({"clip": clip})).unwrap();
+    assert_eq!(listed["track"]["effects"].as_array().unwrap().len(), 5);
+    assert_eq!(listed["track"]["effects"][0], json!({"name": "Parametric Equalizer", "enabled": true}));
+    let _ = std::fs::remove_dir_all(&dir);
 }

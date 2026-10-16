@@ -3776,3 +3776,6 @@
 	Hear plain voice	素の声を聞く
 	Switches the effects on this narration's track off or on, so you can hear what they do. Play the timeline as usual.	このナレーションのトラックのエフェクトをオフ／オンにして、効果を聞き比べます。タイムラインは通常どおり再生してください。
 	Hear Plain Voice	素の声を聞く
+	Playing through {name}	{name} を通して再生中
+	{name} will be used for the next narration you add	{name} は次に追加するナレーションに使われます
+	On this narration's track	このナレーションのトラック上

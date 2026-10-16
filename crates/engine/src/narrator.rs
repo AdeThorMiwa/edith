@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use filmcraft_project::narration::{MAX_PACE, MIN_PACE};
-use filmcraft_project::{EffectKind, ParamKind, ParamValue, TrackId, VocalPitch, find_effect};
+use filmcraft_project::{EffectInstance, EffectKind, Param, ParamKind, ParamValue, TrackId, VocalPitch, find_effect};
 use filmcraft_tts as tts;
 
 use crate::commands::{CommandSpec, always, bad, str_p};
@@ -155,35 +155,40 @@ fn ins(effect: &str, params: &[(&str, Value)]) -> Insert {
 /// The two built-in starting points (effects only).
 pub fn builtins() -> Vec<NarratorVoice> {
     let voice = |name: &str, inserts: Vec<Insert>| NarratorVoice { name: name.into(), voice: None, pace: None, pitch: None, inserts };
+    // The compressor has no make-up gain of its own, and a quieter voice sounds worse in any
+    // comparison, so each chain ends with an Amplify that brings the level back to the plain voice's.
     vec![
         voice(
             "Documentary",
             vec![
-                ins("highpass", &[("cutoff", json!(80.0))]),
                 ins(
                     "parametric_eq",
                     &[
+                        ("hp_on", json!(true)),
+                        ("hp_freq", json!(80.0)),
                         ("low_on", json!(true)),
                         ("low_freq", json!(110.0)),
-                        ("low_gain", json!(1.5)),
+                        ("low_gain", json!(3.0)),
                         ("b5_on", json!(true)),
                         ("b5_freq", json!(3500.0)),
-                        ("b5_gain", json!(2.0)),
+                        ("b5_gain", json!(3.5)),
                         ("b5_q", json!(1.0)),
                     ],
                 ),
-                ins("dynamics", &[("threshold", json!(-22.0)), ("ratio", json!(3.0)), ("attack", json!(12.0)), ("release", json!(140.0))]),
+                ins("dynamics", &[("threshold", json!(-26.0)), ("ratio", json!(4.0)), ("attack", json!(12.0)), ("release", json!(140.0))]),
                 ins("deesser", &[("frequency", json!(6500.0)), ("threshold", json!(-16.0)), ("reduction", json!(6.0))]),
-                ins("studio_reverb", &[("room", json!(25.0)), ("decay", json!(25.0)), ("damping", json!(60.0)), ("dry", json!(100.0)), ("wet", json!(6.0))]),
+                ins("studio_reverb", &[("room", json!(30.0)), ("decay", json!(30.0)), ("damping", json!(60.0)), ("dry", json!(100.0)), ("wet", json!(12.0))]),
+                ins("amplify", &[("gain", json!(DOC_MAKEUP_DB))]),
             ],
         ),
         voice(
             "Clean",
             vec![
-                ins("highpass", &[("cutoff", json!(90.0))]),
                 ins(
                     "parametric_eq",
                     &[
+                        ("hp_on", json!(true)),
+                        ("hp_freq", json!(90.0)),
                         ("b4_on", json!(true)),
                         ("b4_freq", json!(3000.0)),
                         ("b4_gain", json!(1.0)),
@@ -195,10 +200,15 @@ pub fn builtins() -> Vec<NarratorVoice> {
                 ),
                 ins("dynamics", &[("threshold", json!(-20.0)), ("ratio", json!(2.5)), ("attack", json!(10.0)), ("release", json!(120.0))]),
                 ins("deesser", &[("frequency", json!(7000.0)), ("threshold", json!(-14.0)), ("reduction", json!(5.0))]),
+                ins("amplify", &[("gain", json!(CLEAN_MAKEUP_DB))]),
             ],
         ),
     ]
 }
+
+/// Make-up gain at the end of each built-in chain, in dB (measured on the natural voice).
+const DOC_MAKEUP_DB: f64 = 5.0;
+const CLEAN_MAKEUP_DB: f64 = 1.5;
 
 fn read_file(s: &Session) -> Vec<NarratorVoice> {
     let Some(p) = file_path(s) else { return Vec::new() };
@@ -323,6 +333,80 @@ pub(crate) fn with_preset(s: &Session, cmd: &str, p: &Value) -> Result<(Value, V
     Ok((q, v.inserts))
 }
 
+// ---------------------------------------------------------------------------- preview through effects
+
+/// The effect instances for a saved voice's inserts (what `mixer.addInsert` and `setInsert` make).
+fn instances(inserts: &[Insert]) -> Vec<EffectInstance> {
+    inserts
+        .iter()
+        .filter_map(tidy_insert)
+        .filter(|i| i.enabled)
+        .filter_map(|i| {
+            let def = find_effect(&i.effect)?;
+            let mut e = def.instance();
+            for (k, v) in &i.params {
+                let Some(pd) = def.param(k) else { continue };
+                let value = match (&pd.kind, v) {
+                    (ParamKind::Bool, Value::Bool(b)) => ParamValue::Bool(*b),
+                    (ParamKind::Choice(_), Value::Number(n)) => ParamValue::Choice(n.as_u64().unwrap_or(0) as u32),
+                    (_, Value::Number(n)) => ParamValue::Float(n.as_f64().unwrap_or(0.0)),
+                    _ => continue,
+                };
+                e.params.insert(k.clone(), Param::new(value));
+            }
+            Some(e)
+        })
+        .collect()
+}
+
+/// What `tts.preview` plays the voice through: `through` is a narrator voice's name, or `"track"`
+/// for the enabled effects on the narration clip's track. None when there is no `through` or it has
+/// no effects; its summary line says what was used.
+pub(crate) fn through(s: &Session, cmd: &str, p: &Value) -> Result<Option<(Vec<EffectInstance>, String)>> {
+    let Some(v) = p.get("through").filter(|v| !v.is_null()) else { return Ok(None) };
+    let name = v.as_str().ok_or_else(|| bad(cmd, "`through` must be a narrator voice name or \"track\""))?;
+    if name == "track" {
+        let (_, track) = narration_track(s, cmd, p)?;
+        let list: Vec<EffectInstance> =
+            s.active_sequence().and_then(|q| q.strip(track).map(|t| t.effects.iter().filter(|e| e.enabled).cloned().collect())).unwrap_or_default();
+        return Ok((!list.is_empty()).then(|| (list, "the effects on its track".to_string())));
+    }
+    let v = find(s, name).ok_or_else(|| bad(cmd, format!("no narrator voice called \"{name}\" (see tts.voicePresets)")))?;
+    let list = instances(&v.inserts);
+    Ok((!list.is_empty()).then_some((list, v.name)))
+}
+
+/// The voice (mono, at its own rate) run through `effects` in order, as a track would: each effect's
+/// latency is taken out, a reverb gets its tail, and the result is kept below 0.98 so it never clips.
+pub(crate) fn run_effects(audio: &tts::Audio, effects: &[EffectInstance]) -> tts::Audio {
+    let rate = audio.sample_rate.max(1);
+    let mut left = audio.samples.clone();
+    let tail = if effects.iter().any(|e| e.effect.contains("reverb")) { (f64::from(rate) * 0.6) as usize } else { 0 };
+    left.resize(left.len().saturating_add(tail), 0.0);
+    let n = left.len();
+    let mut right = left.clone();
+    for e in effects {
+        let Some(mut fx) = filmcraft_render::audio_fx::configured(e, filmcraft_time::Tick::ZERO, rate) else { continue };
+        let lat = fx.latency();
+        left.resize(n + lat, 0.0);
+        right.resize(n + lat, 0.0);
+        for (l, r) in left.chunks_mut(4096).zip(right.chunks_mut(4096)) {
+            fx.process(&mut [l, r]);
+        }
+        left.drain(..lat.min(left.len()));
+        right.drain(..lat.min(right.len()));
+        left.truncate(n);
+        right.truncate(n);
+    }
+    let mut out: Vec<f32> = left.iter().zip(&right).map(|(l, r)| if (l + r).is_finite() { (l + r) * 0.5 } else { 0.0 }).collect();
+    let peak = out.iter().fold(0f32, |m, x| m.max(x.abs()));
+    if peak > 0.98 {
+        let g = 0.98 / peak;
+        out.iter_mut().for_each(|x| *x *= g);
+    }
+    tts::Audio { samples: out, sample_rate: audio.sample_rate }
+}
+
 // ---------------------------------------------------------------------------- commands
 
 fn voice_json(s: &Session, v: &NarratorVoice, builtin: bool) -> Value {
@@ -350,7 +434,8 @@ fn list_json(s: &Session, p: &Value) -> Value {
         let seq = s.active_sequence()?;
         let strip = seq.strip(t)?;
         let n = strip.effects.len();
-        Some(json!({"inserts": n, "plain": n > 0 && strip.effects.iter().all(|e| !e.enabled)}))
+        let names: Vec<Value> = strip.effects.iter().map(|e| json!({"name": e.def().map_or("", |d| d.name), "enabled": e.enabled})).collect();
+        Some(json!({"inserts": n, "plain": n > 0 && strip.effects.iter().all(|e| !e.enabled), "effects": names}))
     });
     json!({"voices": voices, "track": track})
 }
@@ -455,7 +540,14 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })?;
-    Ok(json!({"applied": v.name, "clip": clip.0, "inserts": v.inserts.len()}))
+    let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    let strip = crate::mixer::strip_label(seq, track);
+    let summary = match v.inserts.len() {
+        0 => format!("{} applied: the narration was rendered again (this voice has no effects)", v.name),
+        1 => format!("{} applied: 1 effect on {strip}, narration rendered again", v.name),
+        n => format!("{} applied: {n} effects on {strip}, narration rendered again", v.name),
+    };
+    Ok(json!({"applied": v.name, "clip": clip.0, "inserts": v.inserts.len(), "summary": summary}))
 }
 
 fn compare(s: &mut Session, p: &Value) -> Result<Value> {
