@@ -459,7 +459,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 
 ### Phase 2: plan and understand
 
-### F08 Planner core and Format Packs · Must · L · yours · ⬜
+### F08 Planner core and Format Packs · Must · L · yours · ✅
 
 **Needs:** F01 · **Unlocks:** F09, F11, F13, F16, F24.
 
@@ -472,7 +472,7 @@ The Edith agent is meant to improve on its own, as a researched and measured edi
 - Ships with two baseline packs, **Mystery** and **Explainer** (§6).
 - The Notes panel (`notes.rs`, `project.setNotes`) is the precedent: project-stored text with undo and agent access.
 
-**Done when.** Create a treatment from the Mystery pack, edit beats, build a skeleton on the timeline, save and reopen the project, and get the same planner back; commands have hostile-parameter tests.
+**Built 2026-10-16 (four commits).** `edith-planner` (new crate: the data and limits, Format Packs as TOML with a JSON Schema and `docs/format-packs.md`, exact integer division of a video's length so the beats always add up to the tick); the Mystery and Explainer packs from §6; commands `planner.get|packs|create|applyPack|clear|update|addSection|updateSection|addBeat|updateBeat|addShot|updateShot|move|delete|link|buildSkeleton|export|import` (stored in `Project::ext["edith.planner"]`, one undo step each, hostile-parameter tests); `buildSkeleton` puts a range marker per beat at the exact ticks and offline placeholders for unsourced shots, and is repeatable (markers move, nothing doubles); your own packs go in a `format-packs` folder beside the preferences and a broken file is named, not fatal. Also built, ahead of F09: a minimal **Planner** panel (Window ▸ Planner) to create a plan, edit beats and build the skeleton. **Left for later:** the pack's look preset is shown but not applied automatically; the A/V script, beat lane and board are F09. **Done when.** Create a treatment from the Mystery pack, edit beats, build a skeleton on the timeline, save and reopen the project, and get the same planner back; commands have hostile-parameter tests.
 
 **Notes.** The planner is the shared backbone: Source Hub slots, the coach's targets, the sound plan and the rough-cut assistant all read it.
 

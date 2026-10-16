@@ -36,6 +36,7 @@ pub mod monitor_view;
 pub mod multicam;
 pub mod notes;
 pub mod panel_state;
+pub mod planner;
 pub mod presets;
 pub mod project;
 pub mod project_dialogs;
@@ -118,6 +119,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::Assistant => assistant::show(app, ui, rect),
         PanelKind::Rights => rights_panel::show(app, ui, rect),
         PanelKind::FindMedia => find_media::show(app, ui, rect),
+        PanelKind::Planner => planner::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }

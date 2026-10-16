@@ -571,3 +571,48 @@ fn the_skeleton_refuses_what_it_cannot_do_and_changes_nothing() {
 fn mystery_replace(s: &mut Session) {
     s.execute("planner.create", json!({"pack": "mystery", "minutes": 3, "replace": true})).unwrap();
 }
+
+#[test]
+fn the_title_and_length_can_change_and_the_beats_can_be_fitted_to_a_new_length_exactly() {
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    s.execute("planner.update", json!({"title": "The Bell"})).unwrap();
+    assert_eq!(plan(&s).title, "The Bell");
+    // a new length alone leaves the beats, and the summary shows the difference
+    s.execute("planner.update", json!({"minutes": 12})).unwrap();
+    assert_eq!(plan(&s).target.0, 12 * 60 * TICKS_PER_SECOND);
+    assert_eq!(s.execute("planner.get", json!({})).unwrap()["summary"]["differenceTicks"], -(2 * 60 * TICKS_PER_SECOND));
+    // fit scales every beat in proportion and the beats add up to the length again, to the tick
+    let before: Vec<i64> = plan(&s).beats().map(|b| b.target.0).collect();
+    s.execute("planner.update", json!({"seconds": 777.5, "fit": true})).unwrap();
+    let after: Vec<i64> = plan(&s).beats().map(|b| b.target.0).collect();
+    assert_eq!(after.iter().sum::<i64>(), plan(&s).target.0);
+    assert!(before.iter().zip(&after).all(|(b, a)| (*a as f64 / *b as f64 - 777.5 / 600.0).abs() < 1e-6), "in proportion");
+    s.undo().unwrap();
+    assert_eq!(plan(&s).beats().map(|b| b.target.0).collect::<Vec<_>>(), before);
+    // an all-zero plan is shared equally
+    let mut z = demo();
+    z.execute("planner.create", json!({"title": "Z"})).unwrap();
+    let sec = z.execute("planner.addSection", json!({"name": "S"})).unwrap()["section"].as_u64().unwrap();
+    for n in ["a", "b", "c"] {
+        z.execute("planner.addBeat", json!({"section": sec, "name": n, "seconds": 0})).unwrap();
+    }
+    z.execute("planner.update", json!({"seconds": 10, "fit": true})).unwrap();
+    assert_eq!(plan(&z).planned().0, 10 * TICKS_PER_SECOND);
+    // refusals
+    let before = (*s.project).clone();
+    for p in [
+        json!({}),
+        json!({"fit": true}),
+        json!({"minutes": 1, "fit": "yes"}),
+        json!({"minutes": -1}),
+        json!({"minutes": 1e30}),
+        json!({"title": "x".repeat(300)}),
+        json!({"title": 5}),
+        json!({"fit": true, "title": "x"}),
+    ] {
+        assert!(s.execute("planner.update", p.clone()).is_err(), "accepted {p}");
+    }
+    assert_eq!(*s.project, before);
+    assert!(Session::default().execute("planner.update", json!({"title": "x"})).is_err(), "no plan");
+}

@@ -10,6 +10,7 @@
 //! | `planner.create {pack?, minutes\|seconds\|ticks, title?, clues?, replace?}` | a plan, empty or from a pack |
 //! | `planner.applyPack {pack, minutes\|seconds\|ticks?, clues?, keepNarration?}` | lay a pack's structure over the plan (keeping the writing of beats with the same name when asked) |
 //! | `planner.clear` | remove the plan |
+//! | `planner.update {title?, minutes\|seconds\|ticks?, fit?}` | the plan's title and video length; `fit: true` rescales the beats to the new length (in proportion, exactly) |
 //! | `planner.addSection {name, at?}`, `planner.updateSection {section, name}` | sections |
 //! | `planner.addBeat {section, name, at?, …fields}`, `planner.updateBeat {beat, …fields}` | beats; fields: `name`, `purpose`, `intensity` (0 to 10), `minutes`/`seconds`/`ticks`, `narration`, `visualIntent`, `soundNote`, `status` |
 //! | `planner.addShot {beat, intent?, shotType?, cameraMove?, seconds?, at?}`, `planner.updateShot {shot, …, source?}` | shots |
@@ -545,6 +546,41 @@ fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"exists": false}))
 }
 
+fn update_plan(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "planner.update";
+    let title = text(p, "title", MAX_TITLE, false, cmd)?;
+    let target = target_length(p, cmd)?;
+    let fit = match p.get("fit") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(cmd, "`fit` must be true or false")),
+    };
+    if title.is_none() && target.is_none() {
+        return Err(bad(cmd, "give a `title` or a length (`minutes`, `seconds` or `ticks`)"));
+    }
+    if fit && target.is_none_or(|t| t.0 <= 0) {
+        return Err(bad(cmd, "`fit` needs a length greater than zero"));
+    }
+    edit(s, cmd, "Edit Plan", |pl| {
+        if let Some(t) = title {
+            pl.title = t;
+        }
+        if let Some(t) = target {
+            pl.target = t;
+            if fit {
+                let weights: Vec<u64> = pl.beats().map(|b| b.target.0.max(0) as u64).collect();
+                let weights = if weights.iter().all(|w| *w == 0) { vec![1; weights.len()] } else { weights };
+                let parts = edith_planner::split(t.0, &weights);
+                for (b, part) in pl.sections.iter_mut().flat_map(|s| s.beats.iter_mut()).zip(parts) {
+                    b.target = Tick(part);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({"updated": true}))
+}
+
 fn add_section(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "planner.addSection";
     let name = text(p, "name", MAX_NAME, false, cmd)?.filter(|n| !n.trim().is_empty()).ok_or_else(|| bad(cmd, "`name` is required"))?;
@@ -814,6 +850,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("planner.create", "Create Plan", r#"{"pack":str?,"minutes"|"seconds"|"ticks":n?,"title":str?,"clues":n?,"replace":bool?}"#, create, true),
         spec("planner.applyPack", "Apply Format Pack", r#"{"pack":str,"minutes"|"seconds"|"ticks":n?,"clues":n?,"keepNarration":bool?}"#, apply_pack, true),
         spec("planner.clear", "Remove Plan", "{}", clear, true),
+        spec("planner.update", "Edit Plan", r#"{"title":str?,"minutes"|"seconds"|"ticks":n?,"fit":bool?}"#, update_plan, true),
         spec("planner.addSection", "Add Plan Section", r#"{"name":str,"at":n?}"#, add_section, true),
         spec("planner.updateSection", "Rename Plan Section", r#"{"section":id,"name":str}"#, update_section, true),
         spec("planner.addBeat", "Add Beat", add_beat_params, add_beat, true),

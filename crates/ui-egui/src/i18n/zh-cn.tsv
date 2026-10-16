@@ -3778,3 +3778,37 @@
 	Film grain, halation, soft bloom and gate flutter from one Film Look slider	用一个胶片风格滑块加入颗粒、光晕、柔光和片门抖动
 	Grain	颗粒
 	Letterbox	电影黑边
+	Build Plan Skeleton	生成计划骨架
+	Create Plan	创建计划
+	Edit Plan	编辑计划
+	Import Plan	导入计划
+	Planner	策划
+	Remove Plan	移除计划
+	Beat name	段落名称
+	Build skeleton	生成骨架
+	Create plan	创建计划
+	Drafted	已起草
+	Fit beats to the length	让各段落适配总时长
+	How far this beat has got. Click to move it on.	此段落的进度。点击即可推进。
+	Idea	构想
+	Intensity, 0 to 10	强度，0 到 10
+	Kind of video	视频类型
+	Length in minutes	时长（分钟）
+	Narration for this beat…	此段落的旁白…
+	Number of repeating beats	重复段落的数量
+	Plan a video before you cut it. Pick the kind of video and how long it should be, and the beats are laid out for you to edit.	剪辑之前先规划视频。选择视频类型和时长，各段落就会排好供你编辑。
+	Puts a marker for every beat on the timeline, and a placeholder clip for every planned shot. Run it again after changing the plan: markers move, nothing is doubled.	在时间线上为每个段落放置标记，并为每个计划镜头放置占位片段。修改计划后可再次运行：标记会移动，不会重复。
+	Removes the plan. Undo brings it back.	移除计划。撤销即可恢复。
+	Scales every beat in proportion so they add up to the length.	按比例缩放每个段落，使其总和等于时长。
+	Skeleton built: {m} markers, {p} placeholders	已生成骨架：{m} 个标记，{p} 个占位片段
+	Skipped pack file	已跳过的格式包文件
+	Sourced	已备素材
+	Start over	重新开始
+	This kind of video usually takes the look "{name}" (Effects ▸ Presets).	此类视频通常适合「{name}」风格（效果 ▸ 预设）。
+	Title of the video	视频标题
+	Usually {a}–{b} minutes	通常 {a}–{b} 分钟
+	What changes here?	这里发生了什么变化？
+	Write a length like 12:00, 90 (seconds) or 1.5m	请输入类似 12:00、90（秒）或 1.5m 的时长
+	Write the length as a number of minutes, from 1 to 600.	请以分钟数输入时长，范围 1 到 600。
+	yours	自定义
+	{beats} beats · {planned} planned of {target}	{beats} 个段落 · 已规划 {planned} / {target}

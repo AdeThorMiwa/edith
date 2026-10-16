@@ -3800,3 +3800,37 @@
 	Film grain, halation, soft bloom and gate flutter from one Film Look slider	Grano, halación, brillo suave y vaivén de película con un solo control de aspecto de película
 	Grain	Grano
 	Letterbox	Bandas de cine
+	Build Plan Skeleton	Crear esqueleto del plan
+	Create Plan	Crear plan
+	Edit Plan	Editar plan
+	Import Plan	Importar plan
+	Planner	Planificador
+	Remove Plan	Quitar plan
+	Beat name	Nombre del tramo
+	Build skeleton	Crear esqueleto
+	Create plan	Crear plan
+	Drafted	Redactado
+	Fit beats to the length	Ajustar los tramos a la duración
+	How far this beat has got. Click to move it on.	Hasta dónde ha llegado este tramo. Haz clic para avanzarlo.
+	Idea	Idea
+	Intensity, 0 to 10	Intensidad, de 0 a 10
+	Kind of video	Tipo de vídeo
+	Length in minutes	Duración en minutos
+	Narration for this beat…	Narración de este tramo…
+	Number of repeating beats	Número de tramos repetidos
+	Plan a video before you cut it. Pick the kind of video and how long it should be, and the beats are laid out for you to edit.	Planifica un vídeo antes de editarlo. Elige el tipo de vídeo y su duración, y los tramos se preparan para que los edites.
+	Puts a marker for every beat on the timeline, and a placeholder clip for every planned shot. Run it again after changing the plan: markers move, nothing is doubled.	Pone un marcador por cada tramo en la línea de tiempo y un clip provisional por cada plano previsto. Vuelve a ejecutarlo tras cambiar el plan: los marcadores se mueven y nada se duplica.
+	Removes the plan. Undo brings it back.	Quita el plan. Deshacer lo recupera.
+	Scales every beat in proportion so they add up to the length.	Escala cada tramo en proporción para que sumen la duración.
+	Skeleton built: {m} markers, {p} placeholders	Esqueleto creado: {m} marcadores, {p} clips provisionales
+	Skipped pack file	Archivo de paquete omitido
+	Sourced	Con material
+	Start over	Empezar de nuevo
+	This kind of video usually takes the look "{name}" (Effects ▸ Presets).	Este tipo de vídeo suele llevar el aspecto «{name}» (Efectos ▸ Preajustes).
+	Title of the video	Título del vídeo
+	Usually {a}–{b} minutes	Normalmente de {a} a {b} minutos
+	What changes here?	¿Qué cambia aquí?
+	Write a length like 12:00, 90 (seconds) or 1.5m	Escribe una duración como 12:00, 90 (segundos) o 1.5m
+	Write the length as a number of minutes, from 1 to 600.	Escribe la duración como un número de minutos, de 1 a 600.
+	yours	tuyo
+	{beats} beats · {planned} planned of {target}	{beats} tramos · {planned} planificados de {target}
