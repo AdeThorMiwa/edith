@@ -15,7 +15,7 @@ use crate::effects::{dec, enc, gaussian, hash3, noise_frame_seed};
 
 /// The ids this module implements.
 pub(super) fn handles(id: &str) -> bool {
-    matches!(id, "film_grain" | "halation" | "diffusion")
+    matches!(id, "film_grain" | "halation" | "diffusion" | "film_gate" | "anamorphic_streak" | "lens_fringing")
 }
 
 pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
@@ -23,6 +23,9 @@ pub(super) fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         "film_grain" => film_grain(img, e, cx),
         "halation" => halation(img, e, cx),
         "diffusion" => diffusion(img, e, cx),
+        "film_gate" => film_gate(img, e, cx),
+        "anamorphic_streak" => anamorphic_streak(img, e, cx),
+        "lens_fringing" => lens_fringing(img, e, cx),
         _ => {}
     }
 }
@@ -233,4 +236,178 @@ pub fn diffusion(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             p[2] = o[2] * a;
         });
     }
+}
+
+// ------------------------------------------------------------- film gate, streak, fringing
+
+/// Seconds of media time at this frame, from the exact tick (never from a float accumulator).
+fn clip_seconds(cx: &FxCtx) -> f64 {
+    cx.t.0 as f64 / filmcraft_time::TICKS_PER_SECOND as f64
+}
+
+/// `img` as seen shifted by (`dx`, `dy`) pixels (bilinear, edges repeated so no black borders).
+fn shifted(img: &Image, dx: f32, dy: f32) -> Image {
+    let (w, h) = (img.w, img.h);
+    let mut out = Image::new(w, h);
+    out.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            let (sx, sy) = (x as f32 - dx, y as f32 - dy);
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as isize, y0 as isize);
+            let (a, b, c, d) = (img.get_clamped(x0, y0), img.get_clamped(x0 + 1, y0), img.get_clamped(x0, y0 + 1), img.get_clamped(x0 + 1, y0 + 1));
+            for k in 0..4 {
+                row[x * 4 + k] = (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (c[k] * (1.0 - fx) + d[k] * fx) * fy;
+            }
+        }
+    });
+    out
+}
+
+/// Film gate: the picture wanders a little as the film moves through the projector gate (weave),
+/// exposure wobbles from frame to frame (flicker), and dust and scratches ride on the print.
+pub fn film_gate(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    if img.w == 0 || img.h == 0 {
+        return;
+    }
+    let scale = num(cx.px_scale, 1.0).clamp(0.05, 8.0);
+    let weave = num(fv(e, "weave", cx), 0.0).clamp(0.0, 200.0) * scale;
+    let speed = frac(fv(e, "weave_speed", cx));
+    let flicker = frac(fv(e, "flicker", cx));
+    let dust = frac(fv(e, "dust", cx));
+    let scratches = frac(fv(e, "scratches", cx));
+    let seed = (num(fv(e, "seed", cx), 0.0).max(0.0) as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let secs = clip_seconds(cx);
+    let frame = noise_frame_seed(cx) ^ seed;
+    // weave: slow smooth wander in both directions (up to `weave` pixels either way)
+    if weave > 0.0 && speed > 0.0 {
+        let t = secs * (0.2 + 2.8 * f64::from(speed));
+        let (dx, dy) = (noise1(t, 1, seed) * weave, noise1(t, 2, seed) * weave * 0.6);
+        if dx.abs() > 1e-3 || dy.abs() > 1e-3 {
+            *img = shifted(img, dx, dy);
+        }
+    }
+    // flicker: a different exposure every frame, up to half a stop at 100%
+    if flicker > 0.0 {
+        let n = hash3(7, 11, frame ^ 0xF11C_4E55) * 2.0 - 1.0;
+        let gain = (2f32).powf(n * flicker * 0.5);
+        img.px.par_chunks_mut(4).for_each(|p| {
+            for v in &mut p[..3] {
+                *v *= gain;
+            }
+        });
+    }
+    let (w, h) = (img.w, img.h);
+    // dust: a few small light and dark specks that exist for a single frame
+    if dust > 0.0 {
+        let count = (dust * (w * h) as f32 / 30_000.0).round().clamp(0.0, 400.0) as usize;
+        for i in 0..count {
+            let r = |k: u64| hash3(i, k as usize, frame ^ 0xD057);
+            let (cxp, cyp) = (r(1) * w as f32, r(2) * h as f32);
+            let rad = (0.6 + r(3) * 1.8) * scale;
+            let light = r(4) > 0.4;
+            let strength = 0.35 + 0.5 * r(5);
+            let reach = rad.ceil() as isize + 1;
+            for y in (cyp as isize - reach).max(0)..(cyp as isize + reach + 1).min(h as isize) {
+                for x in (cxp as isize - reach).max(0)..(cxp as isize + reach + 1).min(w as isize) {
+                    let d = ((x as f32 + 0.5 - cxp).powi(2) + (y as f32 + 0.5 - cyp).powi(2)).sqrt();
+                    let k = (1.0 - d / rad).clamp(0.0, 1.0) * strength;
+                    if k > 0.0 {
+                        let i = (y as usize * w + x as usize) * 4;
+                        for c in 0..3 {
+                            img.px[i + c] = if light { img.px[i + c] + (img.px[i + 3] - img.px[i + c]) * k } else { img.px[i + c] * (1.0 - k) };
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // scratches: thin vertical lines that stay for a few frames
+    if scratches > 0.0 {
+        let epoch = ((secs * 24.0) / 5.0).floor() as i64 as u64 ^ seed;
+        let count = (scratches * 4.0).ceil() as usize;
+        for i in 0..count {
+            let r = |k: usize| hash3(i, k, epoch.wrapping_mul(0x9E37_79B9) ^ 0x5C4A);
+            if r(1) > scratches * 1.4 + 0.15 {
+                continue;
+            }
+            let x = (r(2) * w as f32) as isize;
+            let (y0, len) = ((r(3) * 0.5 * h as f32) as usize, ((0.35 + 0.65 * r(4)) * h as f32) as usize);
+            let light = r(5) > 0.3;
+            let wide = (scale.round() as isize).max(1);
+            for xx in x..x + wide {
+                if xx < 0 || xx >= w as isize {
+                    continue;
+                }
+                for y in y0..(y0 + len).min(h) {
+                    let i = (y * w + xx as usize) * 4;
+                    for c in 0..3 {
+                        img.px[i + c] = if light { img.px[i + c] + (img.px[i + 3] - img.px[i + c]) * 0.35 } else { img.px[i + c] * 0.7 };
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Anamorphic streak: bright lights smear into long horizontal lines, coloured by the lens coating
+/// (blue by default), because the squeezed lens blurs sideways far more than up and down.
+pub fn anamorphic_streak(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let strength = frac(fv(e, "strength", cx));
+    if strength <= 0.0 || img.w == 0 || img.h == 0 {
+        return;
+    }
+    let threshold = frac(fv(e, "threshold", cx));
+    let length = num(fv(e, "length", cx), 1.0).clamp(0.0, 4000.0) * num(cx.px_scale, 1.0).clamp(0.05, 8.0);
+    let tint_c = lin(cv(e, "tint", cx).map(|v| num(v, 1.0).clamp(0.0, 1.0)));
+    let hi = highlights(img, threshold, 0.12);
+    // a long soft tail and a shorter, brighter core, both only horizontal (a touch of height keeps it a line)
+    let mut tail = hi.clone();
+    gaussian(&mut tail, length * 0.5, 0.8 * num(cx.px_scale, 1.0).clamp(0.05, 8.0), true);
+    let mut core = hi;
+    gaussian(&mut core, length * 0.15, 0.6 * num(cx.px_scale, 1.0).clamp(0.05, 8.0), true);
+    let tl = luma(tint_c).max(1e-3);
+    let gain = tint_c.map(|g| g / tl * strength * 1.6);
+    img.px.par_chunks_mut(4).zip(tail.px.par_chunks(4).zip(core.px.par_chunks(4))).for_each(|(p, (t, c))| {
+        if p[3] <= 1e-6 {
+            return;
+        }
+        let l = luma([t[0], t[1], t[2]]) * 0.6 + luma([c[0], c[1], c[2]]) * 0.4;
+        add_light(p, [l * gain[0], l * gain[1], l * gain[2]]);
+    });
+}
+
+/// Lens fringing: a real lens focuses red and blue slightly apart, which shows as coloured edges
+/// that grow toward the corners. Red is pushed out and blue pulled in, by up to `amount` pixels at
+/// the corners and not at all at the centre.
+pub fn lens_fringing(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
+    let amount = num(fv(e, "amount", cx), 0.0).clamp(0.0, 200.0) * num(cx.px_scale, 1.0).clamp(0.05, 8.0);
+    if amount <= 0.0 || img.w == 0 || img.h == 0 {
+        return;
+    }
+    let (w, h) = (img.w, img.h);
+    let (mx, my) = (w as f32 / 2.0, h as f32 / 2.0);
+    let rmax = (mx * mx + my * my).sqrt().max(1.0);
+    let src = img.clone();
+    // one channel sampled `k` pixel-fractions along the way out from the centre
+    let sample = |x: f32, y: f32, c: usize| {
+        let (x0, y0) = (x.floor(), y.floor());
+        let (fx, fy) = (x - x0, y - y0);
+        let (x0, y0) = (x0 as isize, y0 as isize);
+        let v = |dx: isize, dy: isize| src.get_clamped(x0 + dx, y0 + dy)[c];
+        (v(0, 0) * (1.0 - fx) + v(1, 0) * fx) * (1.0 - fy) + (v(0, 1) * (1.0 - fx) + v(1, 1) * fx) * fy
+    };
+    img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            let (px, py) = (x as f32 + 0.5 - mx, y as f32 + 0.5 - my);
+            let r = (px * px + py * py).sqrt();
+            let d = amount * (r / rmax).powi(2);
+            let (ux, uy) = if r > 1e-6 { (px / r, py / r) } else { (0.0, 0.0) };
+            // the sample for a pixel lies nearer the centre for red (so red lands further out)
+            let red = sample(x as f32 - ux * d, y as f32 - uy * d, 0);
+            let blue = sample(x as f32 + ux * d, y as f32 + uy * d, 2);
+            row[x * 4] = red;
+            row[x * 4 + 2] = blue;
+        }
+    });
 }

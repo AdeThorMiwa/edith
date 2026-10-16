@@ -6,7 +6,7 @@ use filmcraft_time::Tick;
 use crate::effects::{FxCtx, dec, enc};
 use crate::image::Image;
 
-const IDS: &[&str] = &["film_grain", "halation", "diffusion"];
+const IDS: &[&str] = &["film_grain", "halation", "diffusion", "film_gate", "anamorphic_streak", "lens_fringing"];
 
 fn cx_at(t: i64) -> FxCtx<'static> {
     FxCtx {
@@ -449,6 +449,195 @@ fn hostile_values_cannot_break_halation_or_diffusion() {
             }
             for scale in [1.0, 0.0, f32::NAN, 1e9] {
                 let mut c = cx_at(0);
+                c.px_scale = scale;
+                let o = run(&e, &img, &c);
+                assert!(o.px.iter().all(|x| x.is_finite() && *x >= -1e-3), "{id} {v} {scale}");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- film gate, streak, fringing
+
+fn secs(s: f64) -> i64 {
+    (s * filmcraft_time::TICKS_PER_SECOND as f64) as i64
+}
+
+fn gate(weave: f64, flicker: f64, dust: f64, scratches: f64) -> EffectInstance {
+    let mut e = inst("film_gate");
+    setf(&mut e, "weave", weave);
+    setf(&mut e, "flicker", flicker);
+    setf(&mut e, "dust", dust);
+    setf(&mut e, "scratches", scratches);
+    e
+}
+
+#[test]
+fn a_gate_with_everything_at_zero_is_the_identity() {
+    let img = picture(64, 48);
+    assert_eq!(run(&gate(0.0, 0.0, 0.0, 0.0), &img, &cx_at(secs(1.3))).px, img.px);
+}
+
+#[test]
+fn weave_moves_the_picture_a_little_and_never_further_than_set_and_varies_over_time() {
+    // a vertical stripe: where it lands shows the horizontal shift
+    let mut img = flat(200, 40, 0.1);
+    for y in 0..40 {
+        for x in 98..102 {
+            img.px[(y * 200 + x) * 4..(y * 200 + x) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
+        }
+    }
+    let centre = |o: &Image| {
+        let row: Vec<f32> = (0..200).map(|x| px(o, x, 20)[0]).collect();
+        let total: f32 = row.iter().sum();
+        let sum_x: f32 = row.iter().enumerate().map(|(x, v)| x as f32 * v).sum();
+        sum_x / total
+    };
+    let base = centre(&img);
+    let weave = gate(6.0, 0.0, 0.0, 0.0);
+    let mut seen = Vec::new();
+    for k in 0..40 {
+        let o = run(&weave, &img, &cx_at(secs(k as f64 * 0.37)));
+        let d = centre(&o) - base;
+        assert!(d.abs() <= 6.0 + 0.6, "moved {d} pixels, more than the setting");
+        seen.push(d);
+    }
+    let (lo, hi) = (seen.iter().cloned().fold(f32::MAX, f32::min), seen.iter().cloned().fold(f32::MIN, f32::max));
+    assert!(hi - lo > 1.5, "it wanders: {lo} to {hi}");
+    // smooth: neighbouring frames are close
+    let a = run(&weave, &img, &cx_at(secs(2.0)));
+    let b = run(&weave, &img, &cx_at(secs(2.0) + secs(1.0 / 24.0)));
+    assert!((centre(&a) - centre(&b)).abs() < 1.5);
+    // the picture's edges are not exposed as black borders
+    let o = run(&weave, &img, &cx_at(secs(3.1)));
+    assert!(px(&o, 0, 0)[0] > 0.005 && px(&o, 199, 39)[0] > 0.005, "the background (linear 0.01) reaches the corners");
+}
+
+#[test]
+fn flicker_changes_the_exposure_from_frame_to_frame_within_its_range() {
+    let img = flat(32, 24, 0.4);
+    let level = |t: f64, flicker: f64| mean(&display_luma(&run(&gate(0.0, flicker, 0.0, 0.0), &img, &cx_at(secs(t)))));
+    let base = level(0.0, 0.0);
+    let samples: Vec<f64> = (0..60).map(|k| level(k as f64 / 24.0, 100.0)).collect();
+    let (lo, hi) = (samples.iter().cloned().fold(f64::MAX, f64::min), samples.iter().cloned().fold(f64::MIN, f64::max));
+    assert!(hi - lo > 0.05, "it flickers: {lo} to {hi}");
+    // half a stop either way at most: a factor of about 1.41 in linear light
+    let lin = |v: f64| dec([v as f32; 3])[0] as f64;
+    assert!(lin(hi) / lin(base) < 1.45 && lin(lo) / lin(base) > 1.0 / 1.45, "{lo} {hi} {base}");
+    assert!(level(0.5, 20.0) != level(0.5 + 1.0 / 24.0, 20.0));
+}
+
+#[test]
+fn dust_and_scratches_add_a_few_marks_that_change_between_frames() {
+    let img = flat(240, 160, 0.4);
+    let marks = |o: &Image| o.px.as_chunks::<4>().0.iter().zip(img.px.as_chunks::<4>().0).filter(|(a, b)| (a[0] - b[0]).abs() > 0.01).count();
+    let dusty = run(&gate(0.0, 0.0, 80.0, 0.0), &img, &cx_at(secs(1.0)));
+    let n = marks(&dusty);
+    assert!(n > 10 && n < 240 * 160 / 10, "a few specks, not a haze: {n}");
+    assert!(dusty.px != run(&gate(0.0, 0.0, 80.0, 0.0), &img, &cx_at(secs(1.0) + secs(1.0 / 24.0))).px, "dust is different on the next frame");
+    // frames 21 and 22 share one scratch pattern (it changes every five frames)
+    let f21 = secs(21.0 / 24.0);
+    let scratched = run(&gate(0.0, 0.0, 0.0, 100.0), &img, &cx_at(f21));
+    // scratches are vertical lines: some column differs along many rows
+    let by_col: Vec<usize> = (0..240).map(|x| (0..160).filter(|&y| (px(&scratched, x, y)[0] - px(&img, x, y)[0]).abs() > 0.01).count()).collect();
+    assert!(by_col.iter().any(|&c| c > 40), "a long thin line: {:?}", by_col.iter().max());
+    assert!(by_col.iter().filter(|&&c| c > 0).count() <= 12, "only a few columns");
+    // a scratch stays for a few frames
+    let next = run(&gate(0.0, 0.0, 0.0, 100.0), &img, &cx_at(f21 + secs(1.0 / 24.0)));
+    assert_eq!(scratched.px, next.px);
+}
+
+fn streak(strength: f64) -> EffectInstance {
+    let mut e = inst("anamorphic_streak");
+    setf(&mut e, "strength", strength);
+    e
+}
+
+#[test]
+fn a_streak_runs_sideways_from_a_highlight_and_not_up_and_down() {
+    let img = spot(256, 160, 0.02, 3);
+    assert_eq!(run(&streak(0.0), &img, &cx_at(0)).px, img.px);
+    let o = run(&streak(80.0), &img, &cx_at(0));
+    let (side, above) = (px(&o, 128 + 3 + 40, 80)[0], px(&o, 128, 80 - 3 - 40)[0]);
+    let base = px(&img, 128, 5)[0];
+    assert!(side > base + 0.008, "light along the row: {side}");
+    assert!(above < base + 0.003, "none above the light: {above} vs {base}");
+    // blue-ish by default
+    let p = px(&o, 128 + 3 + 40, 80);
+    assert!(p[2] > p[0] * 1.3, "blue tint: {p:?}");
+    // a picture with no highlights gets no streaks
+    let dim = flat(64, 48, 0.3);
+    assert_eq!(run(&streak(100.0), &dim, &cx_at(0)).px, dim.px);
+}
+
+#[test]
+fn a_longer_streak_reaches_further() {
+    let reach = |len: f64| {
+        let mut e = streak(90.0);
+        setf(&mut e, "length", len);
+        let o = run(&e, &spot(400, 100, 0.0, 3), &cx_at(0));
+        (1..190).take_while(|d| px(&o, 200 + 3 + d, 50)[0] > 0.003).count()
+    };
+    assert!(reach(300.0) as f32 > reach(60.0) as f32 * 1.6, "{} vs {}", reach(60.0), reach(300.0));
+}
+
+fn fringe(amount: f64) -> EffectInstance {
+    let mut e = inst("lens_fringing");
+    setf(&mut e, "amount", amount);
+    e
+}
+
+#[test]
+fn fringing_is_zero_at_the_centre_and_grows_toward_the_corners() {
+    // a white vertical bar on black, at the centre and near the right edge
+    let make = |x0: usize| {
+        let mut img = flat(240, 120, 0.0);
+        for y in 0..120 {
+            for x in x0..x0 + 6 {
+                img.px[(y * 240 + x) * 4..(y * 240 + x) * 4 + 4].copy_from_slice(&[1.0, 1.0, 1.0, 1.0]);
+            }
+        }
+        img
+    };
+    assert_eq!(run(&fringe(0.0), &make(117), &cx_at(0)).px, make(117).px);
+    let spread = |x0: usize| {
+        let o = run(&fringe(8.0), &make(x0), &cx_at(0));
+        // how far apart red's and blue's centres of mass are along the middle row
+        let com = |c: usize| {
+            let total: f32 = (0..240).map(|x| px(&o, x, 60)[c]).sum();
+            (0..240).map(|x| x as f32 * px(&o, x, 60)[c]).sum::<f32>() / total
+        };
+        (com(0) - com(2)).abs()
+    };
+    let (centre, edge) = (spread(117), spread(228));
+    assert!(centre < 0.2, "no fringe at the centre: {centre}");
+    assert!(edge > 1.0, "a fringe near the edge: {edge}");
+    // red is pushed outward: at the right edge red lies to the right of blue
+    let o = run(&fringe(8.0), &make(228), &cx_at(0));
+    let com = |c: usize| {
+        let total: f32 = (0..240).map(|x| px(&o, x, 60)[c]).sum();
+        (0..240).map(|x| x as f32 * px(&o, x, 60)[c]).sum::<f32>() / total
+    };
+    assert!(com(0) > com(2), "red out, blue in");
+    // green and alpha are never moved
+    let g_in = (0..240).map(|x| px(&make(228), x, 60)[1]).collect::<Vec<_>>();
+    let g_out = (0..240).map(|x| px(&o, x, 60)[1]).collect::<Vec<_>>();
+    assert_eq!(g_in, g_out);
+}
+
+#[test]
+fn hostile_values_cannot_break_gate_streak_or_fringing() {
+    let img = spot(48, 32, 0.1, 5);
+    for id in ["film_gate", "anamorphic_streak", "lens_fringing"] {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -5.0, 1e30, 1e-30] {
+            let mut e = inst(id);
+            for p in find_effect(id).unwrap().params.iter() {
+                if matches!(p.kind, ParamKind::Float { .. }) {
+                    setf(&mut e, p.id, v);
+                }
+            }
+            for (scale, t) in [(1.0, 0), (0.0, secs(3.0)), (f32::NAN, i64::MAX), (1e9, i64::MIN)] {
+                let mut c = cx_at(t);
                 c.px_scale = scale;
                 let o = run(&e, &img, &c);
                 assert!(o.px.iter().all(|x| x.is_finite() && *x >= -1e-3), "{id} {v} {scale}");

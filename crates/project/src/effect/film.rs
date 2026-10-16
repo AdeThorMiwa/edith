@@ -42,6 +42,31 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
+            "film_gate",
+            "Film Gate",
+            FILM,
+            vec![
+                fs("weave", "Weave", 3.0, (0.0, 60.0), (0.0, 20.0), "px", 1),
+                pctf("weave_speed", "Weave Speed", 40.0),
+                pctf("flicker", "Flicker", 8.0),
+                pctf("dust", "Dust", 25.0),
+                pctf("scratches", "Scratches", 15.0),
+                fs("seed", "Random Seed", 0.0, (0.0, 10000.0), (0.0, 1000.0), "", 0),
+            ],
+        ),
+        video(
+            "anamorphic_streak",
+            "Anamorphic Streak",
+            FILM,
+            vec![
+                pctf("strength", "Strength", 40.0),
+                pctf("threshold", "Highlight Threshold", 85.0),
+                fs("length", "Length", 400.0, (1.0, 2000.0), (1.0, 1000.0), "px", 0),
+                col("tint", "Tint", [0.45, 0.65, 1.0, 1.0]),
+            ],
+        ),
+        video("lens_fringing", "Lens Fringing", FILM, vec![fs("amount", "Amount", 3.0, (0.0, 60.0), (0.0, 20.0), "px", 1)]),
+        video(
             "film_grain",
             "Film Grain",
             FILM,

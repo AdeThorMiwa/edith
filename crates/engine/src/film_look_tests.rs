@@ -101,3 +101,28 @@ fn halation_and_diffusion_apply_by_name_change_the_frame_and_undo_exactly() {
         assert_eq!(before, frame(&mut s, &format!("13-{id}-undone")));
     }
 }
+
+#[test]
+fn film_gate_streak_and_fringing_apply_by_name_change_the_frame_and_turn_off_exactly() {
+    let cases: [(&str, &str, &[&str]); 3] = [
+        ("Film Gate", "film_gate", &["weave", "flicker", "dust", "scratches"]),
+        ("Anamorphic Streak", "anamorphic_streak", &["strength"]),
+        ("Lens Fringing", "lens_fringing", &["amount"]),
+    ];
+    for (name, id, zero) in cases {
+        let (mut s, clip) = session_with(DemoScene::OceanSunset);
+        let before = frame(&mut s, &format!("20-{id}-original"));
+        let undo0 = s.history.undo.len();
+        s.execute("effects.apply", json!({"clips": [clip], "effect": name})).unwrap();
+        let with = frame(&mut s, &format!("21-{id}"));
+        assert_ne!(before, with, "{name} changes the picture");
+        for p in zero {
+            s.execute("effects.setParam", json!({"clip": clip, "effect": id, "param": p, "value": 0.0})).unwrap();
+        }
+        assert_eq!(before, frame(&mut s, &format!("22-{id}-off")), "{name} at zero leaves the picture as it was");
+        while s.history.undo.len() > undo0 {
+            s.undo().unwrap();
+        }
+        assert_eq!(before, frame(&mut s, &format!("23-{id}-undone")));
+    }
+}
