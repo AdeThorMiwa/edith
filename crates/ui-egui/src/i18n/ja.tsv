@@ -3933,3 +3933,31 @@
 	■ how fast it cuts	■ カットの速さ
 	— planned intensity	— 計画した強度
 	┄ rhythm of “{name}”	┄ 「{name}」のリズム
+	Add a reference someone shared as a small file: numbers only.	誰かが小さなファイルで共有してくれたリファレンスを追加します（数値のみ）。
+	Add a reference	リファレンスを追加
+	Added to your references.	リファレンスに追加しました。
+	Compare	比較
+	Film or sound	映像または音声
+	Films you admire, kept as numbers: how long their shots are, how their pace moves, how the picture and sound feel. Nothing of the film is kept. Use only films you have the right to use.	好きな作品を数値として保存します：ショットの長さ、テンポの動き、映像と音の質感。作品そのものは保存されません。使用する権利のある作品だけを使ってください。
+	Fingerprint imported.	フィンガープリントを読み込みました。
+	Fingerprint saved.	フィンガープリントを保存しました。
+	Fingerprint	フィンガープリント
+	Import a fingerprint…	フィンガープリントを読み込む…
+	Measure and add	測定して追加
+	Name (the file's name if you leave it)	名前（空欄ならファイル名）
+	No references yet.	リファレンスはまだありません。
+	Path to a film file	映像ファイルのパス
+	Reads the film and keeps only its numbers. A long film takes a few minutes; you can carry on.	作品を読み取り、数値だけを保存します。長い作品は数分かかりますが、作業を続けられます。
+	Really remove?	本当に削除しますか？
+	References	リファレンス
+	Stop using as target	目標として使うのをやめる
+	Use as target	目標として使う
+	What it suggests	示唆すること
+	Why you may use it: public domain, your own export, a licence…	使用してよい理由：パブリックドメイン、自分の書き出し、ライセンスなど…
+	not compared: {part}	比較していません：{part}
+	pace quickens	テンポが速まる
+	pace slows	テンポが遅くなる
+	pace steady	テンポは一定
+	shots average	ショットの平均
+	the coach aims at this	コーチはこれを目標にしています
+	“{sequence}” against “{reference}”: {close} close, {differ} differ	「{sequence}」と「{reference}」：{close}件が近く、{differ}件が異なる

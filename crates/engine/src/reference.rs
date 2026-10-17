@@ -496,7 +496,9 @@ fn get_command(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "reference.get";
     let id = id_param(p, cmd)?;
     let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}; `reference.list` shows what there is")))?;
-    Ok(json!({"id": r.id, "name": r.name, "rights": r.rights, "addedUnix": r.added_unix, "fingerprint": to_value(&r.fingerprint)}))
+    Ok(
+        json!({"id": r.id, "name": r.name, "rights": r.rights, "addedUnix": r.added_unix, "fingerprint": to_value(&r.fingerprint), "readings": r.fingerprint.readings()}),
+    )
 }
 
 fn rename_command(s: &mut Session, p: &Value) -> Result<Value> {
