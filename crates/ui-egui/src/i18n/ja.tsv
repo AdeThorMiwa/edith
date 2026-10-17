@@ -3972,3 +3972,35 @@
 	picture shape	画面の形
 	warm ({k} K)	暖色 ({k} K)
 	brightness {b} · contrast {c} · saturation {s} · {w}	明るさ {b} · コントラスト {c} · 彩度 {s} · {w}
+	Add a picture	画像を追加
+	Add from file	ファイルから追加
+	Add this frame	このフレームを追加
+	Caption (optional)	キャプション（任意）
+	Caption	キャプション
+	Compare with the frame at the playhead	再生ヘッドのフレームと比較
+	For a film: the moment to take, in seconds. Left empty it is the middle.	映像の場合：取り出す時点（秒）。空欄なら中間です。
+	Grades the selected clip towards the picked picture. One undo step.	選択したクリップを選んだ画像に近づけて調整します。取り消しは1回で済みます。
+	Grain, e.g. heavy 35 mm	グレイン（例：粗い35 mm）
+	Keeps the Program frame at the playhead.	再生ヘッド位置のプログラムフレームを保存します。
+	LUT, e.g. Kodak 2383	LUT（例：Kodak 2383）
+	Look Bible	ルックバイブル
+	Match to Look	ルックに合わせる
+	Matched the clip to the look.	クリップをルックに合わせました。
+	Name of a new look	新しいルックの名前
+	New look	新しいルック
+	No looks yet. Name one above to start a board.	ルックはまだありません。上で名前を付けてボードを始めましょう。
+	No pictures yet. Add one below.	画像はまだありません。下で追加してください。
+	Path to an image or film file	画像または映像ファイルのパス
+	Pick a picture above first (click it), and select a clip on the timeline.	まず上の画像を選び（クリック）、タイムラインでクリップを選択してください。
+	Picture or film	画像または映像
+	Picture shape, e.g. 2.39:1	画面の形（例：2.39:1）
+	Pictures	画像
+	Really remove this look and its pictures?	このルックと画像を本当に削除しますか？
+	Remove this look	このルックを削除
+	The moment must be a number of seconds, 0 or more.	時点は0以上の秒数で指定してください。
+	What the pictures measure	画像の測定値
+	What this look is about: light, colour, mood…	このルックの狙い：光、色、雰囲気…
+	Why you may use it: public domain, your own, a licence…	使用してよい理由：パブリックドメイン、自作、ライセンスなど…
+	at (s)	時点 (秒)
+	{close} close, {differ} differ	{close}件が近く、{differ}件が異なる
+	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	作品の雰囲気を伝える画像。使用する権利のある画像だけを保存してください。それぞれに理由のメモが付きます。

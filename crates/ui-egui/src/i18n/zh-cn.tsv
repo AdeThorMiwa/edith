@@ -3948,3 +3948,35 @@
 	picture shape	画面比例
 	warm ({k} K)	偏暖 ({k} K)
 	brightness {b} · contrast {c} · saturation {s} · {w}	亮度 {b} · 对比度 {c} · 饱和度 {s} · {w}
+	Add a picture	添加图片
+	Add from file	从文件添加
+	Add this frame	添加此画面
+	Caption (optional)	说明（可选）
+	Caption	说明
+	Compare with the frame at the playhead	与播放头处的画面比较
+	For a film: the moment to take, in seconds. Left empty it is the middle.	对于影片：要截取的时刻（秒）。留空则取中间。
+	Grades the selected clip towards the picked picture. One undo step.	将所选片段调色到接近所选图片。只需一步撤销。
+	Grain, e.g. heavy 35 mm	颗粒，例如粗颗粒 35 mm
+	Keeps the Program frame at the playhead.	保存播放头处的节目画面。
+	LUT, e.g. Kodak 2383	LUT，例如 Kodak 2383
+	Look Bible	风格手册
+	Match to Look	匹配风格
+	Matched the clip to the look.	已将片段匹配到风格。
+	Name of a new look	新风格的名称
+	New look	新建风格
+	No looks yet. Name one above to start a board.	还没有风格。在上面给一个起名，开始一个图板。
+	No pictures yet. Add one below.	还没有图片。请在下面添加。
+	Path to an image or film file	图片或影片文件路径
+	Pick a picture above first (click it), and select a clip on the timeline.	请先在上面选一张图片（点击它），并在时间线上选择一个片段。
+	Picture or film	图片或影片
+	Picture shape, e.g. 2.39:1	画面比例，例如 2.39:1
+	Pictures	图片
+	Really remove this look and its pictures?	确定删除此风格及其图片？
+	Remove this look	删除此风格
+	The moment must be a number of seconds, 0 or more.	时刻必须是 0 或更大的秒数。
+	What the pictures measure	图片的测量结果
+	What this look is about: light, colour, mood…	这个风格关于什么：光线、色彩、氛围…
+	Why you may use it: public domain, your own, a licence…	你为何可以使用：公有领域、自己的、许可…
+	at (s)	时刻（秒）
+	{close} close, {differ} differ	{close} 项接近，{differ} 项不同
+	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	说明你的影片应有何种感觉的图片。只保留你有权使用的图片：每张都带有说明原因的备注。

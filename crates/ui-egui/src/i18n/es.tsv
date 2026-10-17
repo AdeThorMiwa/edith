@@ -3970,3 +3970,35 @@
 	picture shape	forma de la imagen
 	warm ({k} K)	cálida ({k} K)
 	brightness {b} · contrast {c} · saturation {s} · {w}	brillo {b} · contraste {c} · saturación {s} · {w}
+	Add a picture	Añadir una imagen
+	Add from file	Añadir desde archivo
+	Add this frame	Añadir este fotograma
+	Caption (optional)	Pie de foto (opcional)
+	Caption	Pie de foto
+	Compare with the frame at the playhead	Comparar con el fotograma del cabezal
+	For a film: the moment to take, in seconds. Left empty it is the middle.	Para una película: el momento a tomar, en segundos. Vacío, es la mitad.
+	Grades the selected clip towards the picked picture. One undo step.	Gradúa el clip seleccionado hacia la imagen elegida. Un solo paso de deshacer.
+	Grain, e.g. heavy 35 mm	Grano, p. ej. 35 mm marcado
+	Keeps the Program frame at the playhead.	Guarda el fotograma del Programa en el cabezal.
+	LUT, e.g. Kodak 2383	LUT, p. ej. Kodak 2383
+	Look Bible	Libro de aspecto
+	Match to Look	Igualar al aspecto
+	Matched the clip to the look.	Clip igualado al aspecto.
+	Name of a new look	Nombre de un aspecto nuevo
+	New look	Nuevo aspecto
+	No looks yet. Name one above to start a board.	Aún no hay aspectos. Pon nombre a uno arriba para empezar un tablero.
+	No pictures yet. Add one below.	Aún no hay imágenes. Añade una abajo.
+	Path to an image or film file	Ruta de una imagen o película
+	Pick a picture above first (click it), and select a clip on the timeline.	Elige primero una imagen arriba (haz clic en ella) y selecciona un clip en la línea de tiempo.
+	Picture or film	Imagen o película
+	Picture shape, e.g. 2.39:1	Forma de la imagen, p. ej. 2,39:1
+	Pictures	Imágenes
+	Really remove this look and its pictures?	¿Quitar de verdad este aspecto y sus imágenes?
+	Remove this look	Quitar este aspecto
+	The moment must be a number of seconds, 0 or more.	El momento debe ser un número de segundos, 0 o más.
+	What the pictures measure	Lo que miden las imágenes
+	What this look is about: light, colour, mood…	De qué trata este aspecto: luz, color, ambiente…
+	Why you may use it: public domain, your own, a licence…	Por qué puedes usarla: dominio público, propia, una licencia…
+	at (s)	en (s)
+	{close} close, {differ} differ	{close} parecidos, {differ} distintos
+	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	Imágenes que dicen cómo debe sentirse tu película. Guarda solo imágenes que tengas derecho a usar: cada una lleva una nota de por qué.
