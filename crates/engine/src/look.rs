@@ -1,0 +1,639 @@
+//! Looks (fork roadmap F12.7): a look bible is a small board of pictures that say how a film should
+//! feel, kept with a note of why you may use each one, and measured.
+//!
+//! | command | does |
+//! |---|---|
+//! | `look.create {name, notes?}` | a new, empty look |
+//! | `look.list`, `look.get {id}` | the looks, and one in full (its pictures' numbers, not the pictures) |
+//! | `look.set {id, name?, notes?, aspect?, grain?, lut?}` | rename it and write down what you want: the picture shape, the grain, the LUT |
+//! | `look.remove {id}` | delete a look and its pictures |
+//! | `look.addStill {look, path?, seconds?, rights?, caption?, time?}` | keep a picture: a frame of an image or film file (`path`, a note of `rights` is required), or the Program frame (the playhead, or `time`) |
+//! | `look.setStill {look, still, caption}`, `look.removeStill {look, still}` | tidy a look's pictures |
+//! | `look.picture {look, still}` | one picture as a JPEG in base64, for drawing |
+//! | `look.compare {look, time?}` | the Program frame against the look's numbers, in plain words |
+//! | `look.match {look, still?, clip?, faceDetection?}` | grade the clip at the playhead to match one of the look's pictures (Lumetri wheels and saturation, one undo step) |
+//!
+//! The library is global: `edith-looks.json` beside the preferences, for every project (in memory only
+//! where there is no data folder, as in tests). Pictures are kept small (at most 640 px on the long
+//! side, JPEG) and every one carries the note of why it may be used and where it came from (a file's
+//! name, never its folder). Everything read back from the file is untrusted: sizes, counts and text are
+//! held to their limits, and a damaged file is an empty library.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use edith_analysis as an;
+use filmcraft_media::FrameRequest;
+use filmcraft_project::gtemplate::{base64_decode, base64_encode};
+use filmcraft_render::Image;
+use filmcraft_time::{TICKS_PER_SECOND, Tick};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::analysis::{lock, secs, to_value};
+use crate::commands::{CommandSpec, always, bad, str_p, time_p};
+use crate::{EngineError, Result, Session};
+
+pub(crate) const FILE: &str = "edith-looks.json";
+const MAX_FILE: u64 = 40 * 1024 * 1024;
+/// Most looks kept, most pictures in one, and most pictures in all of them.
+pub const MAX_LOOKS: usize = 20;
+pub const MAX_STILLS: usize = 24;
+pub const MAX_STILLS_TOTAL: usize = 150;
+/// The long side of a kept picture.
+pub const STILL_SIDE: u32 = 640;
+/// The most characters of a picture's JPEG in base64 that are believed (about 450 KB of JPEG).
+const MAX_JPEG_B64: usize = 600_000;
+const MAX_NAME: usize = 80;
+const MAX_NOTE: usize = 600;
+const MAX_SHORT: usize = 120;
+const MAX_RIGHTS: usize = 300;
+const MAX_PATH: usize = 4096;
+
+/// One picture of a look: small, with its note of rights and where it came from, and its numbers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Still {
+    pub id: String,
+    pub caption: String,
+    pub rights: String,
+    /// A file's name, or "Program frame": never a folder.
+    pub source: String,
+    /// Where in the film it was taken, when that is known.
+    pub time_seconds: Option<f64>,
+    pub width: u32,
+    pub height: u32,
+    /// The picture as a JPEG, base64.
+    pub jpeg: String,
+    pub stats: an::FrameStats,
+    pub added_unix: i64,
+}
+
+/// A named board of pictures and what you want: the picture shape, the grain, the LUT.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Look {
+    pub id: String,
+    pub name: String,
+    pub notes: String,
+    pub aspect: String,
+    pub grain: String,
+    pub lut: String,
+    pub stills: Vec<Still>,
+    pub added_unix: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Library {
+    pub version: u32,
+    pub next_id: u64,
+    pub looks: Vec<Look>,
+}
+
+type SharedLibrary = Arc<Mutex<Option<Library>>>;
+
+/// What the session keeps: the library, read from its file the first time it is needed.
+#[derive(Clone, Default)]
+pub struct Hub {
+    library: SharedLibrary,
+}
+
+fn clean(t: &str, max: usize) -> String {
+    t.chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_string()
+}
+
+fn clean_multiline(t: &str, max: usize) -> String {
+    t.chars().filter(|c| !c.is_control() || *c == '\n').take(max).collect::<String>().trim().to_string()
+}
+
+fn file_path(s: &Session) -> Option<PathBuf> {
+    s.prefs_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(FILE))
+}
+
+fn id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 20 && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// A picture read back from the file is kept only when everything about it can be believed.
+fn still_ok(st: &Still) -> bool {
+    id_ok(&st.id)
+        && (1..=STILL_SIDE).contains(&st.width)
+        && (1..=STILL_SIDE).contains(&st.height)
+        && !st.jpeg.is_empty()
+        && st.jpeg.len() <= MAX_JPEG_B64
+        && st.time_seconds.is_none_or(f64::is_finite)
+}
+
+fn read_library(file: Option<&Path>) -> Library {
+    let empty = Library { version: 1, ..Default::default() };
+    let Some(p) = file else { return empty };
+    let Ok(meta) = std::fs::metadata(p) else { return empty };
+    if meta.len() > MAX_FILE {
+        return empty;
+    }
+    let Some(mut lib) = std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Library>(&t).ok()) else { return empty };
+    let mut seen: Vec<String> = Vec::new();
+    lib.looks.retain(|l| {
+        let ok = id_ok(&l.id) && !seen.contains(&l.id);
+        if ok {
+            seen.push(l.id.clone());
+        }
+        ok
+    });
+    lib.looks.truncate(MAX_LOOKS);
+    let mut total = 0usize;
+    for l in &mut lib.looks {
+        l.name = clean(&l.name, MAX_NAME);
+        l.notes = clean_multiline(&l.notes, MAX_NOTE);
+        l.aspect = clean(&l.aspect, MAX_SHORT);
+        l.grain = clean(&l.grain, MAX_SHORT);
+        l.lut = clean(&l.lut, MAX_SHORT);
+        let mut ids: Vec<String> = Vec::new();
+        l.stills.retain(|st| {
+            let ok = still_ok(st) && !ids.contains(&st.id);
+            if ok {
+                ids.push(st.id.clone());
+            }
+            ok
+        });
+        l.stills.truncate(MAX_STILLS.min(MAX_STILLS_TOTAL.saturating_sub(total)));
+        total += l.stills.len();
+        for st in &mut l.stills {
+            st.caption = clean(&st.caption, MAX_SHORT);
+            st.rights = clean(&st.rights, MAX_RIGHTS);
+            st.source = clean(&st.source, MAX_SHORT);
+        }
+    }
+    lib.version = 1;
+    lib
+}
+
+fn save_library(file: Option<&Path>, lib: &Library) {
+    let Some(p) = file else { return };
+    if let Ok(json) = serde_json::to_string(lib) {
+        let tmp = p.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, p).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// Runs `f` on the library without saving: for reading (the panel asks every frame).
+fn read_only<T>(s: &Session, f: impl FnOnce(&Library) -> T) -> T {
+    let file = file_path(s);
+    let mut g = lock(&s.look.library);
+    let lib = g.get_or_insert_with(|| read_library(file.as_deref()));
+    f(lib)
+}
+
+/// Runs `f` on the library and keeps what it did (saved to the file when `f` says it changed something).
+fn write<T>(s: &Session, f: impl FnOnce(&mut Library) -> (T, bool)) -> T {
+    let file = file_path(s);
+    let mut g = lock(&s.look.library);
+    let lib = g.get_or_insert_with(|| read_library(file.as_deref()));
+    let (out, changed) = f(lib);
+    if changed {
+        save_library(file.as_deref(), lib);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------- pictures
+
+/// A picture of at most [`STILL_SIDE`] on its long side, by averaging blocks of pixels.
+fn shrink(w: u32, h: u32, rgba: &[u8]) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+    let (wu, hu) = (w as usize, h as usize);
+    let need = wu.checked_mul(hu).and_then(|n| n.checked_mul(4)).ok_or("the picture is too large")?;
+    if w == 0 || h == 0 || rgba.len() < need {
+        return Err("the picture has no pixels".into());
+    }
+    let side = wu.max(hu);
+    let f = side.div_ceil(STILL_SIDE as usize).max(1);
+    let (ow, oh) = (wu.div_ceil(f), hu.div_ceil(f));
+    let mut out = Vec::with_capacity(ow * oh * 4);
+    for oy in 0..oh {
+        for ox in 0..ow {
+            let mut acc = [0u32; 3];
+            let mut n = 0u32;
+            for y in oy * f..((oy + 1) * f).min(hu) {
+                for x in ox * f..((ox + 1) * f).min(wu) {
+                    let i = (y * wu + x) * 4;
+                    if let Some(px) = rgba.get(i..i + 3) {
+                        for (a, v) in acc.iter_mut().zip(px) {
+                            *a += u32::from(*v);
+                        }
+                        n += 1;
+                    }
+                }
+            }
+            let n = n.max(1);
+            out.extend([(acc[0] / n) as u8, (acc[1] / n) as u8, (acc[2] / n) as u8, 255]);
+        }
+    }
+    Ok((ow as u32, oh as u32, out))
+}
+
+/// The working image the colour matcher reads: linear light, opaque.
+fn to_image(w: u32, h: u32, rgba: &[u8]) -> Image {
+    let table: Vec<f32> = (0..=255u32).map(|v| filmcraft_color::srgb_to_linear(v as f32 / 255.0)).collect();
+    let mut px = Vec::with_capacity(w as usize * h as usize * 4);
+    for p in rgba.as_chunks::<4>().0.iter().take(w as usize * h as usize) {
+        px.extend([table[usize::from(p[0])], table[usize::from(p[1])], table[usize::from(p[2])], 1.0]);
+    }
+    Image { w: w as usize, h: h as usize, px }
+}
+
+fn encode_jpeg(w: u32, h: u32, rgba: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    filmcraft_export::still::encode(&to_image(w, h, rgba), filmcraft_export::still::StillFormat::Jpeg, 8).map_err(|e| e.to_string())
+}
+
+/// A kept picture back as pixels: width, height, sRGB RGBA8.
+fn decode_still(st: &Still) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+    let bytes = base64_decode(&st.jpeg).ok_or("the picture is damaged")?;
+    let r = filmcraft_media::still::decode_raster("still.jpg", &bytes).map_err(|e| e.to_string())?;
+    if r.width == 0 || r.height == 0 || r.width > STILL_SIDE || r.height > STILL_SIDE {
+        return Err("the picture is damaged".into());
+    }
+    Ok((r.width, r.height, r.rgba))
+}
+
+/// The Program frame at `t`, small, as sRGB RGBA8.
+fn program_rgba(s: &Session, t: Tick) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+    let q = s.active_sequence().ok_or("no sequence is open")?;
+    let (w, h) = (q.settings.width.max(1), q.settings.height.max(1));
+    if t < Tick::ZERO || t > q.duration() {
+        return Err("that moment is outside the edit".into());
+    }
+    let scale = (STILL_SIDE as f32 / w.max(h) as f32).min(1.0);
+    let _ = filmcraft_media::pending::take();
+    let img = s.try_render_program_at(scale, t).map_err(|e| e.to_string())?;
+    if filmcraft_media::pending::take() {
+        return Err("the frame is still loading; try again in a moment".into());
+    }
+    let (iw, ih) = (u32::try_from(img.w).map_err(|e| e.to_string())?, u32::try_from(img.h).map_err(|e| e.to_string())?);
+    Ok((iw, ih, img.over_black_rgba8()))
+}
+
+/// The numbers of a look's pictures, as a fingerprint of the picture only, so a frame and a look are
+/// compared in the same words as an edit and a film.
+fn picture_fingerprint(name: &str, stats: Vec<an::FrameStats>) -> std::result::Result<an::Fingerprint, String> {
+    let n = stats.len().max(1);
+    let (w, h) = stats.first().map_or((1, 1), |f| (f.width, f.height));
+    let pictures = stats
+        .into_iter()
+        .enumerate()
+        .map(|(i, stats)| an::fingerprint::PictureSample { time_seconds: i as f64 + 0.5, stats, camera: None, motion_energy: None })
+        .collect();
+    an::fingerprint(&an::ReferenceInput { name: name.to_string(), duration_seconds: n as f64, width: w, height: h, cuts: Vec::new(), pictures, sound: None })
+        .map_err(|e| e.to_string())
+}
+
+/// What the pictures of a look measure on average, and the colours that recur in them.
+fn measured_json(look: &Look) -> Value {
+    let Ok(fp) = picture_fingerprint(&look.name, look.stills.iter().map(|s| s.stats.clone()).collect()) else { return Value::Null };
+    if look.stills.is_empty() {
+        return Value::Null;
+    }
+    to_value(&fp.picture)
+}
+
+fn still_json(st: &Still) -> Value {
+    json!({
+        "id": st.id, "caption": st.caption, "rights": st.rights, "source": st.source, "timeSeconds": st.time_seconds,
+        "width": st.width, "height": st.height,
+        "brightness": st.stats.luma_mean, "contrast": st.stats.contrast, "saturation": st.stats.saturation,
+        "warmthKelvin": st.stats.colour_temperature, "grain": st.stats.grain, "aspect": st.stats.active_aspect,
+        "palette": to_value(&st.stats.palette),
+    })
+}
+
+fn summary(l: &Look) -> Value {
+    json!({
+        "id": l.id, "name": l.name, "notes": l.notes, "aspect": l.aspect, "grain": l.grain, "lut": l.lut,
+        "stills": l.stills.len(), "addedUnix": l.added_unix,
+        "firstStill": l.stills.first().map(|s| s.id.clone()),
+        "measured": measured_json(l),
+    })
+}
+
+fn full(l: &Look) -> Value {
+    let mut v = summary(l);
+    v["pictures"] = Value::Array(l.stills.iter().map(still_json).collect());
+    v
+}
+
+pub(crate) fn find(s: &Session, id: &str) -> Option<Look> {
+    read_only(s, |lib| lib.looks.iter().find(|l| l.id == id).cloned())
+}
+
+// ---------------------------------------------------------------------------- commands
+
+fn look_id<'a>(p: &'a Value, cmd: &str) -> Result<&'a str> {
+    str_p(p, "look").or_else(|| str_p(p, "id")).filter(|i| id_ok(i)).ok_or_else(|| bad(cmd, "`look` is required: a look's id from `look.list`"))
+}
+
+fn no_look(cmd: &str, id: &str) -> EngineError {
+    bad(cmd, format!("there is no look {:?}; `look.list` shows what there is", id.chars().take(20).collect::<String>()))
+}
+
+fn create_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.create";
+    let name = str_p(p, "name").map(|n| clean(n, MAX_NAME)).filter(|n| !n.is_empty()).ok_or_else(|| bad(cmd, "`name` is required"))?;
+    let notes = str_p(p, "notes").map(|n| clean_multiline(n, MAX_NOTE)).unwrap_or_default();
+    let made = write(s, |lib| {
+        if lib.looks.len() >= MAX_LOOKS {
+            return (Err(format!("the library already holds {MAX_LOOKS} looks; remove one first")), false);
+        }
+        lib.next_id = lib.next_id.max(lib.looks.len() as u64) + 1;
+        let id = format!("l{}", lib.next_id);
+        lib.looks.push(Look { id: id.clone(), name: name.clone(), notes, added_unix: crate::autosave::unix_now(), ..Default::default() });
+        (Ok(id), true)
+    });
+    let id = made.map_err(|e| bad(cmd, e))?;
+    Ok(json!({"look": id, "name": name}))
+}
+
+fn list_command(s: &mut Session, _p: &Value) -> Result<Value> {
+    Ok(read_only(s, |lib| json!({"looks": lib.looks.iter().map(summary).collect::<Vec<_>>(), "max": MAX_LOOKS, "maxStills": MAX_STILLS})))
+}
+
+fn get_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.get";
+    let id = look_id(p, cmd)?;
+    find(s, id).map(|l| full(&l)).ok_or_else(|| no_look(cmd, id))
+}
+
+fn set_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.set";
+    let id = look_id(p, cmd)?.to_string();
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().map(|n| clean(n, MAX_NAME)).filter(|n| !n.is_empty()).ok_or_else(|| bad(cmd, "`name` must be some text"))?),
+    };
+    let text = |k: &str, max: usize| -> Result<Option<String>> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_str()
+                .map(|t| Some(if k == "notes" { clean_multiline(t, max) } else { clean(t, max) }))
+                .ok_or_else(|| bad(cmd, format!("`{k}` must be text"))),
+        }
+    };
+    let (notes, aspect, grain, lut) = (text("notes", MAX_NOTE)?, text("aspect", MAX_SHORT)?, text("grain", MAX_SHORT)?, text("lut", MAX_SHORT)?);
+    let found = write(s, |lib| match lib.looks.iter_mut().find(|l| l.id == id) {
+        Some(l) => {
+            if let Some(v) = name {
+                l.name = v;
+            }
+            if let Some(v) = notes {
+                l.notes = v;
+            }
+            if let Some(v) = aspect {
+                l.aspect = v;
+            }
+            if let Some(v) = grain {
+                l.grain = v;
+            }
+            if let Some(v) = lut {
+                l.lut = v;
+            }
+            (true, true)
+        }
+        None => (false, false),
+    });
+    if !found {
+        return Err(no_look(cmd, &id));
+    }
+    find(s, &id).map(|l| summary(&l)).ok_or_else(|| no_look(cmd, &id))
+}
+
+fn remove_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.remove";
+    let id = look_id(p, cmd)?.to_string();
+    let removed = write(s, |lib| {
+        let before = lib.looks.len();
+        lib.looks.retain(|l| l.id != id);
+        let gone = before != lib.looks.len();
+        (gone, gone)
+    });
+    if removed { Ok(json!({"removed": id})) } else { Err(no_look(cmd, &id)) }
+}
+
+fn file_name_of(path: &str) -> String {
+    Path::new(path).file_name().map(|n| clean(&n.to_string_lossy(), MAX_SHORT)).unwrap_or_default()
+}
+
+/// The picture a `look.addStill` is asked for: its pixels, where it came from, and when in it.
+fn source_picture(s: &Session, p: &Value, cmd: &str) -> Result<(u32, u32, Vec<u8>, String, Option<f64>, String)> {
+    match str_p(p, "path").map(str::trim).filter(|t| !t.is_empty()) {
+        Some(path) => {
+            if path.len() > MAX_PATH || path.contains('\0') {
+                return Err(bad(cmd, "`path` is not a usable file path"));
+            }
+            let rights = str_p(p, "rights").map(|r| clean(r, MAX_RIGHTS + 1)).filter(|r| !r.is_empty()).ok_or_else(|| {
+                bad(cmd, "`rights` is required for a file: a short note of why you may use this picture (public domain, your own, a licence)")
+            })?;
+            if rights.chars().count() > MAX_RIGHTS {
+                return Err(bad(cmd, format!("`rights` is at most {MAX_RIGHTS} characters")));
+            }
+            let src = s.media.open_file(path, &*s.services).map_err(|e| bad(cmd, format!("could not open {}: {e}", file_name_of(path))))?;
+            let info = src.info().clone();
+            let video = info.video.clone().ok_or_else(|| bad(cmd, "that file has no picture"))?;
+            let duration = secs(info.duration);
+            let at = match crate::commands::f64_p(p, "seconds") {
+                Some(v) if v.is_finite() && v >= 0.0 => v.min((duration - 0.04).max(0.0)),
+                Some(_) => return Err(bad(cmd, "`seconds` must be a time in the file, 0 or more")),
+                None if duration > 1.0 => duration / 2.0,
+                None => 0.0,
+            };
+            // a still image has one frame; a film is read at the moment asked for
+            let moment = (duration > 0.0 && info.duration > Tick::ZERO).then_some(at);
+            let scale = (f64::from(STILL_SIDE) / f64::from(video.width.max(video.height).max(1))).min(1.0) as f32;
+            let f = src
+                .video_frame(FrameRequest { time: Tick::from_seconds_f64(moment.unwrap_or(0.0)), scale })
+                .map_err(|e| bad(cmd, format!("could not read a picture from {}: {e}", file_name_of(path))))?;
+            Ok((f.width, f.height, f.to_rgba8(), file_name_of(path), moment.filter(|_| info.duration > Tick(TICKS_PER_SECOND / 10)), rights))
+        }
+        None => {
+            let t = time_p(s, p, "").unwrap_or_else(|| s.playhead());
+            let (w, h, rgba) = program_rgba(s, t).map_err(|e| bad(cmd, e))?;
+            let rights = str_p(p, "rights").map(|r| clean(r, MAX_RIGHTS)).filter(|r| !r.is_empty()).unwrap_or_else(|| "A frame of my own edit".to_string());
+            Ok((w, h, rgba, "Program frame".to_string(), Some(secs(t)), rights))
+        }
+    }
+}
+
+fn add_still_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.addStill";
+    let id = look_id(p, cmd)?.to_string();
+    let (count, total) =
+        read_only(s, |lib| (lib.looks.iter().find(|l| l.id == id).map(|l| l.stills.len()), lib.looks.iter().map(|l| l.stills.len()).sum::<usize>()));
+    let count = count.ok_or_else(|| no_look(cmd, &id))?;
+    if count >= MAX_STILLS {
+        return Err(bad(cmd, format!("a look holds at most {MAX_STILLS} pictures; remove one first")));
+    }
+    if total >= MAX_STILLS_TOTAL {
+        return Err(bad(cmd, format!("the library already holds {MAX_STILLS_TOTAL} pictures; remove some first")));
+    }
+    let (w, h, rgba, source, time_seconds, rights) = source_picture(s, p, cmd)?;
+    let (w, h, rgba) = shrink(w, h, &rgba).map_err(|e| bad(cmd, e))?;
+    let stats = an::analyze_rgba(w, h, &rgba).map_err(|e| bad(cmd, e.to_string()))?;
+    let jpeg = base64_encode(&encode_jpeg(w, h, &rgba).map_err(|e| bad(cmd, e))?);
+    if jpeg.len() > MAX_JPEG_B64 {
+        return Err(bad(cmd, "that picture is too detailed to keep at this size"));
+    }
+    let caption = str_p(p, "caption").map(|c| clean(c, MAX_SHORT)).unwrap_or_default();
+    let added = write(s, |lib| {
+        let total: usize = lib.looks.iter().map(|l| l.stills.len()).sum();
+        lib.next_id = lib.next_id.max(lib.looks.len() as u64 + total as u64) + 1;
+        let sid = format!("s{}", lib.next_id);
+        match lib.looks.iter_mut().find(|l| l.id == id) {
+            Some(l) if l.stills.len() < MAX_STILLS => {
+                l.stills.push(Still {
+                    id: sid.clone(),
+                    caption,
+                    rights,
+                    source,
+                    time_seconds,
+                    width: w,
+                    height: h,
+                    jpeg,
+                    stats,
+                    added_unix: crate::autosave::unix_now(),
+                });
+                (Some(sid), true)
+            }
+            _ => (None, false),
+        }
+    });
+    let sid = added.ok_or_else(|| bad(cmd, "the look could not take another picture"))?;
+    Ok(json!({"look": id, "still": sid}))
+}
+
+fn set_still_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.setStill";
+    let id = look_id(p, cmd)?.to_string();
+    let still = str_p(p, "still").filter(|i| id_ok(i)).ok_or_else(|| bad(cmd, "`still` is required: a picture's id from `look.get`"))?.to_string();
+    let caption = str_p(p, "caption").map(|c| clean(c, MAX_SHORT)).ok_or_else(|| bad(cmd, "`caption` is required (it may be empty)"))?;
+    let done = write(s, |lib| {
+        let st = lib.looks.iter_mut().find(|l| l.id == id).and_then(|l| l.stills.iter_mut().find(|x| x.id == still));
+        match st {
+            Some(st) => {
+                st.caption = caption.clone();
+                (true, true)
+            }
+            None => (false, false),
+        }
+    });
+    if done { Ok(json!({"look": id, "still": still, "caption": caption})) } else { Err(bad(cmd, "there is no such picture in that look")) }
+}
+
+fn remove_still_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.removeStill";
+    let id = look_id(p, cmd)?.to_string();
+    let still = str_p(p, "still").filter(|i| id_ok(i)).ok_or_else(|| bad(cmd, "`still` is required: a picture's id from `look.get`"))?.to_string();
+    let done = write(s, |lib| match lib.looks.iter_mut().find(|l| l.id == id) {
+        Some(l) => {
+            let before = l.stills.len();
+            l.stills.retain(|x| x.id != still);
+            let gone = before != l.stills.len();
+            (gone, gone)
+        }
+        None => (false, false),
+    });
+    if done { Ok(json!({"removed": still})) } else { Err(bad(cmd, "there is no such picture in that look")) }
+}
+
+fn find_still(s: &Session, look: &str, still: &str) -> Option<Still> {
+    read_only(s, |lib| lib.looks.iter().find(|l| l.id == look).and_then(|l| l.stills.iter().find(|x| x.id == still)).cloned())
+}
+
+fn picture_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.picture";
+    let id = look_id(p, cmd)?;
+    let still = str_p(p, "still").filter(|i| id_ok(i)).ok_or_else(|| bad(cmd, "`still` is required"))?;
+    let st = find_still(s, id, still).ok_or_else(|| bad(cmd, "there is no such picture in that look"))?;
+    Ok(json!({"look": id, "still": still, "width": st.width, "height": st.height, "jpegBase64": st.jpeg}))
+}
+
+/// The Program frame against a look, in the words a comparison of an edit and a film uses. The frame
+/// is measured the way the look's pictures were: small.
+pub(crate) fn compare(s: &Session, look: &Look, t: Tick, cmd: &str) -> Result<Value> {
+    if look.stills.is_empty() {
+        return Err(bad(cmd, "that look has no pictures yet"));
+    }
+    let (w, h, rgba) = program_rgba(s, t).map_err(|e| bad(cmd, e))?;
+    let (w, h, rgba) = shrink(w, h, &rgba).map_err(|e| bad(cmd, e))?;
+    let yours = an::analyze_rgba(w, h, &rgba).map_err(|e| bad(cmd, e.to_string()))?;
+    let yours = picture_fingerprint("Program frame", vec![yours]).map_err(|e| bad(cmd, e))?;
+    let theirs = picture_fingerprint(&look.name, look.stills.iter().map(|x| x.stats.clone()).collect()).map_err(|e| bad(cmd, e))?;
+    let c = an::compare(&yours, &theirs);
+    let rows: Vec<&an::compare::Row> = c.rows.iter().filter(|r| r.group == "picture").collect();
+    let close = rows.iter().filter(|r| r.verdict == an::compare::Verdict::Close).count();
+    Ok(json!({
+        "look": {"id": look.id, "name": look.name},
+        "time": secs(t),
+        "close": close, "differ": rows.len() - close,
+        "rows": to_value(&rows),
+        "notes": {"aspect": look.aspect, "grain": look.grain, "lut": look.lut},
+    }))
+}
+
+fn compare_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.compare";
+    let id = look_id(p, cmd)?;
+    let look = find(s, id).ok_or_else(|| no_look(cmd, id))?;
+    let t = time_p(s, p, "").unwrap_or_else(|| s.playhead());
+    compare(s, &look, t, cmd)
+}
+
+fn match_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.match";
+    let id = look_id(p, cmd)?.to_string();
+    let look = find(s, &id).ok_or_else(|| no_look(cmd, &id))?;
+    let st = match str_p(p, "still") {
+        Some(sid) => look.stills.iter().find(|x| x.id == sid).ok_or_else(|| bad(cmd, "there is no such picture in that look"))?,
+        None => match look.stills.as_slice() {
+            [only] => only,
+            [] => return Err(bad(cmd, "that look has no pictures yet")),
+            _ => return Err(bad(cmd, "this look has several pictures: pass `still`, one of the ids `look.get` lists")),
+        },
+    };
+    let (w, h, rgba) = decode_still(st).map_err(|e| bad(cmd, e))?;
+    let mut out = crate::color::match_clip(s, p, cmd, "Match to Look", Some(to_image(w, h, &rgba)))?;
+    out["look"] = json!(id);
+    out["still"] = json!(st.id);
+    Ok(out)
+}
+
+pub fn commands() -> Vec<CommandSpec> {
+    let spec = |id, label, params, run: fn(&mut Session, &Value) -> Result<Value>| CommandSpec {
+        id,
+        label,
+        menu: &[],
+        shortcut: None,
+        params,
+        enabled: always,
+        run,
+        journal: false,
+    };
+    vec![
+        spec("look.create", "New Look", r#"{"name":str,"notes":str?}"#, create_command),
+        spec("look.list", "List Looks", "{}", list_command),
+        spec("look.get", "Get Look", r#"{"id":str}"#, get_command),
+        spec("look.set", "Edit Look", r#"{"id":str,"name":str?,"notes":str?,"aspect":str?,"grain":str?,"lut":str?}"#, set_command),
+        spec("look.remove", "Remove Look", r#"{"id":str}"#, remove_command),
+        spec(
+            "look.addStill",
+            "Add Picture to Look",
+            r#"{"look":str,"path":str?,"seconds":n?,"rights":str?,"caption":str?,"time":ticks?|"frame":n?|"seconds":n?|"timecode":str?}"#,
+            add_still_command,
+        ),
+        spec("look.setStill", "Caption Look Picture", r#"{"look":str,"still":str,"caption":str}"#, set_still_command),
+        spec("look.removeStill", "Remove Look Picture", r#"{"look":str,"still":str}"#, remove_still_command),
+        spec("look.picture", "Look Picture", r#"{"look":str,"still":str}"#, picture_command),
+        spec("look.compare", "Compare With Look", r#"{"look":str,"time":ticks?|"frame":n?|"seconds":n?|"timecode":str?}"#, compare_command),
+        spec("look.match", "Match to Look", r#"{"look":str,"still":str?,"clip":id?,"faceDetection":bool=true}"#, match_command),
+    ]
+}

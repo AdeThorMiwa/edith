@@ -32,6 +32,7 @@ pub mod hub_local;
 pub mod interchange;
 pub mod keyboard;
 mod keyframe_move;
+pub mod look;
 mod marker_export;
 pub mod masks;
 pub mod media_browser;
@@ -474,6 +475,8 @@ pub struct Session {
     pub analysis: analysis::Store,
     /// Where reference-measuring jobs leave their answers (fork; roadmap F12.2).
     pub reference: reference::Hub,
+    /// The look library (fork; roadmap F12.7).
+    pub look: look::Hub,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -572,6 +575,7 @@ impl Session {
             narrator: Default::default(),
             analysis: Default::default(),
             reference: Default::default(),
+            look: Default::default(),
         }
     }
 
@@ -1288,6 +1292,8 @@ mod keyboard_tests;
 mod linked_speed_tests;
 #[cfg(test)]
 mod locked_clip_edits_tests;
+#[cfg(test)]
+mod look_tests;
 #[cfg(test)]
 mod masks_tests;
 #[cfg(test)]

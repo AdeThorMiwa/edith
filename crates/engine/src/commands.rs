@@ -3311,6 +3311,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::planner::commands());
     v.extend(crate::analysis::commands());
     v.extend(crate::reference::commands());
+    v.extend(crate::look::commands());
     v.extend(crate::net_commands::commands());
     v.extend(crate::assistant::commands());
     v.extend(crate::provenance::commands());

@@ -135,6 +135,14 @@ fn save_library(file: Option<&Path>, lib: &Library) {
     }
 }
 
+/// Runs `f` on the library, loading it first if need be, without saving: for reading (the panel asks
+/// every frame, so a read must not write the file).
+fn read_only<T>(shared: &SharedLibrary, file: Option<&Path>, f: impl FnOnce(&Library) -> T) -> T {
+    let mut g = lock(shared);
+    let lib = g.get_or_insert_with(|| read_library(file));
+    f(lib)
+}
+
 /// Runs `f` on the library, loading it first if need be, and keeps what `f` did (saved to the file).
 fn with_library<T>(shared: &SharedLibrary, file: Option<&Path>, f: impl FnOnce(&mut Library) -> T) -> T {
     let mut g = lock(shared);
@@ -440,7 +448,7 @@ fn add_command(s: &mut Session, p: &Value) -> Result<Value> {
     if rights.chars().count() > MAX_RIGHTS {
         return Err(bad(cmd, format!("`rights` is at most {MAX_RIGHTS} characters")));
     }
-    if with_library(&s.reference.library, file_path(s).as_deref(), |l| l.references.len()) >= MAX_REFERENCES {
+    if read_only(&s.reference.library, file_path(s).as_deref(), |l| l.references.len()) >= MAX_REFERENCES {
         return Err(bad(cmd, format!("the library already holds {MAX_REFERENCES} references; remove one first")));
     }
     start(s, p, cmd, Some(rights))
@@ -474,7 +482,7 @@ fn summary(r: &Reference) -> Value {
 }
 
 pub(crate) fn all(s: &Session) -> Vec<Reference> {
-    with_library(&s.reference.library, file_path(s).as_deref(), |l| l.references.clone())
+    read_only(&s.reference.library, file_path(s).as_deref(), |l| l.references.clone())
 }
 
 pub(crate) fn find(s: &Session, id: &str) -> Option<Reference> {

@@ -29,7 +29,7 @@ fn clip_of(g: Generator, src: &GeneratorSource) -> MediaClip {
 
 /// A 24 fps ProRes movie of demo scenes played one after the other (`shots` = scene and frames), with a
 /// tone under it when `tone` is set. The cuts are at the running sums of the frame counts.
-fn make_film(path: &Path, shots: &[(DemoScene, i64)], tone: bool) {
+pub(crate) fn make_film(path: &Path, shots: &[(DemoScene, i64)], tone: bool) {
     let (w, h, rate) = (160u32, 90u32, FrameRate::FPS_24);
     let mut p = Project::new("fixture");
     let seq = p.new_sequence("s", SequenceSettings { width: w, height: h, frame_rate: rate, ..Default::default() }, 1, 1, None);
