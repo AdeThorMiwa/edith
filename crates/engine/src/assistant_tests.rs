@@ -315,7 +315,7 @@ fn context_blocks_are_sent_in_the_user_message() {
     let req = &model.requests()[0];
     assert!(req.messages[0].text().contains("[selection]") && req.messages[0].text().contains("#29"));
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
-    assert_eq!(req.tools.len(), 5, "overview, sequence view, clip detail, frame view, transcript");
+    assert_eq!(req.tools.len(), 9, "overview, sequence view, clip detail, frame view, transcript, and the four analysis and coach tools");
     assert_eq!(req.model, "claude-haiku-5-5");
 }
 
@@ -870,7 +870,7 @@ fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool(
     // without the frame chip it works, and the tool list leaves the frame tool out
     s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
-    assert_eq!(model.requests()[0].tools.len(), 4);
+    assert_eq!(model.requests()[0].tools.len(), 8, "every tool but frame_view");
     // and the engine would refuse to run it anyway if asked
     let out = s.run_assistant_tool("frame_view", &json!({}));
     assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");

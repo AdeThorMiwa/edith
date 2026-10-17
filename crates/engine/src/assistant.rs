@@ -61,9 +61,9 @@ pub(crate) const MAX_TEXT: usize = 20_000;
 const TOOL_WAIT: Duration = Duration::from_secs(60);
 
 pub(crate) struct ToolRequest {
-    name: String,
-    input: Value,
-    reply: SyncSender<ToolOutput>,
+    pub(crate) name: String,
+    pub(crate) input: Value,
+    pub(crate) reply: SyncSender<ToolOutput>,
 }
 
 /// The agent's view of the editor: tools whose calls are answered on the session thread.
@@ -165,6 +165,8 @@ pub struct AssistantHub {
     /// A note about saved conversations that could not be restored.
     pub restore_note: Option<String>,
     model_override: Option<Arc<dyn ChatModel>>,
+    /// `analysis_run` calls waiting for their job (fork; roadmap F11.2b).
+    pub(crate) pending_tools: Vec<crate::analysis_tools::PendingTool>,
     /// Titles are normally not asked of a plugged-in model (tests script exact replies); this allows it.
     titles_with_override: bool,
     /// A prompt pack to use instead of the built-in one (the evaluation suite compares packs).
@@ -220,6 +222,7 @@ impl Default for AssistantHub {
             settings_note: None,
             restore_note: None,
             model_override: None,
+            pending_tools: Vec::new(),
             titles_with_override: false,
             pack_override: None,
             models: Arc::new(Mutex::new(ModelCache::default())),
@@ -228,6 +231,12 @@ impl Default for AssistantHub {
 }
 
 impl AssistantHub {
+    /// How many `analysis_run` calls are waiting for their job (tests).
+    #[cfg(test)]
+    pub(crate) fn pending_tools_len(&self) -> usize {
+        self.pending_tools.len()
+    }
+
     /// Remembers the data directory and loads the saved settings from it. Hosts call this once.
     pub fn set_dir(&mut self, dir: &Path) {
         let (settings, note) = AiSettings::load(dir);
@@ -305,6 +314,7 @@ impl Session {
                 t.shared.cancel.store(true, Ordering::SeqCst);
             }
         }
+        crate::analysis_tools::finish_pending(self);
         let rx = self.assistant.tool_rx.clone();
         let mut first = true;
         loop {
@@ -314,6 +324,10 @@ impl Session {
             };
             first = false;
             let Some(req) = req else { break };
+            if req.name == "analysis_run" {
+                crate::analysis_tools::start(self, req);
+                continue;
+            }
             let out = self.run_assistant_tool(&req.name, &req.input);
             let _ = req.reply.send(out);
         }

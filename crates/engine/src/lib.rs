@@ -12,6 +12,7 @@
 
 pub mod aaf_omf;
 pub mod analysis;
+mod analysis_tools;
 pub mod assistant;
 mod assistant_store;
 mod assistant_tools;
@@ -1239,6 +1240,8 @@ const MAX_SUBCLIP_CHAIN: usize = 16;
 mod aaf_omf_tests;
 #[cfg(test)]
 mod analysis_tests;
+#[cfg(test)]
+mod analysis_tools_tests;
 #[cfg(test)]
 mod animated_image_tests;
 #[cfg(test)]

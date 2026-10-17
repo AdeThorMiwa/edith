@@ -73,7 +73,7 @@ pub(crate) fn valid_key(key: &str) -> bool {
 }
 
 impl Cache {
-    fn of(s: &Session) -> Cache {
+    pub(crate) fn of(s: &Session) -> Cache {
         Cache { dir: s.media_cache_dir().map(|d| d.join("Analysis")), memory: s.analysis.memory.clone() }
     }
 
@@ -226,11 +226,11 @@ enum Work {
     Mix(MixWork),
 }
 
-struct Plan {
-    key: String,
-    kind: &'static str,
-    target: u64,
-    name: String,
+pub(crate) struct Plan {
+    pub(crate) key: String,
+    pub(crate) kind: &'static str,
+    pub(crate) target: u64,
+    pub(crate) name: String,
     params: Value,
     work: Work,
 }
@@ -405,7 +405,7 @@ fn plan_mix(s: &Session, id: ItemId, cmd: &str) -> Result<Plan> {
 }
 
 /// The target of a command: `item` (a project item id) or `sequence` (`true` for the open one, or an id).
-fn plan(s: &Session, p: &Value, cmd: &str) -> Result<Plan> {
+pub(crate) fn plan(s: &Session, p: &Value, cmd: &str) -> Result<Plan> {
     if let Some(item) = u64_p(p, "item") {
         return plan_item(s, ItemId(item), samples_param(p), cmd);
     }
@@ -720,7 +720,7 @@ fn header(plan: &Plan) -> Value {
     })
 }
 
-fn run(s: &mut Session, p: &Value) -> Result<Value> {
+pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "analysis.run";
     let plan = plan(s, p, cmd)?;
     let cache = Cache::of(s);
@@ -802,7 +802,7 @@ fn current_key(s: &Session, header: &Value) -> Option<String> {
     }
 }
 
-fn entry(s: &Session, cache: &Cache, key: &str) -> Option<Value> {
+pub(crate) fn entry(s: &Session, cache: &Cache, key: &str) -> Option<Value> {
     let report = cache.read(key)?;
     let current = current_key(s, &report).is_some_and(|k| k == key);
     Some(json!({
@@ -822,6 +822,14 @@ fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({"reports": entries, "folder": cache.dir.map(|d| d.to_string_lossy().into_owned())}))
 }
 
+/// A report for this target that is still current, whatever options it was made with.
+pub(crate) fn current_report_for(s: &Session, cache: &Cache, kind: &str, target: u64) -> Option<Value> {
+    cache.keys().into_iter().find_map(|key| {
+        let r = cache.read(&key)?;
+        (r["kind"] == kind && r["target"]["id"] == target && current_key(s, &r).is_some_and(|k| k == key)).then_some(r)
+    })
+}
+
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "analysis.get";
     let cache = Cache::of(s);
@@ -833,14 +841,8 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(report);
     }
     // measured with other options (another number of samples, say): take a current one for the same target
-    for key in cache.keys() {
-        if let Some(r) = cache.read(&key)
-            && r["kind"] == wanted.kind
-            && r["target"]["id"] == wanted.target
-            && current_key(s, &r).is_some_and(|k| k == key)
-        {
-            return Ok(r);
-        }
+    if let Some(r) = current_report_for(s, &cache, wanted.kind, wanted.target) {
+        return Ok(r);
     }
     Err(bad(cmd, format!("“{}” has not been analysed: run analysis.run first", wanted.name)))
 }
@@ -919,7 +921,8 @@ pub(crate) fn measured_mix(s: &Session, id: ItemId) -> Option<an::Mix> {
     serde_json::from_value(report["mix"].clone()).ok()
 }
 
-fn coach_findings(s: &mut Session, p: &Value) -> Result<Value> {
+/// The coach's report for the tools and the command alike (it only reads).
+pub(crate) fn coach_report(s: &Session, p: &Value) -> Result<Value> {
     let cmd = "coach.findings";
     let id = coach_sequence(s, p, cmd)?;
     let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
@@ -960,7 +963,7 @@ pub fn commands() -> Vec<CommandSpec> {
         ),
         spec("analysis.get", "Get Analysis", r#"{"item":id | "sequence":true|id | "key":str}"#, get),
         spec("analysis.list", "List Analyses", "{}", list),
-        spec("coach.findings", "Coach Findings", r#"{"sequence":id?}"#, coach_findings),
+        spec("coach.findings", "Coach Findings", r#"{"sequence":id?}"#, |s, p| coach_report(s, p)),
         spec("analysis.clear", "Clear Analyses", r#"{"key":str | "item":id | "sequence":true|id | "stale":bool | "all":bool}"#, clear),
     ]
 }

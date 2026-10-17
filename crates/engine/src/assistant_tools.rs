@@ -25,7 +25,7 @@ pub(crate) struct ToolDef {
     pub run: fn(&Session, &Value) -> ToolOutput,
 }
 
-fn def(name: &str, description: &str, properties: Value, run: fn(&Session, &Value) -> ToolOutput) -> ToolDef {
+pub(crate) fn def(name: &str, description: &str, properties: Value, run: fn(&Session, &Value) -> ToolOutput) -> ToolDef {
     ToolDef {
         spec: ToolSpec {
             name: name.into(),
@@ -38,6 +38,13 @@ fn def(name: &str, description: &str, properties: Value, run: fn(&Session, &Valu
 }
 
 pub(crate) fn tools() -> Vec<ToolDef> {
+    let mut all = base_tools();
+    // measurements and the coach's findings (fork; roadmap F11.2b)
+    all.extend(crate::analysis_tools::tools());
+    all
+}
+
+fn base_tools() -> Vec<ToolDef> {
     let time = "A time: seconds (12.5) or timecode (\"00:00:12:03\") in the sequence's rate.";
     vec![
         def(

@@ -17,7 +17,7 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
-fn demo() -> Session {
+pub(crate) fn demo() -> Session {
     let mut s = Session::default();
     s.execute("file.openDemoProject", json!({})).unwrap();
     s
@@ -54,7 +54,7 @@ fn import(s: &mut Session, path: &Path) -> u64 {
     r["items"][0].as_u64().unwrap()
 }
 
-fn footage(s: &Session) -> u64 {
+pub(crate) fn footage(s: &Session) -> u64 {
     s.project.items.values().find(|i| matches!(&i.kind, ItemKind::Media(m) if m.info.video.is_some())).map(|i| i.id.0).expect("footage in the demo project")
 }
 
@@ -326,7 +326,7 @@ fn keys_cannot_name_a_path_and_the_disk_cache_round_trips_and_shrugs_off_junk() 
 
 /// An open sequence of colour-matte shots of the given lengths (seconds), end to end on V1, with a
 /// tone on A1 under all of it.
-fn edit_of(lengths: &[f64]) -> Session {
+pub(crate) fn edit_of(lengths: &[f64]) -> Session {
     use filmcraft_media::generators::GeneratorSource;
     use filmcraft_media::{Generator, MediaSource};
     use filmcraft_project::{Label, MediaClip, MediaRef, SequenceSettings, TrackKind};
