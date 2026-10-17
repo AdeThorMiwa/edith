@@ -1066,3 +1066,52 @@ fn times_written_in_an_answer_are_links_that_move_the_playhead_and_other_colons_
     assert!((playhead_seconds(&mut d) - 6.0).abs() < 0.1);
     d.snapshot("assistant-time-links");
 }
+
+/// The numbers of a slow, quiet, widescreen film, as a fingerprint file (what `reference.export` writes).
+fn slow_film_fingerprint() -> Value {
+    let curve: Vec<f64> = (0..20).map(|i| 1.0 + f64::from(i % 5) * 0.5).collect();
+    json!({
+        "format": "edith-fingerprint", "version": 1, "name": "A slow film", "rights": "Public domain (made for this test)",
+        "fingerprint": {
+            "version": 1, "name": "A slow film", "durationSeconds": 5400.0, "width": 1920, "height": 816, "frameAspect": 2.35,
+            "shots": {"count": 400, "meanSeconds": 13.5, "medianSeconds": 11.0, "p10Seconds": 4.0, "p90Seconds": 26.0, "minSeconds": 1.0, "maxSeconds": 70.0, "cutsPerMinute": 4.4,
+                "histogram": [{"belowSeconds": 1.0, "count": 0}, {"belowSeconds": 2.0, "count": 10}, {"belowSeconds": 4.0, "count": 30}, {"belowSeconds": 8.0, "count": 100}, {"belowSeconds": 16.0, "count": 140}, {"belowSeconds": null, "count": 120}]},
+            "rhythm": {"curve": curve, "openingMeanSeconds": 10.0, "middleMeanSeconds": 13.0, "closingMeanSeconds": 17.0, "arc": "slowing"},
+            "picture": {"lumaMean": 0.32, "contrast": 0.55, "saturation": 0.18, "sharpness": 0.001, "grain": 0.025, "colourTemperature": 5200.0,
+                "letterbox": {"top": 0.12, "bottom": 0.12, "left": 0.0, "right": 0.0}, "activeAspect": 2.35, "palette": [], "timeline": []},
+            "motion": {"energy": 0.02, "camera": {"static": 0.7, "pan": 0.2, "zoomIn": 0.1}},
+            "sound": {"integratedLufs": -23.0, "loudnessRangeLu": 14.0, "truePeakDbtp": -2.0, "silenceShare": 0.3, "speechShare": 0.3, "musicShare": 0.2, "ambienceShare": 0.5, "loudnessCurve": vec![-24.0; 20]},
+        }
+    })
+}
+
+#[test]
+fn the_compare_and_rhythm_views_set_your_edit_beside_a_reference() {
+    let _g = guard();
+    let mut session = measured_edit();
+    let dir = std::env::temp_dir().join(format!("edith-ui-ref-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("slow.fingerprint.json");
+    std::fs::write(&file, slow_film_fingerprint().to_string()).unwrap();
+    let id = session.execute("reference.import", json!({"path": file.to_string_lossy()})).unwrap()["id"].as_str().unwrap().to_string();
+    session.execute("reference.adopt", json!({"id": id})).unwrap();
+    let mut d = Driver::with(session);
+    coach_asks(
+        &mut d,
+        vec![
+            says_then_shows("Next to the slow film your cutting is much faster.", "c1", "show", json!({"view": "compare", "caption": "Against A slow film"})),
+            says_then_shows("And this is how the cutting moves against the plan and the film.", "r1", "show", json!({"view": "rhythm"})),
+            text_reply("Hold a few shots longer where the plan wants calm."),
+        ],
+        "Hold a few shots",
+    );
+    let ids: Vec<(String, String)> = d
+        .elements("assistant.view.")
+        .into_iter()
+        .map(|e| (e["id"].as_str().unwrap_or("").to_string(), e["label"].as_str().unwrap_or("").to_string()))
+        .collect();
+    let row = ids.iter().find(|(i, _)| i.contains(".row.meanShot")).unwrap_or_else(|| panic!("{ids:?}"));
+    assert!(row.1.contains("Average shot") && row.1.contains("higher") || row.1.contains("lower"), "{row:?}");
+    assert!(ids.iter().any(|(i, _)| i.ends_with(".rhythm")), "{ids:?}");
+    d.snapshot("assistant-view-compare-rhythm");
+}

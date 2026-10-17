@@ -40,6 +40,9 @@ pub struct Row {
     pub unit: String,
     pub yours: Option<f64>,
     pub theirs: Option<f64>,
+    /// The two numbers as they are written in the sentence (`5.4 s`, `-20.0`, `30%`), for drawing.
+    pub yours_text: String,
+    pub theirs_text: String,
     pub verdict: Verdict,
     /// The row in a sentence.
     pub words: String,
@@ -142,7 +145,26 @@ fn row(group: &str, metric: &str, label: &str, unit: &str, kind: Kind, tol: f64,
             (verdict, format!("{label}: yours {}{u}, theirs {}{u}: {said}.", fmt(y), fmt(t)))
         }
     };
-    Some(Row { group: group.into(), metric: metric.into(), label: label.into(), unit: unit.into(), yours: Some(y), theirs: Some(t), verdict, words })
+    let text = |v: f64| match kind {
+        Kind::Length => secs(v),
+        Kind::Rate => format!("{v:.1}"),
+        Kind::Loudness => format!("{v:.1}"),
+        Kind::Share => format!("{:.0}%", v * 100.0),
+        Kind::Kelvin => format!("{v:.0} K"),
+        Kind::Level => format!("{v:.2}"),
+    };
+    Some(Row {
+        group: group.into(),
+        metric: metric.into(),
+        label: label.into(),
+        unit: unit.into(),
+        yours: Some(y),
+        theirs: Some(t),
+        yours_text: text(y),
+        theirs_text: text(t),
+        verdict,
+        words,
+    })
 }
 
 fn arc_name(a: PaceArc) -> &'static str {
@@ -191,6 +213,8 @@ pub fn compare(yours: &Fingerprint, theirs: &Fingerprint) -> Comparison {
         unit: String::new(),
         yours: None,
         theirs: None,
+        yours_text: arc_name(ya).to_string(),
+        theirs_text: arc_name(ta).to_string(),
         verdict: if ya == ta { Verdict::Close } else { Verdict::Different },
         words: if ya == ta {
             format!("How the pace moves: both {}.", arc_name(ya))

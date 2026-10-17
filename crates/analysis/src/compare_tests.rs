@@ -160,3 +160,14 @@ fn a_comparison_serialises_with_its_verdicts_in_words() {
     let back: Comparison = serde_json::from_value(v).unwrap();
     assert_eq!(back, c);
 }
+
+#[test]
+fn each_row_carries_its_two_numbers_as_written() {
+    let c = compare(&film(5.4, Some([200, 150, 90]), Some(-20.0), 0.3), &film(11.0, Some([90, 100, 110]), Some(-14.0), 0.1));
+    let t = |m: &str| (find(&c, m).yours_text.clone(), find(&c, m).theirs_text.clone());
+    assert_eq!(t("meanShot"), ("5.4 s".to_string(), "11 s".to_string()));
+    assert_eq!(t("loudness"), ("-20.0".to_string(), "-14.0".to_string()));
+    assert_eq!(t("silence"), ("30%".to_string(), "10%".to_string()));
+    assert!(t("warmth").0.ends_with(" K") && t("brightness").0.contains('.'));
+    assert_eq!(t("arc"), ("steady".to_string(), "steady".to_string()));
+}

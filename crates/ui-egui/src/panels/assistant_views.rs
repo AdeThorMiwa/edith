@@ -12,6 +12,9 @@
 //! - **gauge**: one number against its target and the band around it that is fine.
 //! - **palette**: the colours of a measured clip as swatches in proportion.
 //! - **pie**: a whole divided up (screen time by shot length, narration, silence).
+//! - **compare**: your numbers beside a reference film's, one row each, with a verdict.
+//! - **rhythm**: how fast the edit cuts along its length, beside the plan's intended intensity and a
+//!   reference's rhythm (cutting is a rough stand-in for intensity).
 //!
 //! Everything in a snapshot is untrusted (a saved thread can be edited by hand): missing or odd
 //! numbers draw as nothing rather than failing, and the number of things drawn is capped.
@@ -70,6 +73,8 @@ pub fn draw(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) 
             Some("gauge") => gauge(ui, view, n, t, elems),
             Some("palette") => palette(ui, view, n, t, elems),
             Some("pie") => pie(ui, view, n, t, elems),
+            Some("compare") => compare(ui, view, n, t, elems),
+            Some("rhythm") => rhythm(ui, view, n, t, elems),
             _ => {
                 ui.label(RichText::new(tl!("This view cannot be shown.")).size(11.5).color(t.text_faint));
             }
@@ -228,8 +233,10 @@ fn histogram(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems)
     }
 }
 
-/// How many bars a pace view draws, swatches a palette, slices a pie.
+/// How many bars a pace view draws, swatches a palette, slices a pie, rows a compare view, beats a rhythm view.
 const MAX_BARS: usize = 240;
+const MAX_COMPARE_ROWS: usize = 12;
+const MAX_BEATS: usize = 80;
 const MAX_SWATCHES: usize = 8;
 const MAX_SLICES: usize = 8;
 /// Slice colours: distinct from each other and readable on the dark card.
@@ -467,6 +474,126 @@ fn pie(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
                 });
             }
         });
+    });
+}
+
+fn compare(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
+    let rows: Vec<&Value> = view["rows"].as_array().map_or(Vec::new(), |a| a.iter().take(MAX_COMPARE_ROWS).collect());
+    if rows.is_empty() {
+        return;
+    }
+    let reference = text(&view["reference"]);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(tl!("yours")).size(11.0).strong().color(t.accent));
+        ui.label(RichText::new(tl!("against")).size(11.0).color(t.text_faint));
+        ui.label(RichText::new(format!("“{reference}”")).size(11.0).strong().color(LOOK));
+    });
+    ui.add_space(2.0);
+    let w = ui.available_width().max(120.0);
+    for r in rows {
+        let (label, metric) = (text(&r["label"]), text(&r["metric"]));
+        let (yt, tt) = (text(&r["yoursText"]), text(&r["theirsText"]));
+        let verdict = r["verdict"].as_str().unwrap_or("close");
+        let (y, th) = (finite(&r["yours"]), finite(&r["theirs"]));
+        let (chip, chip_color) = match verdict {
+            "close" => (tl!("close"), Color32::from_rgb(0x6f, 0xb8, 0x8a)),
+            "higher" => (tl!("higher ▲"), LOOK),
+            "lower" => (tl!("lower ▼"), LOOK),
+            _ => (tl!("different"), LOOK),
+        };
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.text(rect.left_top() + vec2(0.0, 1.0), Align2::LEFT_TOP, &label, Tokens::ui(11.5), t.text);
+        painter.text(rect.right_top() + vec2(0.0, 1.0), Align2::RIGHT_TOP, chip, Tokens::semibold(10.5), chip_color);
+        let track = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 17.0), pos2(rect.max.x - 78.0, rect.max.y - 2.0));
+        if let (Some(y), Some(th)) = (y, th) {
+            let (lo, hi) = if y.min(th) < 0.0 {
+                // levels that can be below zero (loudness): a scale around the two, as dots
+                let (a, b) = (y.min(th), y.max(th));
+                (a - 4.0, b + 4.0)
+            } else {
+                (0.0, y.max(th) * 1.1)
+            };
+            let x_of = |v: f64| track.min.x + (((v - lo) / (hi - lo).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0) as f32) * track.width();
+            if lo < 0.0 {
+                let mid = track.center().y;
+                painter.line_segment([pos2(track.min.x, mid), pos2(track.max.x, mid)], Stroke::new(1.0, t.separator));
+                painter.line_segment([pos2(x_of(y), mid), pos2(x_of(th), mid)], Stroke::new(2.0, t.text_faint));
+                painter.circle_filled(pos2(x_of(th), mid), 4.5, LOOK);
+                painter.circle_filled(pos2(x_of(y), mid), 4.5, t.accent);
+            } else {
+                let half = (track.height() - 2.0) / 2.0;
+                let bar = |v: f64, row: f32| {
+                    Rect::from_min_max(
+                        pos2(track.min.x, track.min.y + row * (half + 2.0)),
+                        pos2(x_of(v).max(track.min.x + 1.0), track.min.y + row * (half + 2.0) + half),
+                    )
+                };
+                painter.rect_filled(bar(y, 0.0), 2.0, t.accent);
+                painter.rect_filled(bar(th, 1.0), 2.0, LOOK.gamma_multiply(0.85));
+            }
+        }
+        painter.text(pos2(rect.max.x, track.min.y + 1.0), Align2::RIGHT_TOP, &yt, Tokens::ui(10.5), t.accent);
+        painter.text(pos2(rect.max.x, track.min.y + 12.0), Align2::RIGHT_TOP, &tt, Tokens::ui(10.5), LOOK);
+        let resp = resp.on_hover_text(text(&r["words"]));
+        elems.push((format!("assistant.view.{n}.row.{metric}"), resp, format!("{label}: {yt} against {tt} ({verdict})")));
+    }
+    let missing: Vec<String> = view["missing"].as_array().map_or(Vec::new(), |a| a.iter().take(4).map(text).collect());
+    if !missing.is_empty() {
+        ui.label(RichText::new(tlf!("not compared: {parts}", parts = missing.join("; "))).size(10.5).color(t.text_faint));
+    }
+}
+
+fn rhythm(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
+    let cut: Vec<f64> = view["cut"].as_array().map_or(Vec::new(), |a| a.iter().take(MAX_BARS).filter_map(finite).map(|v| v.clamp(0.0, 1.0)).collect());
+    let duration = finite(&view["duration"]).filter(|d| *d > 0.0).unwrap_or(0.0);
+    if cut.is_empty() || duration <= 0.0 {
+        return;
+    }
+    let w = ui.available_width().max(60.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 92.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let plot = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 4.0), pos2(rect.max.x, rect.max.y - 16.0));
+    painter.rect_filled(plot, 3.0, t.panel_bg);
+    let x_of = |ticks: f64| plot.min.x + ((ticks / duration).clamp(0.0, 1.0) as f32) * plot.width();
+    let y_of = |v: f64| plot.max.y - (v.clamp(0.0, 1.0) as f32) * (plot.height() - 4.0);
+    // how fast it cuts: bars
+    let slot = plot.width() / cut.len() as f32;
+    for (i, c) in cut.iter().enumerate() {
+        let x0 = plot.min.x + slot * i as f32;
+        painter.rect_filled(Rect::from_min_max(pos2(x0 + 0.5, y_of(*c)), pos2(x0 + (slot - 0.5).max(1.0), plot.max.y)), 1.5, t.accent.gamma_multiply(0.7));
+    }
+    // the plan's intended intensity: a stepped line, beat by beat
+    let beats: Vec<&Value> = view["intensity"].as_array().map_or(Vec::new(), |a| a.iter().take(MAX_BEATS).collect());
+    let mut path: Vec<egui::Pos2> = Vec::new();
+    for b in &beats {
+        let (a, e, v) = (finite(&b["start"]).unwrap_or(0.0), finite(&b["end"]).unwrap_or(0.0), finite(&b["intensity"]).unwrap_or(0.0));
+        path.push(pos2(x_of(a), y_of(v)));
+        path.push(pos2(x_of(e), y_of(v)));
+    }
+    if path.len() > 1 {
+        painter.add(Shape::line(path, Stroke::new(2.0, LOOK)));
+    }
+    // the reference's rhythm, stretched over the length of the edit: dashed
+    let curve: Vec<f64> = view["reference"]["curve"].as_array().map_or(Vec::new(), |a| a.iter().take(40).filter_map(finite).collect());
+    if curve.len() > 1 {
+        let pts: Vec<egui::Pos2> =
+            curve.iter().enumerate().map(|(i, v)| pos2(plot.min.x + plot.width() * (i as f32 + 0.5) / curve.len() as f32, y_of(*v))).collect();
+        painter.extend(Shape::dashed_line(&pts, Stroke::new(1.6, Color32::from_rgb(0xe5, 0xe5, 0xe5)), 5.0, 3.0));
+    }
+    painter.text(pos2(rect.min.x, rect.max.y - 1.0), Align2::LEFT_BOTTOM, "0:00", Tokens::ui(10.0), t.text_faint);
+    painter.text(pos2(rect.max.x, rect.max.y - 1.0), Align2::RIGHT_BOTTOM, clock((duration) as i64), Tokens::ui(10.0), t.text_faint);
+    elems.push((format!("assistant.view.{n}.rhythm"), resp, format!("{} bars", cut.len())));
+    // what the three marks are
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(tl!("■ how fast it cuts")).size(10.5).color(t.accent));
+        if !beats.is_empty() {
+            ui.label(RichText::new(tl!("— planned intensity")).size(10.5).color(LOOK));
+        }
+        if curve.len() > 1 {
+            let name = text(&view["reference"]["name"]);
+            ui.label(RichText::new(tlf!("┄ rhythm of “{name}”", name = name)).size(10.5).color(t.text_dim));
+        }
     });
 }
 

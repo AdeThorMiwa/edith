@@ -612,3 +612,86 @@ fn the_assistant_can_read_the_library_one_reference_and_a_comparison_and_cannot_
     }
     assert!(tool(&Session::default(), "reference_compare", json!({"id": "r1"})).is_error);
 }
+
+#[test]
+fn the_compare_view_holds_the_rows_that_differ_most_or_the_ones_asked_for() {
+    let dir = tmp_dir("ref-view-compare");
+    let (mut s, id) = with_reference(
+        &dir,
+        &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48), (DemoScene::Forest, 48)],
+        true,
+        crate::analysis_tests::edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0, 6.0]),
+    );
+    let show = |s: &Session, p: Value| tool(s, "show", p);
+    // no reference named and none adopted
+    assert!(show(&s, json!({"view": "compare"})).is_error);
+    let r = show(&s, json!({"view": "compare", "reference": id, "caption": "Against the slow film"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.clone().unwrap();
+    assert_eq!((v["view"].as_str(), v["reference"].as_str(), v["caption"].as_str()), (Some("compare"), Some("Slow film"), Some("Against the slow film")));
+    let rows = v["rows"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.len() <= 8);
+    assert!(rows.iter().any(|x| x["metric"] == "meanShot" && x["verdict"] == "higher"), "{rows:?}");
+    assert!(rows.iter().all(|x| x["yoursText"].is_string() && x["theirsText"].is_string() && x["words"].is_string()));
+    assert!(v["missing"].as_array().is_some_and(|m| !m.is_empty()), "the unmeasured parts are named");
+    assert!(r.content.starts_with("Shown to the person: ") && !r.content.contains("yoursText"), "{}", r.content);
+    // chosen rows, in the order asked
+    let picked = show(&s, json!({"view": "compare", "reference": id, "rows": ["cutsPerMinute", "meanShot"]})).view.unwrap();
+    let metrics: Vec<&str> = picked["rows"].as_array().unwrap().iter().filter_map(|x| x["metric"].as_str()).collect();
+    assert_eq!(metrics, ["cutsPerMinute", "meanShot"]);
+    // a row that is not there says which ones are
+    let bad = show(&s, json!({"view": "compare", "reference": id, "rows": ["mood"]}));
+    assert!(bad.is_error && bad.content.contains("meanShot"), "{}", bad.content);
+    for odd in [
+        json!({"view": "compare", "reference": 5}),
+        json!({"view": "compare", "reference": "nope"}),
+        json!({"view": "compare", "reference": id, "rows": "x"}),
+        json!({"view": "compare", "reference": id, "rows": [1]}),
+        json!({"view": "compare", "reference": id, "rows": vec!["meanShot"; 50]}),
+    ] {
+        assert!(show(&s, odd.clone()).is_error, "{odd}");
+    }
+    // the adopted reference is the default
+    s.execute("reference.adopt", json!({"id": id})).unwrap();
+    assert!(show(&s, json!({"view": "compare"})).view.is_some());
+    assert!(show(&Session::default(), json!({"view": "compare"})).is_error);
+}
+
+#[test]
+fn the_rhythm_view_sets_the_cutting_beside_the_planned_intensity_and_a_references_rhythm() {
+    let dir = tmp_dir("ref-view-rhythm");
+    let (mut s, id) = with_reference(
+        &dir,
+        &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48), (DemoScene::Forest, 48)],
+        false,
+        crate::analysis_tests::edit_of(&[2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 12.0, 12.0, 12.0, 12.0]),
+    );
+    let show = |s: &Session, p: Value| tool(s, "show", p);
+    // no plan and no reference: the cutting alone
+    let r = show(&s, json!({"view": "rhythm"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.clone().unwrap();
+    assert!(v["intensity"].as_array().unwrap().is_empty() && v["reference"].is_null());
+    let cut: Vec<f64> = v["cut"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert!(cut.iter().all(|c| (0.0..=1.0).contains(c)) && cut.iter().any(|c| (*c - 1.0).abs() < 1e-9), "{cut:?}");
+    assert!(r.content.contains("there is no plan"), "{}", r.content);
+    // with a plan and a reference named
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1})).unwrap();
+    let v = show(&s, json!({"view": "rhythm", "reference": id})).view.unwrap();
+    let beats = v["intensity"].as_array().unwrap();
+    assert!(
+        !beats.is_empty() && beats.iter().all(|b| (0.0..=1.0).contains(&b["intensity"].as_f64().unwrap()) && b["start"].as_i64() <= b["end"].as_i64()),
+        "{beats:?}"
+    );
+    assert_eq!(v["reference"]["name"], "Slow film");
+    let curve = v["reference"]["curve"].as_array().unwrap();
+    assert_eq!(curve.len(), 20);
+    assert!(curve.iter().all(|c| (0.0..=1.0 + 1e-9).contains(&c.as_f64().unwrap())));
+    // an unknown reference is refused; with none adopted and none named there is simply no reference line
+    assert!(show(&s, json!({"view": "rhythm", "reference": "nope"})).is_error);
+    assert!(show(&s, json!({"view": "rhythm"})).view.unwrap()["reference"].is_null());
+    s.execute("reference.adopt", json!({"id": id})).unwrap();
+    assert!(show(&s, json!({"view": "rhythm"})).view.unwrap()["reference"].is_object(), "the adopted one is used");
+    // one shot has no rhythm
+    assert!(show(&crate::analysis_tests::edit_of(&[5.0]), json!({"view": "rhythm"})).is_error);
+}

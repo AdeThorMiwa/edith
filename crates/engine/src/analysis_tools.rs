@@ -62,9 +62,11 @@ pub(crate) fn tools() -> Vec<ToolDef> {
         ),
         def(
             "show",
-            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
+            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence), compare (your numbers beside a reference's, row by row), rhythm (your cutting against the planned intensity and a reference's rhythm). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
             json!({
-                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie"], "description": "Which view."},
+                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm"], "description": "Which view."},
+                "reference": {"type": "string", "description": "compare and rhythm views: a reference id from reference_list. Default: the adopted reference."},
+                "rows": {"type": "array", "items": {"type": "string"}, "description": "compare view: which rows, by name as reference_compare lists them (meanShot, cutsPerMinute, loudness…). Default: what differs most."},
                 "metric": {"type": "string", "enum": ["narrationPace", "averageShot", "loudness", "cutsPerMinute"], "description": "gauge view: which number to set against its target."},
                 "of": {"type": "string", "enum": ["screenTime", "narration", "silence"], "description": "pie view: what to divide up. screenTime: how much of the running time is in short, medium and long shots; narration: narrated or not; silence: sound or silence (needs the mix measured)."},
                 "item": {"type": "integer", "description": "palette view: a media item that has been measured."},
@@ -574,7 +576,7 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
 // ---------------------------------------------------------------------------- views
 
 /// The views `show` can draw.
-const VIEWS: [&str; 7] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie"];
+const VIEWS: [&str; 9] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm"];
 /// Shots drawn in one timeline view.
 const MAX_SHOTS_DRAWN: usize = 1200;
 /// Findings marked on one timeline view.
@@ -710,6 +712,8 @@ fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
         "gauge" => gauge_view(s, o, &report, caption),
         "palette" => palette_view(s, o, caption),
         "pie" => pie_view(s, o, &report, caption),
+        "compare" => compare_view(s, o, caption),
+        "rhythm" => rhythm_view(s, o, caption),
         _ => {
             let id = s.state.active_sequence.ok_or("no sequence is open")?;
             let Some(filmcraft_project::ItemKind::Sequence(q)) = s.project.item(id).map(|i| &i.kind) else { return Err("no sequence is open".into()) };
@@ -896,4 +900,103 @@ fn pie_view(s: &Session, o: &serde_json::Map<String, Value>, report: &Value, cap
     let v = json!({"view": "pie", "caption": caption, "sequence": name, "of": of, "slices": rows});
     let words: Vec<String> = slices.iter().map(|(l, sh, _)| format!("{l} {:.0}%", sh * 100.0)).collect();
     Ok(ToolOutput::ok(format!("Shown to the person: a pie of {of}: {}. Say what the split means.", words.join(", "))).with_view(v))
+}
+
+/// Rows a compare view holds.
+const MAX_COMPARE_ROWS: usize = 8;
+/// Windows a rhythm view holds.
+const MAX_RHYTHM_BARS: usize = 120;
+
+fn compare_view(s: &Session, o: &serde_json::Map<String, Value>, caption: Option<String>) -> Result<ToolOutput, String> {
+    let params = json!({"id": o.get("reference").cloned().unwrap_or(Value::Null)});
+    let (_, name, theirs) = crate::reference::reference_for(s, &params, "show").map_err(|e| e.to_string())?;
+    let seq = s.state.active_sequence.ok_or("no sequence is open")?;
+    let yours = crate::reference::fingerprint_of_sequence(s, seq, "show").map_err(|e| e.to_string())?;
+    let c = edith_analysis::compare(&yours, &theirs);
+    let wanted = id_list(o, "rows", MAX_COMPARE_ROWS)?;
+    let chosen: Vec<&edith_analysis::compare::Row> = match &wanted {
+        Some(names) => names
+            .iter()
+            .map(|n| {
+                c.rows.iter().find(|r| &r.metric == n).ok_or_else(|| {
+                    let known: Vec<&str> = c.rows.iter().map(|r| r.metric.as_str()).collect();
+                    format!("there is no row {n:?}. The rows are: {}.", known.join(", "))
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        None => {
+            // what differs most first, then close ones to make a useful card
+            let mut rows: Vec<&edith_analysis::compare::Row> = c.rows.iter().filter(|r| r.verdict != edith_analysis::Verdict::Close).collect();
+            rows.extend(c.rows.iter().filter(|r| r.verdict == edith_analysis::Verdict::Close).take(4usize.saturating_sub(rows.len())));
+            rows.truncate(MAX_COMPARE_ROWS);
+            rows
+        }
+    };
+    if chosen.is_empty() {
+        return Err("there is nothing to compare yet: the edit and the reference have no rows in common".into());
+    }
+    let rows: Vec<Value> = chosen.iter().map(|r| crate::analysis::to_value(*r)).collect();
+    let seq_name = s.project.item(seq).map(|i| i.name.clone()).unwrap_or_default();
+    let v = json!({"view": "compare", "caption": caption, "reference": name, "sequence": seq_name, "rows": rows, "missing": c.missing});
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: {} rows of “{seq_name}” against “{name}” ({}). Say what the differences mean for how the edit feels; do not read the rows out.{}",
+        chosen.len(),
+        chosen.iter().map(|r| r.metric.as_str()).collect::<Vec<_>>().join(", "),
+        if c.missing.is_empty() { String::new() } else { format!(" Not compared: {}.", c.missing.join("; ")) }
+    ))
+    .with_view(v))
+}
+
+fn rhythm_view(s: &Session, o: &serde_json::Map<String, Value>, caption: Option<String>) -> Result<ToolOutput, String> {
+    let (name, stats) = open_stats(s)?;
+    if stats.shots.count < 2 {
+        return Err("the open edit has fewer than two shots, so there is no rhythm to draw".into());
+    }
+    let tps = filmcraft_time::TICKS_PER_SECOND as f64;
+    let w = stats.cuts.window_seconds;
+    let per_min: Vec<f64> = stats.cuts.series.iter().map(|c| f64::from(*c) * 60.0 / w).collect();
+    let group = per_min.len().div_ceil(MAX_RHYTHM_BARS).max(1);
+    let bars: Vec<f64> = per_min.chunks(group).map(|c| c.iter().sum::<f64>() / c.len() as f64).collect();
+    let top = bars.iter().copied().fold(0.0, f64::max).max(f64::MIN_POSITIVE);
+    let cut: Vec<f64> = bars.iter().map(|b| b / top).collect();
+    // the plan's intended intensity, beat by beat: where the beat is on the timeline (laid out, else planned from the start)
+    let plan = crate::planner::get(&s.project);
+    let intensity: Vec<Value> = plan
+        .as_ref()
+        .map(|p| {
+            let laid = edith_planner::ranges(p, filmcraft_time::Tick::ZERO);
+            p.beats()
+                .zip(laid)
+                .map(|(b, r)| {
+                    let (start, end) = b.link.map_or((r.start.0, r.end.0), |l| (l.start.0, l.start.0.saturating_add(l.duration.0)));
+                    json!({"name": b.name, "start": start, "end": end, "intensity": f64::from(b.intensity.min(100)) / 100.0})
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // a reference's rhythm, if one is named or adopted
+    let reference = {
+        let params = json!({"id": o.get("reference").cloned().unwrap_or(Value::Null)});
+        match crate::reference::reference_for(s, &params, "show") {
+            Ok((_, rname, fp)) => {
+                let m = fp.rhythm.curve.iter().map(|v| f64::from(*v)).fold(0.0, f64::max).max(f64::MIN_POSITIVE);
+                Some(json!({"name": rname, "curve": fp.rhythm.curve.iter().map(|v| f64::from(*v) / m).collect::<Vec<_>>()}))
+            }
+            Err(_) if o.get("reference").is_some_and(|v| !v.is_null()) => return Err("there is no such reference: reference_list shows what there is".into()),
+            Err(_) => None,
+        }
+    };
+    let v = json!({
+        "view": "rhythm", "caption": caption, "sequence": name,
+        "duration": stats.duration_seconds * tps,
+        "barSeconds": w * group as f64, "cut": cut,
+        "intensity": intensity, "reference": reference,
+    });
+    let has_plan = !intensity.is_empty();
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: how fast the edit cuts along its length{}{}. Cutting is a rough stand-in for intensity (a faster cut feels more intense), so say where the cutting and the intended intensity agree or part.",
+        if has_plan { ", beside the plan's intended intensity" } else { " (there is no plan, so no intended intensity)" },
+        reference.as_ref().map_or(String::new(), |r| format!(" and the rhythm of “{}”", r["name"].as_str().unwrap_or("")))
+    ))
+    .with_view(v))
 }
