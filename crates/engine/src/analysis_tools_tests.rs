@@ -260,7 +260,7 @@ fn show_hands_the_person_a_view_of_the_real_numbers_and_the_model_only_a_note() 
     let tools = crate::assistant_tools::tools();
     let d = tools.iter().find(|d| d.spec.name == "show").expect("a show tool");
     assert!(d.read_only);
-    assert_eq!(d.spec.input_schema["properties"]["view"]["enum"], json!(["findings", "timeline", "histogram"]));
+    assert_eq!(d.spec.input_schema["properties"]["view"]["enum"], json!(["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie"]));
 
     // findings: a card of what the rules found, by id
     let r = run(&s, "show", json!({"view": "findings", "caption": "What I noticed"}));
@@ -395,4 +395,127 @@ fn a_view_reaches_the_conversation_but_never_the_model() {
     let ev = v["events"].as_array().unwrap().iter().find(|e| e["type"] == "tool_result").expect("a tool result");
     assert_eq!(ev["view"]["view"], "timeline");
     assert_eq!(ev["view"]["shots"].as_array().unwrap().len(), 3);
+}
+
+fn item_named(s: &Session, name: &str) -> u64 {
+    s.project.items.values().find(|i| i.name == name).map(|i| i.id.0).unwrap_or_else(|| panic!("no item {name}"))
+}
+
+/// Gives the edit's tone a narration script of `words` words.
+fn narrate(s: &mut Session, words: usize) {
+    let tone = item_named(s, "tone");
+    let n = filmcraft_project::Narration {
+        text: vec!["word"; words].join(" "),
+        language: "en-US".into(),
+        voice: "test".into(),
+        pitch: Default::default(),
+        pace: 1.0,
+        take: 0,
+        speech_duration: filmcraft_time::Tick(30 * filmcraft_time::TICKS_PER_SECOND),
+    };
+    Arc::make_mut(&mut s.project).narrations.insert(filmcraft_project::ItemId(tone), n);
+}
+
+#[test]
+fn the_pace_view_bars_the_cuts_a_minute_along_the_edit_with_the_plans_rate() {
+    let mut lengths = vec![1.0; 30];
+    lengths.extend([20.0, 20.0, 20.0]);
+    let mut s = edit_of(&lengths);
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1.5})).unwrap();
+    let r = run(&s, "show", json!({"view": "pace", "caption": "Cuts over time"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.unwrap();
+    let bars: Vec<f64> = v["cutsPerMinute"].as_array().unwrap().iter().map(|b| b.as_f64().unwrap()).collect();
+    assert!(bars.len() >= 2 && bars[0] > 30.0 && *bars.last().unwrap() < 5.0, "quick at the start, slow at the end: {bars:?}");
+    assert!((v["targetPerMinute"].as_f64().unwrap() - 60.0 / 7.0).abs() < 1e-9, "the pack's 7 s a shot is 8.6 cuts a minute");
+    assert!(v["overall"].as_f64().unwrap() > 0.0 && v["barSeconds"].as_f64().unwrap() >= 30.0);
+    assert!(r.content.contains("Shown to the person: cuts a minute") && r.content.contains("plan's rate"), "{}", r.content);
+    // a long edit is averaged into at most 120 bars
+    let long = edit_of(&vec![3.0; 1500]);
+    let v = run(&long, "show", json!({"view": "pace"})).view.unwrap();
+    assert!(v["cutsPerMinute"].as_array().unwrap().len() <= 120, "{}", v["cutsPerMinute"].as_array().unwrap().len());
+    assert!(run(&edit_of(&[5.0]), "show", json!({"view": "pace"})).is_error, "one shot has no pace");
+}
+
+#[test]
+fn the_gauge_view_sets_one_number_against_its_target_and_says_when_it_cannot() {
+    let mut s = edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0]);
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1})).unwrap();
+    narrate(&mut s, 70);
+    let g = |s: &Session, m: &str| run(s, "show", json!({"view": "gauge", "metric": m}));
+    let shot = g(&s, "averageShot");
+    let v = shot.view.clone().unwrap();
+    assert_eq!((v["metric"].as_str(), v["unit"].as_str(), v["label"].as_str()), (Some("averageShot"), Some("s"), Some("Average shot")));
+    assert!((v["value"].as_f64().unwrap() - 6.0).abs() < 0.05 && v["target"] == 7.0, "{v}");
+    assert!(v["low"].as_f64().unwrap() < 6.0 && v["high"].as_f64().unwrap() > 6.0, "6 s is inside the band around 7 s");
+    assert!(v["scaleMin"] == 0.0 && v["scaleMax"].as_f64().unwrap() > 6.0);
+    let pace = g(&s, "narrationPace").view.unwrap();
+    assert!((pace["value"].as_f64().unwrap() - 140.0).abs() < 1.0 && pace["target"] == 140.0, "{pace}");
+    assert!(g(&s, "cutsPerMinute").view.is_some());
+    // loudness needs the mix; before it is measured the tool says what to do
+    let early = g(&s, "loudness");
+    assert!(early.is_error && early.content.contains("analysis_run with mix true"), "{}", early.content);
+    s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();
+    let lou = g(&s, "loudness").view.unwrap();
+    assert!(
+        (lou["scaleMin"].as_f64().unwrap(), lou["scaleMax"].as_f64().unwrap()) == (-40.0, 0.0)
+            && lou["target"] == -14.0
+            && lou["value"].as_f64().unwrap() < -14.0,
+        "{lou}"
+    );
+    // no narration, no such metric, nothing named
+    assert!(g(&edit_of(&[6.0, 6.0]), "narrationPace").is_error);
+    for odd in [json!({"view": "gauge"}), json!({"view": "gauge", "metric": "mood"}), json!({"view": "gauge", "metric": 7})] {
+        assert!(run(&s, "show", odd).is_error);
+    }
+    // a gauge with no plan has no target or band, and is still drawn
+    let bare = g(&edit_of(&[6.0, 6.0, 6.0]), "averageShot").view.unwrap();
+    assert!(bare["target"].is_null() && bare["low"].is_null() && bare["high"].is_null());
+}
+
+#[test]
+fn the_palette_view_needs_the_item_to_have_been_measured() {
+    let mut s = edit_of(&[6.0, 6.0]);
+    let shot = item_named(&s, "shot0");
+    let early = run(&s, "show", json!({"view": "palette", "item": shot}));
+    assert!(early.is_error && early.content.contains(&format!("analysis_run with item {shot}")), "{}", early.content);
+    s.execute("analysis.run", json!({"item": shot, "samples": 3, "wait": true})).unwrap();
+    let r = run(&s, "show", json!({"view": "palette", "item": shot}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.unwrap();
+    let colours = v["colors"].as_array().unwrap();
+    assert!(!colours.is_empty() && colours.len() <= 5 && colours[0]["rgb"].as_array().unwrap().len() == 3, "{v}");
+    assert_eq!(v["name"], "shot0");
+    // the tone has no pictures; a missing id and a wrong type are refused
+    let tone = item_named(&s, "tone");
+    s.execute("analysis.run", json!({"item": tone, "wait": true})).unwrap();
+    assert!(run(&s, "show", json!({"view": "palette", "item": tone})).is_error);
+    assert!(run(&s, "show", json!({"view": "palette"})).is_error && run(&s, "show", json!({"view": "palette", "item": "x"})).is_error);
+}
+
+#[test]
+fn the_pie_view_divides_screen_time_narration_or_silence() {
+    let mut s = edit_of(&[1.0, 1.0, 5.0, 20.0]);
+    let v = run(&s, "show", json!({"view": "pie", "of": "screenTime"})).view.unwrap();
+    let slices = v["slices"].as_array().unwrap();
+    let share: f64 = slices.iter().map(|x| x["share"].as_f64().unwrap()).sum();
+    assert!((share - 1.0).abs() < 1e-9, "{slices:?}");
+    let by = |label: &str| slices.iter().find(|x| x["label"] == label).unwrap_or_else(|| panic!("no {label}: {slices:?}"));
+    assert_eq!(by("under 2 s")["detail"], "2 shots");
+    assert!((by("15 s and more")["share"].as_f64().unwrap() - 20.0 / 27.0).abs() < 0.01, "the long shot is most of the running time");
+    assert!(slices.iter().all(|x| x["label"] != "6–15 s"), "a band with no shots is left out");
+    // narration, and silence once the mix is measured
+    assert!(run(&s, "show", json!({"view": "pie", "of": "narration"})).is_error, "no narration yet");
+    narrate(&mut s, 60);
+    let n = run(&s, "show", json!({"view": "pie", "of": "narration"})).view.unwrap();
+    assert_eq!(n["slices"].as_array().unwrap().len(), 2);
+    let early = run(&s, "show", json!({"view": "pie", "of": "silence"}));
+    assert!(early.is_error && early.content.contains("analysis_run with mix true"));
+    s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();
+    let q = run(&s, "show", json!({"view": "pie", "of": "silence"})).view.unwrap();
+    assert!(q["slices"][0]["label"] == "sound" && q["slices"][0]["share"].as_f64().unwrap() > 0.9, "{q}");
+    for odd in [json!({"view": "pie"}), json!({"view": "pie", "of": "mood"}), json!({"view": "pie", "of": 3})] {
+        assert!(run(&s, "show", odd).is_error);
+    }
+    assert!(run(&Session::default(), "show", json!({"view": "pie", "of": "screenTime"})).is_error);
 }

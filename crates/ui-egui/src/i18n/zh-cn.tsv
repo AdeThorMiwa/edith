@@ -3870,3 +3870,7 @@
 	{count} shots	{count} 个镜头
 	average {length}	平均 {length}
 	plan: about {length} a shot (▲)	计划:每个镜头约 {length}(▲)
+	cuts a minute	每分钟剪辑次数
+	overall {rate} cuts a minute	整体每分钟 {rate} 次剪辑
+	plan: about {rate} (dashed)	计划:约 {rate}(虚线)
+	target {value}	目标 {value}

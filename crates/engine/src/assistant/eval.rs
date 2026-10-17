@@ -90,6 +90,10 @@ fn run_task(inp: &Inputs, task: &Task, cancel: &dyn Fn() -> bool) -> (TaskResult
     s.assistant.settings = inp.settings.clone().sanitized();
     // an evaluation asks only its questions: no extra request to name the thread
     s.assistant.settings.auto_title = false;
+    // how the assistant works for this task (`coach` for the coach's)
+    if matches!(task.mode.as_str(), "ask" | "coach") {
+        s.assistant.settings.mode = task.mode.clone();
+    }
     if let Some(info) = &inp.info {
         lock(&s.assistant.models).models = vec![info.clone()];
     }

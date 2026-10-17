@@ -62,9 +62,12 @@ pub(crate) fn tools() -> Vec<ToolDef> {
         ),
         def(
             "show",
-            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
+            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
             json!({
-                "view": {"type": "string", "enum": ["findings", "timeline", "histogram"], "description": "Which view."},
+                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie"], "description": "Which view."},
+                "metric": {"type": "string", "enum": ["narrationPace", "averageShot", "loudness", "cutsPerMinute"], "description": "gauge view: which number to set against its target."},
+                "of": {"type": "string", "enum": ["screenTime", "narration", "silence"], "description": "pie view: what to divide up. screenTime: how much of the running time is in short, medium and long shots; narration: narrated or not; silence: sound or silence (needs the mix measured)."},
+                "item": {"type": "integer", "description": "palette view: a media item that has been measured."},
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "findings view: which findings, by id from coach_findings. Default: the first eight."},
                 "highlight": {"type": "array", "items": {"type": "string"}, "description": "timeline view: finding ids to mark. Default: every finding that has a place on the timeline."},
                 "from": {"type": "string", "description": "timeline view: start of the stretch to draw (seconds or timecode). Default: the start."},
@@ -569,7 +572,7 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
 // ---------------------------------------------------------------------------- views
 
 /// The views `show` can draw.
-const VIEWS: [&str; 3] = ["findings", "timeline", "histogram"];
+const VIEWS: [&str; 7] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie"];
 /// Shots drawn in one timeline view.
 const MAX_SHOTS_DRAWN: usize = 1200;
 /// Findings marked on one timeline view.
@@ -701,6 +704,10 @@ fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
             ))
             .with_view(v))
         }
+        "pace" => pace_view(s, &report, caption),
+        "gauge" => gauge_view(s, o, &report, caption),
+        "palette" => palette_view(s, o, caption),
+        "pie" => pie_view(s, o, &report, caption),
         _ => {
             let id = s.state.active_sequence.ok_or("no sequence is open")?;
             let Some(filmcraft_project::ItemKind::Sequence(q)) = s.project.item(id).map(|i| &i.kind) else { return Err("no sequence is open".into()) };
@@ -740,4 +747,151 @@ fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
             .with_view(v))
         }
     }
+}
+
+/// The open sequence's measurements (no media needed), or why there are none.
+fn open_stats(s: &Session) -> Result<(String, edith_analysis::SequenceStats), String> {
+    let id = s.state.active_sequence.ok_or("no sequence is open")?;
+    let item = s.project.item(id).ok_or("no sequence is open")?;
+    let filmcraft_project::ItemKind::Sequence(q) = &item.kind else { return Err("no sequence is open".into()) };
+    let stats = edith_analysis::analyze_sequence(&crate::analysis::sequence_input(s, q)).map_err(|e| e.to_string())?;
+    Ok((item.name.clone(), stats))
+}
+
+/// The most bars a pace view holds: longer edits are averaged into this many stretches.
+const MAX_PACE_BARS: usize = 120;
+
+fn pace_view(s: &Session, report: &Value, caption: Option<String>) -> Result<ToolOutput, String> {
+    let (name, stats) = open_stats(s)?;
+    if stats.shots.count < 2 {
+        return Err("the open edit has fewer than two shots, so there is no pace to draw".into());
+    }
+    let w = stats.cuts.window_seconds;
+    let per_min: Vec<f64> = stats.cuts.series.iter().map(|c| f64::from(*c) * 60.0 / w).collect();
+    let group = per_min.len().div_ceil(MAX_PACE_BARS).max(1);
+    let bars: Vec<f64> = per_min.chunks(group).map(|c| c.iter().sum::<f64>() / c.len() as f64).collect();
+    let target = num(&report["targets"]["averageShotSeconds"]).filter(|t| *t > 0.0).map(|t| 60.0 / t);
+    let v = json!({"view": "pace", "caption": caption, "sequence": name, "barSeconds": w * group as f64, "cutsPerMinute": bars, "overall": stats.cuts.per_minute, "targetPerMinute": target});
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: cuts a minute along the edit, {} stretches of {:.0} s (overall {:.1} a minute){}. Say where it speeds up or slows down and whether that suits the moment.",
+        bars.len(),
+        w * group as f64,
+        stats.cuts.per_minute,
+        target.map_or(String::new(), |t| format!(", with the plan's rate of about {t:.1} marked"))
+    ))
+    .with_view(v))
+}
+
+fn gauge_view(s: &Session, o: &serde_json::Map<String, Value>, report: &Value, caption: Option<String>) -> Result<ToolOutput, String> {
+    let metric = o.get("metric").and_then(Value::as_str).ok_or("a gauge needs `metric`: narrationPace, averageShot, loudness or cutsPerMinute")?;
+    let (name, stats) = open_stats(s)?;
+    let targets = &report["targets"];
+    // (label, value, unit, target, band as fractions of the target or ± units, scale)
+    let (label, value, unit, target, band, scale): (&str, f64, &str, Option<f64>, Option<(f64, f64)>, Option<(f64, f64)>) = match metric {
+        "narrationPace" => {
+            let v = stats.narration.words_per_minute.ok_or("there is no narration on the timeline to measure")?;
+            let t = num(&targets["wordsPerMinute"]);
+            ("Narration pace", v, "words a minute", t, t.map(|t| (0.8 * t, 1.15 * t)), None)
+        }
+        "averageShot" => {
+            if stats.shots.count == 0 {
+                return Err("the open edit has no shots".into());
+            }
+            let t = num(&targets["averageShotSeconds"]);
+            ("Average shot", stats.shots.mean_seconds, "s", t, t.map(|t| (0.65 * t, 1.35 * t)), None)
+        }
+        "cutsPerMinute" => {
+            let t = num(&targets["averageShotSeconds"]).filter(|t| *t > 0.0).map(|t| 60.0 / t);
+            ("Cuts a minute", stats.cuts.per_minute, "a minute", t, t.map(|t| (0.65 * t, 1.35 * t)), None)
+        }
+        "loudness" => {
+            let id = s.state.active_sequence.ok_or("no sequence is open")?;
+            let mix = crate::analysis::measured_mix(s, id).ok_or("the mix has not been measured: call analysis_run with mix true first")?;
+            let v = mix.integrated_lufs.ok_or("the mix is too quiet or too short to have a loudness")?;
+            let t = num(&targets["loudnessLufs"]).unwrap_or(-14.0);
+            ("Loudness", v, "LUFS", Some(t), Some((t - 3.0, t + 3.0)), Some((-40.0, 0.0)))
+        }
+        other => {
+            return Err(format!(
+                "there is no metric {:?}; use narrationPace, averageShot, loudness or cutsPerMinute",
+                other.chars().take(30).collect::<String>()
+            ));
+        }
+    };
+    let (lo, hi) = scale.unwrap_or_else(|| (0.0, (value.abs().max(target.unwrap_or(0.0)) * 1.4).max(1.0)));
+    let v = json!({"view": "gauge", "caption": caption, "sequence": name, "metric": metric, "label": label, "value": value, "unit": unit, "target": target, "low": band.map(|b| b.0), "high": band.map(|b| b.1), "scaleMin": lo, "scaleMax": hi});
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: a gauge of {} at {value:.1} {unit}{}. Say what it means for this video.",
+        label.to_lowercase(),
+        target.map_or(String::new(), |t| format!(" against a target of {t:.1}"))
+    ))
+    .with_view(v))
+}
+
+fn palette_view(s: &Session, o: &serde_json::Map<String, Value>, caption: Option<String>) -> Result<ToolOutput, String> {
+    let id = o.get("item").and_then(Value::as_u64).ok_or("a palette needs `item`: the id of a media item that has been measured")?;
+    let cache = Cache::of(s);
+    let report = crate::analysis::current_report_for(s, &cache, "item", id)
+        .ok_or_else(|| format!("item {id} has not been measured: call analysis_run with item {id} first"))?;
+    let colours = report["video"]["summary"]["palette"].as_array().cloned().unwrap_or_default();
+    if colours.is_empty() {
+        return Err(format!("item {id} has no pictures, so no palette"));
+    }
+    let rows: Vec<Value> = colours.iter().take(5).map(|c| json!({"rgb": c["rgb"], "share": c["share"]})).collect();
+    let name = report["target"]["name"].as_str().unwrap_or("").to_string();
+    let v = json!({"view": "palette", "caption": caption, "name": name, "colors": rows});
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: the {} main colours of “{name}” as swatches in proportion. Say what the palette feels like and how it sits with the rest.",
+        rows.len()
+    ))
+    .with_view(v))
+}
+
+fn pie_view(s: &Session, o: &serde_json::Map<String, Value>, report: &Value, caption: Option<String>) -> Result<ToolOutput, String> {
+    let of = o.get("of").and_then(Value::as_str).ok_or("a pie needs `of`: screenTime, narration or silence")?;
+    let (name, stats) = open_stats(s)?;
+    let slices: Vec<(String, f64, String)> = match of {
+        "screenTime" => {
+            let id = s.state.active_sequence.ok_or("no sequence is open")?;
+            let Some(filmcraft_project::ItemKind::Sequence(q)) = s.project.item(id).map(|i| &i.kind) else { return Err("no sequence is open".into()) };
+            let shots = edith_analysis::shot_spans(&crate::analysis::sequence_input(s, q)).map_err(|e| e.to_string())?;
+            if shots.is_empty() {
+                return Err("the open edit has no shots".into());
+            }
+            let bands: [(&str, f64); 4] = [("under 2 s", 2.0), ("2–6 s", 6.0), ("6–15 s", 15.0), ("15 s and more", f64::INFINITY)];
+            let (mut time, mut count) = ([0f64; 4], [0u32; 4]);
+            for sh in &shots {
+                let l = (sh.end - sh.start) as f64 / filmcraft_time::TICKS_PER_SECOND as f64;
+                let i = bands.iter().position(|b| l < b.1).unwrap_or(3);
+                time[i] += l;
+                count[i] += 1;
+            }
+            let total: f64 = time.iter().sum();
+            bands
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| count[*i] > 0)
+                .map(|(i, b)| (b.0.to_string(), time[i] / total.max(f64::MIN_POSITIVE), format!("{} shot{}", count[i], if count[i] == 1 { "" } else { "s" })))
+                .collect()
+        }
+        "narration" => {
+            let share = stats.narration.share.clamp(0.0, 1.0);
+            if stats.narration.words == 0 {
+                return Err("there is no narration on the timeline".into());
+            }
+            vec![("narrated".to_string(), share, String::new()), ("not narrated".to_string(), 1.0 - share, String::new())]
+        }
+        _ if of == "silence" => {
+            let id = s.state.active_sequence.ok_or("no sequence is open")?;
+            let mix = crate::analysis::measured_mix(s, id).ok_or("the mix has not been measured: call analysis_run with mix true first")?;
+            let q = f64::from(mix.silence_share).clamp(0.0, 1.0);
+            vec![("sound".to_string(), 1.0 - q, String::new()), ("silence".to_string(), q, String::new())]
+        }
+        other => return Err(format!("there is no `of` {:?}; use screenTime, narration or silence", other.chars().take(30).collect::<String>())),
+    };
+    let _ = report;
+    let rows: Vec<Value> = slices.iter().map(|(l, sh, d)| json!({"label": l, "share": sh, "detail": d})).collect();
+    let v = json!({"view": "pie", "caption": caption, "sequence": name, "of": of, "slices": rows});
+    let words: Vec<String> = slices.iter().map(|(l, sh, _)| format!("{l} {:.0}%", sh * 100.0)).collect();
+    Ok(ToolOutput::ok(format!("Shown to the person: a pie of {of}: {}. Say what the split means.", words.join(", "))).with_view(v))
 }

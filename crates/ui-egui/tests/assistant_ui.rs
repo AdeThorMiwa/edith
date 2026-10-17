@@ -944,13 +944,94 @@ fn a_view_the_tool_refused_is_an_ordinary_tool_card_and_a_damaged_one_draws_as_n
     d.app()
         .session
         .assistant
-        .use_model(scripted(vec![says_then_shows("Let me show you.", "v1", "show", json!({"view": "pie"})), text_reply("I could not draw that one.")]));
+        .use_model(scripted(vec![says_then_shows("Let me show you.", "v1", "show", json!({"view": "radar"})), text_reply("I could not draw that one.")]));
     d.open_assistant();
-    d.type_into_input("show me a pie");
+    d.type_into_input("show me a radar chart");
     d.click("assistant.send");
     d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("could not draw")));
     let entries = d.entries();
     let tool = entries.iter().find(|(id, _)| id.starts_with("assistant.tool.")).expect("the refused call is a card");
     assert!(tool.1.contains("there is no view"), "{tool:?}");
     assert!(d.elements("assistant.view.").is_empty(), "no view was drawn");
+}
+
+/// A coach conversation about a measured edit: a plan, a narration, the mix and one clip measured.
+fn measured_edit() -> Session {
+    let mut s = edit_of(&[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 6.0, 7.0, 6.0, 8.0, 20.0, 5.0]);
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1})).unwrap();
+    let tone = s.project.items.values().find(|i| i.name == "tone").map(|i| i.id).unwrap();
+    let n = filmcraft_project::Narration {
+        text: vec!["word"; 120].join(" "),
+        language: "en-US".into(),
+        voice: "test".into(),
+        pitch: Default::default(),
+        pace: 1.0,
+        take: 0,
+        speech_duration: filmcraft_time::Tick(60 * filmcraft_time::TICKS_PER_SECOND),
+    };
+    std::sync::Arc::make_mut(&mut s.project).narrations.insert(tone, n);
+    s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();
+    let shot = s.project.items.values().find(|i| i.name == "shot9").map(|i| i.id.0).unwrap();
+    s.execute("analysis.run", json!({"item": shot, "samples": 3, "wait": true})).unwrap();
+    s
+}
+
+fn coach_asks(d: &mut Driver, replies: Vec<(Vec<StreamEvent>, Response)>, last: &str) {
+    d.app().session.assistant.use_model(scripted(replies));
+    d.exec("assistant.settings", json!({"mode": "coach"}));
+    d.open_assistant();
+    d.exec("window.floatPanel", json!({"panel": "Assistant", "rect": [40.0, 40.0, 700.0, 900.0]}));
+    d.frames(6);
+    d.type_into_input("show me");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains(last)));
+    d.frames(4);
+}
+
+#[test]
+fn the_pace_chart_and_the_gauges_are_drawn_from_the_measurements() {
+    let _g = guard();
+    let mut d = Driver::with(measured_edit());
+    coach_asks(
+        &mut d,
+        vec![
+            says_then_shows("The cuts come in a rush at the start.", "p1", "show", json!({"view": "pace", "caption": "Cuts a minute along the edit"})),
+            says_then_shows("The narration is close to the plan.", "g1", "show", json!({"view": "gauge", "metric": "narrationPace"})),
+            says_then_shows("The mix sits well under the usual target.", "g2", "show", json!({"view": "gauge", "metric": "loudness"})),
+            text_reply("Lift the master a few decibels."),
+        ],
+        "Lift the master",
+    );
+    let ids: Vec<String> = d.elements("assistant.view.").into_iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
+    assert!(ids.iter().any(|i| i.contains(".bar.0")), "{ids:?}");
+    assert_eq!(ids.iter().filter(|i| i.ends_with(".gauge")).count(), 2, "{ids:?}");
+    let gauge = d
+        .elements("assistant.view.")
+        .into_iter()
+        .filter(|e| e["id"].as_str().is_some_and(|i| i.ends_with(".gauge")))
+        .map(|e| e["label"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>();
+    assert!(gauge[0].starts_with("Narration pace 1") && gauge[1].starts_with("Loudness -"), "{gauge:?}");
+    d.snapshot("assistant-view-pace-gauges");
+}
+
+#[test]
+fn the_palette_and_the_pie_are_drawn_from_the_measurements() {
+    let _g = guard();
+    let mut d = Driver::with(measured_edit());
+    let shot = d.app().session.project.items.values().find(|i| i.name == "shot9").map(|i| i.id.0).unwrap();
+    coach_asks(
+        &mut d,
+        vec![
+            says_then_shows("These are the colours of that shot.", "c1", "show", json!({"view": "palette", "item": shot})),
+            says_then_shows("And this is where the running time goes.", "q1", "show", json!({"view": "pie", "of": "screenTime"})),
+            text_reply("Most of the time is in a few long shots."),
+        ],
+        "Most of the time",
+    );
+    let ids: Vec<String> = d.elements("assistant.view.").into_iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
+    assert!(ids.iter().any(|i| i.contains(".swatch.0")) && ids.iter().any(|i| i.contains(".slice.0")), "{ids:?}");
+    let slices = d.elements("assistant.view.").into_iter().filter(|e| e["id"].as_str().is_some_and(|i| i.contains(".slice."))).count();
+    assert!(slices >= 2, "{slices}");
+    d.snapshot("assistant-view-palette-pie");
 }

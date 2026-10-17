@@ -3892,3 +3892,7 @@
 	{count} shots	{count} planos
 	average {length}	promedio {length}
 	plan: about {length} a shot (▲)	plan: unos {length} por plano (▲)
+	cuts a minute	cortes por minuto
+	overall {rate} cuts a minute	en total {rate} cortes por minuto
+	plan: about {rate} (dashed)	plan: unos {rate} (línea discontinua)
+	target {value}	objetivo {value}

@@ -3894,3 +3894,7 @@
 	{count} shots	{count} ショット
 	average {length}	平均 {length}
 	plan: about {length} a shot (▲)	計画: 1ショットあたり約 {length} (▲)
+	cuts a minute	1分あたりのカット数
+	overall {rate} cuts a minute	全体で1分あたり {rate} カット
+	plan: about {rate} (dashed)	計画: 約 {rate}(破線)
+	target {value}	目標 {value}

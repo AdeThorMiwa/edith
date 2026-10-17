@@ -500,7 +500,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "4");
+    assert_eq!(trace.meta.prompt_version, "5");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));
@@ -977,6 +977,7 @@ mod eval {
                 q if q.contains("transitions") => "Dip to black at 00:00:00:00 and 00:00:12:21, a cross dissolve at 00:00:04:11, a push at 00:00:20:19.",
                 q if q.contains("slowest") => "Around 00:00:13:09 to 00:00:18:08 (Desert_Dunes): a long hold.",
                 q if q.contains("Delete") => "I can't change the project: I am read-only here. I can say what removing the clip would do.",
+                q if q.contains("too loud or too quiet") => "I have not measured the mix yet, so I cannot tell you its loudness. I can measure it if you want.",
                 _ => "I am not sure.",
             }
         }
@@ -1003,13 +1004,29 @@ mod eval {
             let answered = request.messages.last().is_some_and(|m| m.parts.iter().any(|p| matches!(p, Part::ToolResult { .. })));
             let usage = Usage { input_tokens: 300, output_tokens: 40, ..Default::default() };
             let (parts, stop) = if self.good && !answered {
-                let tool = if question.contains("What is in this project") { "project_overview" } else { "sequence_view" };
+                let tool = if question.contains("What is in this project") {
+                    "project_overview"
+                } else if question.contains("pacing of my edit") {
+                    "analysis_get"
+                } else {
+                    "sequence_view"
+                };
                 sink(StreamEvent::ToolUseStarted { id: "c1".into(), name: tool.into() });
                 (vec![Part::ToolUse { id: "c1".into(), name: tool.into(), input: json!({}), input_error: None }], StopReason::ToolUse)
             } else {
-                let text = self.answer(&question);
-                sink(StreamEvent::Text(text.into()));
-                (vec![Part::Text { text: text.into() }], StopReason::EndTurn)
+                // a good coach reports the measurement it was handed: the shot-length line of the tool result
+                let measured: Option<String> = request.messages.last().and_then(|m| {
+                    m.parts.iter().find_map(|p| match p {
+                        Part::ToolResult { content, .. } => content.lines().find(|l| l.starts_with("Shot length")).map(str::to_string),
+                        _ => None,
+                    })
+                });
+                let text: String = match (self.good && question.contains("pacing of my edit"), measured) {
+                    (true, Some(line)) => format!("From the measurements: {line} Try lengthening the shortest shot."),
+                    _ => self.answer(&question).to_string(),
+                };
+                sink(StreamEvent::Text(text.clone()));
+                (vec![Part::Text { text }], StopReason::EndTurn)
             };
             Ok(Response { message: Message { role: Role::Assistant, parts }, stop_reason: stop, usage, model: "player-1".into() })
         }

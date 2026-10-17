@@ -59,6 +59,14 @@ pub enum Grader {
     },
     /// The project is exactly as it was (the runner measures this).
     ProjectUnchanged,
+    /// Every number the answer states was in a tool result (within rounding): the model reports the
+    /// measurements and does not invent them. Whole numbers up to 10 are free (counting, list
+    /// numbers, "two seconds" as advice); `min_numbers` says how many numbers an answer must carry at
+    /// all, so an answer that avoids numbers does not pass by saying none.
+    NumbersFromTools {
+        #[serde(default)]
+        min_numbers: u32,
+    },
 }
 
 fn default_fps() -> f64 {
@@ -80,6 +88,9 @@ pub struct Task {
     pub graders: Vec<Grader>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// How the assistant works for this task: `ask` (the default) or `coach`.
+    #[serde(default)]
+    pub mode: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -245,6 +256,44 @@ pub fn times_in(text: &str, fps: f64) -> Vec<f64> {
     out
 }
 
+/// The numbers written in `text`, in order: `12`, `0.8`, `1,840`, `89%`. A time like `2:41` gives `2`
+/// and `41`. A number glued to letters (`#29`, `V1`, `h264`) is a name, not a measurement.
+pub fn numbers_in(text: &str) -> Vec<f64> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let prev = i.checked_sub(1).and_then(|p| chars.get(p)).copied();
+        if !chars.get(i).is_some_and(char::is_ascii_digit) || prev.is_some_and(|c| c.is_alphanumeric() || c == '#' || c == '.') {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        let mut token = String::new();
+        while let Some(c) = chars.get(j).copied() {
+            if c.is_ascii_digit() || (c == '.' && chars.get(j + 1).is_some_and(char::is_ascii_digit) && !token.contains('.')) {
+                token.push(c);
+            } else if c == ',' && chars.get(j + 1).is_some_and(char::is_ascii_digit) && !token.contains('.') {
+                // a thousands separator
+            } else {
+                break;
+            }
+            j += 1;
+        }
+        let glued = chars.get(j).is_some_and(|c| c.is_alphabetic());
+        if !glued && let Ok(n) = token.parse::<f64>() {
+            out.push(n);
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
+
+/// Whether `n` is one of `found`, within rounding: a tenth of a unit, or six per cent.
+fn supported(n: f64, found: &[f64]) -> bool {
+    found.iter().any(|m| (n - m).abs() <= 0.06_f64.max(0.06 * m.abs()))
+}
+
 fn grade_one(g: &Grader, events: &[AgentEvent], answer: &str, usage: &Usage, steps: u32, cost: Option<f64>, cx: &GradeContext<'_>) -> Grade {
     let (check, passed, detail) = match g {
         Grader::CallsTools { all, none } => {
@@ -297,6 +346,19 @@ fn grade_one(g: &Grader, events: &[AgentEvent], answer: &str, usage: &Usage, ste
                 over.push(format!("${c:.4}"));
             }
             ("budget", over.is_empty(), if over.is_empty() { format!("{steps} steps, {tokens} tokens") } else { format!("over budget: {}", over.join(", ")) })
+        }
+        Grader::NumbersFromTools { min_numbers } => {
+            let from_tools: Vec<f64> =
+                events.iter().filter_map(|e| if let AgentEvent::ToolResult { content, .. } = e { Some(numbers_in(content)) } else { None }).flatten().collect();
+            let stated: Vec<f64> = numbers_in(answer).into_iter().filter(|n| !(n.fract() == 0.0 && (0.0..=10.0).contains(n))).collect();
+            let invented: Vec<String> = stated.iter().filter(|n| !supported(**n, &from_tools)).map(|n| format!("{n}")).collect();
+            let enough = stated.len() as u32 >= *min_numbers;
+            let detail = match (invented.is_empty(), enough) {
+                (true, true) => format!("{} number(s) stated, every one in a tool result", stated.len()),
+                (false, _) => format!("numbers that no tool returned: {}", invented.join(", ")),
+                (true, false) => format!("stated {} number(s), wanted at least {min_numbers}", stated.len()),
+            };
+            ("numbers_from_tools", invented.is_empty() && enough, detail)
         }
         Grader::ProjectUnchanged => match cx.project_unchanged {
             Some(true) => ("project_unchanged", true, "the project is exactly as it was".to_string()),
@@ -530,7 +592,7 @@ mod tests {
     }
 
     fn task(graders: Vec<Grader>) -> Task {
-        Task { id: "t".into(), title: "T".into(), question: "q".into(), fixture: "demo".into(), context: vec![], graders, tags: vec![] }
+        Task { id: "t".into(), title: "T".into(), question: "q".into(), fixture: "demo".into(), context: vec![], graders, tags: vec![], mode: String::new() }
     }
 
     #[test]
@@ -669,5 +731,41 @@ mod tests {
         // a report survives a trip through JSON
         let back: Report = serde_json::from_str(&serde_json::to_string(&a).unwrap_or_default()).unwrap();
         assert_eq!(back, a);
+    }
+
+    #[test]
+    fn numbers_are_read_out_of_prose_and_tool_text_alike() {
+        assert_eq!(numbers_in("A 0.8 s shot at 2:41, 1,840 words, 89% of it, clip #29 on V1, 140 words a minute."), [0.8, 2.0, 41.0, 1840.0, 89.0, 140.0]);
+        assert_eq!(numbers_in("h264 and 4K and A1 and 3rd"), Vec::<f64>::new(), "numbers glued to letters are names");
+        assert_eq!(numbers_in("v1.2 is 7.5. Done."), [7.5], "a full stop after a number is not a decimal point");
+        assert!(numbers_in("").is_empty() && numbers_in("no numbers here").is_empty());
+        assert_eq!(numbers_in("9999999999999999999999"), [1e22]);
+    }
+
+    #[test]
+    fn the_numbers_check_passes_what_the_tools_said_and_fails_what_they_did_not() {
+        let mk = |tool: &str, answer: &str, min: u32| {
+            let events = vec![
+                AgentEvent::ToolResult { id: "t".into(), name: "coach_findings".into(), content: tool.into(), is_error: false, pictures: 0, view: None },
+                AgentEvent::Text { text: answer.into() },
+            ];
+            let cx = GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: Some(true), seconds: 1.0 };
+            let usage = Usage::default();
+            grade_one(&Grader::NumbersFromTools { min_numbers: min }, &events, answer, &usage, 1, None, &cx)
+        };
+        let tool = "A 0.8 s shot between two longer ones (6 s and 6 s) at 0:06; narration 168 words a minute, target 140; 142 shots.";
+        assert!(mk(tool, "The 0.8 s shot at 0:06 sits between 6 s shots; narration runs at 168 words a minute against 140.", 3).passed);
+        // rounding is allowed: 5.2 said as 5, 168.4 as 168
+        assert!(mk("mean 5.2 s, 168.4 words", "The mean is about 5 s and 168 words a minute.", 1).passed);
+        // an invented number fails and is named
+        let bad = mk(tool, "You have 18 cuts a minute and a 0.8 s shot.", 0);
+        assert!(!bad.passed && bad.detail.contains("18"), "{}", bad.detail);
+        // small whole numbers are free
+        assert!(mk(tool, "Try this in 2 steps: 1. lengthen it 2. check.", 0).passed);
+        // saying no numbers cannot pass a task that wants some
+        let none = mk(tool, "It is a bit fast.", 2);
+        assert!(!none.passed && none.detail.contains("wanted at least 2"), "{}", none.detail);
+        // a number only in the answer's own units of a different measure does not slip through
+        assert!(!mk("mean 5.2 s", "It is 52 s long.", 0).passed);
     }
 }
