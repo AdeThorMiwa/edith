@@ -69,6 +69,10 @@ impl<'a> Frame<'a> {
     pub fn height(&self) -> u32 {
         self.height
     }
+
+    pub(crate) fn rgba(&self) -> &'a [u8] {
+        self.rgba
+    }
 }
 
 /// One colour of the palette.

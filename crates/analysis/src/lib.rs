@@ -4,6 +4,8 @@
 //! - [`color`]: sRGB to CIE Lab, colour distance and correlated colour temperature.
 //! - [`audio`]: [`AudioStats`] for a stretch of audio: EBU R128 loudness (from `filmcraft-audio-dsp`),
 //!   silence share, spectral balance, a rough speech/music/ambience guess and a beat grid.
+//! - [`motion`]: [`MotionPair`] between two pictures (how much changed, how the camera moved, how much
+//!   moves on its own) and a rough camera-move class for a run of them.
 //! - [`image`]: [`FrameStats`] for one picture: luma, contrast, saturation, a five-colour palette in
 //!   Lab, colour temperature, sharpness, grain and letterbox/aspect.
 //!
@@ -17,9 +19,11 @@
 pub mod audio;
 pub mod color;
 pub mod image;
+pub mod motion;
 
 pub use audio::{AudioBuffer, AudioKind, AudioStats, analyze_audio};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
+pub use motion::{CameraMove, MotionPair, MotionSummary, analyze_motion, summarize};
 
 /// Why a measurement could not be made.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +36,10 @@ pub enum AnalysisError {
     ShortBuffer { need: usize, have: usize },
     /// A sample rate outside 8 kHz to 384 kHz, or no channels, or more than 16.
     BadAudioFormat { sample_rate: u32, channels: u16 },
+    /// The two pictures of a motion measurement differ in size.
+    MismatchedFrames,
+    /// The time between two pictures is not a number from 0 (exclusive) to 60 seconds.
+    BadInterval,
 }
 
 impl std::fmt::Display for AnalysisError {
@@ -40,6 +48,8 @@ impl std::fmt::Display for AnalysisError {
             AnalysisError::Empty => write!(f, "there is nothing to measure"),
             AnalysisError::TooLarge { width, height } => write!(f, "a {width}x{height} picture is larger than can be analysed"),
             AnalysisError::ShortBuffer { need, have } => write!(f, "the picture needs {need} bytes but has {have}"),
+            AnalysisError::MismatchedFrames => write!(f, "the two pictures differ in size"),
+            AnalysisError::BadInterval => write!(f, "the time between the two pictures must be more than 0 and at most 60 seconds"),
             AnalysisError::BadAudioFormat { sample_rate, channels } => write!(f, "audio of {channels} channels at {sample_rate} Hz cannot be analysed"),
         }
     }
@@ -51,5 +61,7 @@ pub type Result<T> = std::result::Result<T, AnalysisError>;
 
 #[cfg(test)]
 mod audio_tests;
+#[cfg(test)]
+mod motion_tests;
 #[cfg(test)]
 mod tests;
