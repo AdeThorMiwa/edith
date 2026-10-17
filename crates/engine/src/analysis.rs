@@ -903,6 +903,17 @@ fn coach_targets(s: &Session) -> an::coach::Targets {
             t.sections.push(an::coach::SectionTarget { name: sec.name.clone(), start, end, average_shot_seconds: None });
         }
     }
+    // an adopted reference sets the shot length and the loudness the edit is measured against
+    if let Some(a) = crate::reference::adopted(&s.project) {
+        let f = &a.fingerprint;
+        if f.shots.mean_seconds.is_finite() && f.shots.mean_seconds > 0.0 {
+            t.average_shot_seconds = Some(f.shots.mean_seconds);
+        }
+        if let Some(l) = f.sound.as_ref().and_then(|s| s.integrated_lufs).filter(|l| l.is_finite()) {
+            t.loudness_lufs = l;
+        }
+        t.reference = Some(a.name);
+    }
     t
 }
 

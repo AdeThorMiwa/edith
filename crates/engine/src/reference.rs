@@ -8,6 +8,8 @@
 //! | `reference.list`, `reference.get {id}` | the library, and one fingerprint in full |
 //! | `reference.rename {id, name}`, `reference.remove {id}` | tidy the library |
 //! | `reference.export {id, path}`, `reference.import {path}` | a fingerprint as a small JSON file, to share without sharing any footage, and back |
+//! | `reference.compare {id?, sequence?}` | your edit against a reference, row by row in plain words (the adopted reference when `id` is left out) |
+//! | `reference.adopt {id}` / `reference.adopt {clear: true}`, `reference.adopted` | make a reference the coach's target for this project (its average shot length and loudness), kept in the project as numbers and undoable; read what is adopted |
 //!
 //! The library is global: `edith-references.json` beside the preferences, for every project (in memory
 //! only where there is no data folder, as in tests). Everything read from it, or imported, is
@@ -38,6 +40,7 @@ use serde_json::{Value, json};
 use crate::analysis::{frame_at, lock, motion_between, secs, to_value};
 use crate::commands::{CommandSpec, always, bad, bool_p, f64_p, str_p, u64_p};
 use crate::{EngineError, Result, Session};
+use filmcraft_project::{ItemId, ItemKind, Project};
 
 /// Frames the cut finder looks at, at most (a day of film at 8 a second).
 const MAX_CUT_FRAMES: usize = 700_000;
@@ -558,6 +561,151 @@ fn import_command(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id, "name": name}))
 }
 
+// ---------------------------------------------------------------------------- compare and adopt
+
+/// The key in `Project::ext` that holds the adopted reference.
+pub(crate) const ADOPTED_KEY: &str = "edith.reference";
+
+/// The reference this project aims at: a snapshot of its numbers, so the project is complete without the
+/// library.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Adopted {
+    pub id: String,
+    pub name: String,
+    pub rights: String,
+    pub fingerprint: an::Fingerprint,
+}
+
+/// The project's adopted reference, if it has a usable one (a damaged value counts as none).
+pub(crate) fn adopted(p: &Project) -> Option<Adopted> {
+    let a: Adopted = serde_json::from_value(p.ext.get(ADOPTED_KEY)?.clone()).ok()?;
+    a.fingerprint.check().ok()?;
+    Some(Adopted { name: clean_text(&a.name, MAX_NAME), rights: clean_text(&a.rights, MAX_RIGHTS), ..a })
+}
+
+fn sequence_of(s: &Session, p: &Value, cmd: &str) -> Result<ItemId> {
+    match p.get("sequence").filter(|v| !v.is_null() && **v != json!(true)) {
+        Some(v) => v.as_u64().map(ItemId).ok_or_else(|| bad(cmd, "`sequence` must be a sequence's item id")),
+        None => s.state.active_sequence.ok_or(EngineError::NoSequence),
+    }
+}
+
+/// A fingerprint of the sequence, made the way a film's is: its cuts, and its pictures and mix when they
+/// have been measured (`analysis_run`), so the two compare like with like.
+pub(crate) fn fingerprint_of_sequence(s: &Session, id: ItemId, cmd: &str) -> Result<an::Fingerprint> {
+    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
+    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+    let input = crate::analysis::sequence_input(s, q);
+    let shots = an::shot_spans(&input).map_err(|e| bad(cmd, e.to_string()))?;
+    let (Some(first), Some(last)) = (shots.first(), shots.last()) else {
+        return Err(bad(cmd, format!("“{}” has no shots on its video tracks to compare", item.name)));
+    };
+    let tps = TICKS_PER_SECOND as f64;
+    let duration = (last.end - first.start) as f64 / tps;
+    let cuts: Vec<f64> = shots.iter().skip(1).map(|sh| (sh.start - first.start) as f64 / tps).collect();
+    // the pictures the shot analysis looked at, if it has been run for this edit
+    let cache = crate::analysis::Cache::of(s);
+    let pictures = crate::analysis::current_report_for(s, &cache, "sequence", id.0)
+        .map(|r| {
+            r["shots"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|sh| {
+                            let stats: an::FrameStats = serde_json::from_value(sh["stats"].clone()).ok()?;
+                            let mid = sh["start"].as_f64()? + sh["duration"].as_f64().unwrap_or(0.0) / 2.0 - first.start as f64 / tps;
+                            Some(an::fingerprint::PictureSample {
+                                time_seconds: mid.max(0.0),
+                                stats,
+                                camera: serde_json::from_value(sh["camera"].clone()).ok(),
+                                motion_energy: sh["motion"]["energy"].as_f64().map(|e| e as f32),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let sound = crate::analysis::measured_mix(s, id).map(|mix| an::fingerprint::SoundInput { mix, segments: Vec::new() });
+    an::fingerprint(&an::ReferenceInput {
+        name: item.name.clone(),
+        duration_seconds: duration,
+        width: q.settings.width,
+        height: q.settings.height,
+        cuts,
+        pictures,
+        sound,
+    })
+    .map_err(|e| bad(cmd, e.to_string()))
+}
+
+fn reference_for(s: &Session, p: &Value, cmd: &str) -> Result<(String, String, an::Fingerprint)> {
+    match str_p(p, "id").filter(|i| !i.is_empty()) {
+        Some(id) => {
+            let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}; `reference.list` shows what there is")))?;
+            Ok((r.id, r.name, r.fingerprint))
+        }
+        None => adopted(&s.project)
+            .map(|a| (a.id, a.name, a.fingerprint))
+            .ok_or_else(|| bad(cmd, "give `id` (a reference from `reference.list`), or adopt one first")),
+    }
+}
+
+fn compare_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.compare";
+    let (id, name, theirs) = reference_for(s, p, cmd)?;
+    let seq = sequence_of(s, p, cmd)?;
+    let yours = fingerprint_of_sequence(s, seq, cmd)?;
+    let comparison = an::compare(&yours, &theirs);
+    let seq_name = s.project.item(seq).map(|i| i.name.clone()).unwrap_or_default();
+    Ok(json!({
+        "reference": {"id": id, "name": name},
+        "sequence": {"id": seq.0, "name": seq_name},
+        "comparison": to_value(&comparison),
+        "measured": {"pictures": yours.picture.is_some(), "mix": yours.sound.is_some()},
+    }))
+}
+
+fn adopted_json(a: &Adopted) -> Value {
+    let f = &a.fingerprint;
+    json!({
+        "id": a.id, "name": a.name, "rights": a.rights,
+        "targets": {
+            "averageShotSeconds": f.shots.mean_seconds,
+            "loudnessLufs": f.sound.as_ref().and_then(|s| s.integrated_lufs),
+        },
+    })
+}
+
+fn adopted_command(s: &mut Session, _p: &Value) -> Result<Value> {
+    Ok(json!({"adopted": adopted(&s.project).map(|a| adopted_json(&a))}))
+}
+
+fn adopt_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.adopt";
+    if bool_p(p, "clear") == Some(true) {
+        if !s.project.ext.contains_key(ADOPTED_KEY) {
+            return Ok(json!({"adopted": Value::Null}));
+        }
+        s.edit("Stop Using Reference", |pr, _| {
+            pr.ext.remove(ADOPTED_KEY);
+            Ok(())
+        })?;
+        return Ok(json!({"adopted": Value::Null}));
+    }
+    let id = id_param(p, cmd)?;
+    let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}; `reference.list` shows what there is")))?;
+    let a = Adopted { id: r.id, name: r.name, rights: r.rights, fingerprint: r.fingerprint };
+    let value = serde_json::to_value(&a).map_err(|e| EngineError::Other(e.to_string()))?;
+    let out = adopted_json(&a);
+    s.edit("Adopt Reference", |pr, _| {
+        pr.ext.insert(ADOPTED_KEY.to_string(), value);
+        Ok(())
+    })?;
+    Ok(json!({"adopted": out}))
+}
+
 pub fn commands() -> Vec<CommandSpec> {
     let spec = |id, label, params, run: fn(&mut Session, &Value) -> Result<Value>| CommandSpec {
         id,
@@ -589,5 +737,17 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("reference.remove", "Remove Reference", r#"{"id":str}"#, remove_command),
         spec("reference.export", "Export Fingerprint", r#"{"id":str,"path":str}"#, export_command),
         spec("reference.import", "Import Fingerprint", r#"{"path":str}"#, import_command),
+        spec("reference.compare", "Compare With Reference", r#"{"id":str?,"sequence":id?}"#, compare_command),
+        spec("reference.adopted", "Adopted Reference", "{}", adopted_command),
+        CommandSpec {
+            id: "reference.adopt",
+            label: "Adopt Reference",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"id":str | "clear":true}"#,
+            enabled: always,
+            run: adopt_command,
+            journal: true,
+        },
     ]
 }

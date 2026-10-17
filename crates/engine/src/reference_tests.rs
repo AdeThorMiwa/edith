@@ -437,3 +437,115 @@ fn hostile_library_parameters_are_refused() {
         assert!(s.execute("reference.export", json!({"id": "r1", "path": bad["path"].clone()})).is_err());
     }
 }
+
+fn with_reference(dir: &Path, shots: &[(DemoScene, i64)], tone: bool, sess: Session) -> (Session, String) {
+    let film = dir.join("ref.mov");
+    make_film(&film, shots, tone);
+    let mut s = Session { prefs_path: Some(dir.join("preferences.json")), ..sess };
+    let r = s
+        .execute(
+            "reference.add",
+            json!({"path": film.to_string_lossy(), "rights": "Own export", "name": "Slow film", "wait": true, "pictures": 8, "sampleFps": 8}),
+        )
+        .unwrap();
+    (s, r["reference"].as_str().unwrap().to_string())
+}
+
+#[test]
+fn your_edit_is_compared_with_a_reference_in_words_and_more_rows_appear_as_you_measure() {
+    let dir = tmp_dir("ref-compare");
+    // the reference: shots of 2 s, with sound
+    let (mut s, id) = with_reference(
+        &dir,
+        &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48), (DemoScene::Forest, 48)],
+        true,
+        crate::analysis_tests::edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0, 6.0]),
+    );
+    let r = s.execute("reference.compare", json!({"id": id})).unwrap();
+    assert_eq!((r["reference"]["name"].as_str(), r["sequence"]["name"].as_str()), (Some("Slow film"), Some("Coach test")));
+    let rows = r["comparison"]["rows"].as_array().unwrap();
+    let mean = rows.iter().find(|x| x["metric"] == "meanShot").unwrap();
+    assert_eq!(mean["verdict"], "higher", "{mean}");
+    assert!(mean["words"].as_str().unwrap().contains("yours 6.0 s") && mean["words"].as_str().unwrap().contains("times as long"), "{mean}");
+    assert_eq!(r["measured"], json!({"pictures": false, "mix": false}));
+    let missing: Vec<&str> = r["comparison"]["missing"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(missing.iter().any(|m| m.contains("measure your shots")) && missing.iter().any(|m| m.contains("measure your mix")), "{missing:?}");
+    assert!(rows.iter().all(|x| x["group"] == "shots" || x["group"] == "rhythm"));
+    // measure the shots and the mix, and the picture and sound rows appear
+    s.execute("analysis.run", json!({"sequence": true, "wait": true})).unwrap();
+    s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();
+    let r = s.execute("reference.compare", json!({"id": id})).unwrap();
+    assert_eq!(r["measured"], json!({"pictures": true, "mix": true}));
+    let metrics: Vec<&str> = r["comparison"]["rows"].as_array().unwrap().iter().filter_map(|x| x["metric"].as_str()).collect();
+    for m in ["brightness", "contrast", "loudness", "silence"] {
+        assert!(metrics.contains(&m), "{m} in {metrics:?}");
+    }
+    // errors: no such reference, none adopted, no such sequence, not a sequence
+    assert!(s.execute("reference.compare", json!({"id": "nope"})).is_err());
+    assert!(s.execute("reference.compare", json!({})).is_err(), "nothing adopted and no id");
+    assert!(s.execute("reference.compare", json!({"id": id, "sequence": 999_999})).is_err());
+    assert!(s.execute("reference.compare", json!({"id": id, "sequence": "x"})).is_err());
+    assert!(Session::default().execute("reference.compare", json!({"id": id})).is_err());
+}
+
+#[test]
+fn an_adopted_reference_becomes_the_coachs_target_for_this_project_and_is_one_undo_step() {
+    let dir = tmp_dir("ref-adopt");
+    let (mut s, id) = with_reference(
+        &dir,
+        &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48), (DemoScene::Forest, 48)],
+        true,
+        crate::analysis_tests::edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0, 6.0]),
+    );
+    assert!(s.execute("reference.adopted", json!({})).unwrap()["adopted"].is_null());
+    let before = s.execute("coach.findings", json!({})).unwrap();
+    assert!(before["targets"]["reference"].is_null() && !before["findings"].as_array().unwrap().iter().any(|f| f["kind"] == "paceVsPlan"));
+    let undo = s.history.undo.len();
+    let r = s.execute("reference.adopt", json!({"id": id})).unwrap();
+    assert_eq!(r["adopted"]["name"], "Slow film");
+    assert!((r["adopted"]["targets"]["averageShotSeconds"].as_f64().unwrap() - 2.0).abs() < 0.3, "{r}");
+    assert_eq!(s.history.undo.len(), undo + 1, "one undo step");
+    // the coach now measures against it, and says so
+    let after = s.execute("coach.findings", json!({})).unwrap();
+    assert_eq!(after["targets"]["reference"], "Slow film");
+    assert!((after["targets"]["averageShotSeconds"].as_f64().unwrap() - 2.0).abs() < 0.3);
+    let pace = after["findings"].as_array().unwrap().iter().find(|f| f["kind"] == "paceVsPlan").unwrap_or_else(|| panic!("{}", after["findings"]));
+    assert!(pace["title"].as_str().unwrap().contains("slower than the reference's"), "{pace}");
+    let text = crate::assistant_tools::tools().into_iter().find(|d| d.spec.name == "coach_findings").map(|d| (d.run)(&s, &json!({})).content).unwrap();
+    assert!(text.contains("Targets from the reference “Slow film”"), "{text}");
+    // the project keeps the numbers: the library entry can go and the adoption stays
+    s.execute("reference.remove", json!({"id": id})).unwrap();
+    assert_eq!(s.execute("reference.adopted", json!({})).unwrap()["adopted"]["name"], "Slow film");
+    assert_eq!(s.execute("coach.findings", json!({})).unwrap()["targets"]["reference"], "Slow film");
+    // compare with no id uses the adopted one
+    assert!(s.execute("reference.compare", json!({})).is_ok());
+    // undo, redo
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("reference.adopted", json!({})).unwrap()["adopted"].is_null());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(s.execute("reference.adopted", json!({})).unwrap()["adopted"].is_object());
+    // stop using it: one more undo step, and clearing when nothing is adopted changes nothing
+    let n = s.history.undo.len();
+    s.execute("reference.adopt", json!({"clear": true})).unwrap();
+    assert_eq!(s.history.undo.len(), n + 1);
+    assert!(s.execute("coach.findings", json!({})).unwrap()["targets"]["reference"].is_null());
+    s.execute("reference.adopt", json!({"clear": true})).unwrap();
+    assert_eq!(s.history.undo.len(), n + 1, "nothing to clear");
+    // hostile
+    for bad in [json!({}), json!({"id": "nope"}), json!({"id": 5}), json!({"id": ""})] {
+        assert!(s.execute("reference.adopt", bad.clone()).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_damaged_adoption_in_a_project_is_ignored_and_the_coach_carries_on() {
+    let mut s = crate::analysis_tests::edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0, 6.0]);
+    for junk in
+        [json!(null), json!(5), json!("x"), json!({"id": "r1"}), json!({"id": "r1", "name": "n", "rights": "r", "fingerprint": {"version": 1}}), json!([1, 2])]
+    {
+        std::sync::Arc::make_mut(&mut s.project).ext.insert("edith.reference".into(), junk.clone());
+        assert!(s.execute("reference.adopted", json!({})).unwrap()["adopted"].is_null(), "{junk}");
+        let c = s.execute("coach.findings", json!({})).unwrap();
+        assert!(c["targets"]["reference"].is_null(), "{junk}");
+    }
+}

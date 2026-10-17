@@ -25,6 +25,7 @@
 pub mod audio;
 pub mod coach;
 pub mod color;
+pub mod compare;
 pub mod fingerprint;
 pub mod image;
 pub mod motion;
@@ -32,6 +33,7 @@ pub mod sequence;
 
 pub use audio::{AudioBuffer, AudioKind, AudioStats, Mix, MixMeter, analyze_audio};
 pub use coach::{Finding, Severity, Targets, findings};
+pub use compare::{Comparison, Verdict, compare};
 pub use fingerprint::{Fingerprint, ReferenceInput, fingerprint};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
 pub use motion::{CameraMove, MotionPair, MotionSummary, analyze_motion, summarize};
@@ -81,6 +83,8 @@ pub type Result<T> = std::result::Result<T, AnalysisError>;
 mod audio_tests;
 #[cfg(test)]
 mod coach_tests;
+#[cfg(test)]
+mod compare_tests;
 #[cfg(test)]
 mod fingerprint_tests;
 #[cfg(test)]

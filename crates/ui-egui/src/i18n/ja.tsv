@@ -3919,3 +3919,7 @@
 	Remove Reference	リファレンスを削除
 	Export Fingerprint	フィンガープリントを書き出す
 	Import Fingerprint	フィンガープリントを読み込む
+	Compare With Reference	リファレンスと比較
+	Adopted Reference	採用中のリファレンス
+	Adopt Reference	リファレンスを採用
+	Stop Using Reference	リファレンスの使用をやめる

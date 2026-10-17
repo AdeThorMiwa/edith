@@ -271,10 +271,11 @@ pub(crate) fn coach_text(r: &Value) -> String {
     if let Some(v) = num(&t["wordsPerMinute"]) {
         targets.push(format!("{v:.0} words a minute"));
     }
+    let source = t["reference"].as_str().map_or("the plan".to_string(), |n| format!("the reference “{n}”"));
     out.push_str(&if targets.is_empty() {
         "Targets: none (no plan, or its pack sets none).\n".to_string()
     } else {
-        format!("Targets from the plan: {}.\n", targets.join(", "))
+        format!("Targets from {source}: {}.\n", targets.join(", "))
     });
     out.push_str(&if r["mixMeasured"] == true {
         "The mix has been measured, so loudness findings are included.\n".to_string()
@@ -553,10 +554,11 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
     if let Some(v) = num(&t["wordsPerMinute"]) {
         targets.push(format!("{v:.0} words a minute"));
     }
+    let source = t["reference"].as_str().map_or("The plan's".to_string(), |n| format!("The reference “{n}” sets the"));
     out.push_str(&if targets.is_empty() {
         "The plan sets no targets (or there is no plan).\n".to_string()
     } else {
-        format!("The plan's targets: {}.\n", targets.join(", "))
+        format!("{source} targets: {}.\n", targets.join(", "))
     });
     out.push_str(&format!(
         "The rules found {} thing{} ({problems} probably a problem){}. {}\n",

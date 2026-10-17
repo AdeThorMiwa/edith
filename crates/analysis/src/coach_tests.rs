@@ -265,6 +265,8 @@ fn hostile_targets_and_edits_never_panic_or_make_nonsense() {
                 SectionTarget { name: "back".into(), start: 10 * S, end: S, average_shot_seconds: Some(bad) },
                 SectionTarget { name: "neg".into(), start: -5, end: -1, average_shot_seconds: None },
             ],
+            // a reference name that is hostile text is only ever shown as the word "reference"
+            reference: Some("x".repeat(10_000)),
         };
         let f = findings(&e, &t, Some(&mix(f32::NAN, Some(f64::NAN), Some(f64::INFINITY), Some(f64::NAN)))).unwrap();
         for x in &f {
@@ -301,4 +303,16 @@ fn the_same_edit_always_gives_the_same_findings_and_they_round_trip_as_json() {
     assert!(first["numbers"]["seconds"].is_f64());
     let t2: Targets = serde_json::from_value(serde_json::json!({"wordsPerMinute": 140})).unwrap();
     assert_eq!((t2.words_per_minute, t2.average_shot_seconds, t2.loudness_lufs), (Some(140.0), None, -14.0));
+}
+
+#[test]
+fn targets_from_a_reference_say_so_in_the_pace_finding() {
+    let e = edit(&[12.0; 6]);
+    let mut t = target(6.0, 150.0);
+    let plan = run(&e, &t).into_iter().find(|f| f.kind == Kind::PaceVsPlan).unwrap();
+    assert!(plan.title.contains("than the plan's 6 s"), "{}", plan.title);
+    t.reference = Some("Slow film".into());
+    let reference = run(&e, &t).into_iter().find(|f| f.kind == Kind::PaceVsPlan).unwrap();
+    assert!(reference.title.contains("than the reference's 6 s"), "{}", reference.title);
+    assert!(!reference.detail.contains("planned") && reference.detail.contains("than the target"), "{}", reference.detail);
 }

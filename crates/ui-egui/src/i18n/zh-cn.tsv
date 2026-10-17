@@ -3895,3 +3895,7 @@
 	Remove Reference	移除参考片
 	Export Fingerprint	导出指纹
 	Import Fingerprint	导入指纹
+	Compare With Reference	与参考片比较
+	Adopted Reference	已采用的参考片
+	Adopt Reference	采用参考片
+	Stop Using Reference	停止使用参考片

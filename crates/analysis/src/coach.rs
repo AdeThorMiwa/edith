@@ -137,11 +137,14 @@ pub struct Targets {
     /// Integrated loudness to aim for; many platforms normalise toward about −14 LUFS.
     pub loudness_lufs: f64,
     pub sections: Vec<SectionTarget>,
+    /// The name of the reference these targets come from (the shot length and the loudness), when one is
+    /// adopted; `None` when they come from the plan.
+    pub reference: Option<String>,
 }
 
 impl Default for Targets {
     fn default() -> Self {
-        Targets { words_per_minute: None, average_shot_seconds: None, loudness_lufs: -14.0, sections: Vec::new() }
+        Targets { words_per_minute: None, average_shot_seconds: None, loudness_lufs: -14.0, sections: Vec::new(), reference: None }
     }
 }
 
@@ -321,16 +324,21 @@ fn pace_rules(stats: &SequenceStats, shots: &[ShotSpan], targets: &Targets, out:
             let off = (mean - t) / t;
             if off.abs() > 0.35 {
                 let (word, advice) = if off > 0.0 {
-                    ("slower", "That makes the pace feel slower than planned. If that is not the feel you want, look for shots that can lose a few seconds.")
+                    ("slower", "That makes the pace feel slower than the target. If that is not the feel you want, look for shots that can lose a few seconds.")
                 } else {
-                    ("faster", "That makes the pace feel faster than planned. If that is not the feel you want, look for places to let a shot breathe.")
+                    ("faster", "That makes the pace feel faster than the target. If that is not the feel you want, look for places to let a shot breathe.")
                 };
                 out.push(finding(
                     Kind::PaceVsPlan,
                     Severity::Look,
                     0,
                     None,
-                    format!("Shots average {}, {word} than the plan's {}", len_text(mean), len_text(t)),
+                    format!(
+                        "Shots average {}, {word} than {} {}",
+                        len_text(mean),
+                        if targets.reference.is_some() { "the reference's" } else { "the plan's" },
+                        len_text(t)
+                    ),
                     format!(
                         "Across {} shots the average length is {} against a target of {}, {:.0}% off. {advice}",
                         stats.shots.count,
