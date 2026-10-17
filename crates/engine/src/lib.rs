@@ -54,6 +54,7 @@ pub mod project_tools;
 pub mod pronounce;
 pub mod provenance;
 pub mod proxies;
+pub mod reference;
 pub mod relink;
 pub mod remix;
 pub mod rights;
@@ -471,6 +472,8 @@ pub struct Session {
     pub narrator: narrator::Presets,
     /// Cached analysis reports in memory (fork; roadmap F10.5).
     pub analysis: analysis::Store,
+    /// Where reference-measuring jobs leave their answers (fork; roadmap F12.2).
+    pub reference: reference::Hub,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -568,6 +571,7 @@ impl Session {
             pronounce: Default::default(),
             narrator: Default::default(),
             analysis: Default::default(),
+            reference: Default::default(),
         }
     }
 
@@ -1332,6 +1336,8 @@ mod pronounce_tests;
 mod provenance_tests;
 #[cfg(test)]
 mod proxies_tests;
+#[cfg(test)]
+mod reference_tests;
 #[cfg(test)]
 mod relink_tests;
 #[cfg(test)]

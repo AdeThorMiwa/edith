@@ -382,7 +382,9 @@ fn sound_of(s: &SoundInput, duration: f64) -> SoundShape {
     let segs: Vec<&SoundSegment> =
         s.segments.iter().filter(|g| g.start_seconds.is_finite() && g.duration_seconds.is_finite() && g.duration_seconds > 0.0).collect();
     let total: f64 = segs.iter().map(|g| g.duration_seconds).sum();
-    let share = |k: AudioKind| if total > 0.0 { (segs.iter().filter(|g| g.kind == k).map(|g| g.duration_seconds).sum::<f64>() / total) as f32 } else { 0.0 };
+    // `abs` so that an empty sum is 0 and not -0
+    let share =
+        |k: AudioKind| if total > 0.0 { (segs.iter().filter(|g| g.kind == k).map(|g| g.duration_seconds).sum::<f64>() / total).abs() as f32 } else { 0.0 };
     let mut bins: Vec<Vec<f64>> = vec![Vec::new(); CURVE_POINTS];
     let mut silent: Vec<bool> = vec![false; CURVE_POINTS];
     let mut seen: Vec<bool> = vec![false; CURVE_POINTS];
@@ -405,6 +407,13 @@ fn sound_of(s: &SoundInput, duration: f64) -> SoundShape {
             _ => curve.last().map_or(FLOOR_LUFS, |p| f64::from(*p)),
         };
         curve.push(v.max(FLOOR_LUFS) as f32);
+    }
+    // before the first piece that was measured, the film is taken to start as that piece does
+    if let Some(first) = (0..CURVE_POINTS).find(|i| seen.get(*i) == Some(&true)) {
+        let lead = curve.get(first).copied().unwrap_or(FLOOR_LUFS as f32);
+        for v in curve.iter_mut().take(first) {
+            *v = lead;
+        }
     }
     SoundShape {
         integrated_lufs: s.mix.integrated_lufs.and_then(finite),

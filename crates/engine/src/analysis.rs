@@ -49,7 +49,7 @@ const AUDIO_SECONDS: f64 = 300.0;
 const SEGMENT_SECONDS: f64 = 30.0;
 const MAX_BEATS_KEPT: usize = 2000;
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
@@ -432,21 +432,21 @@ pub(crate) fn max_shots_param(p: &Value) -> usize {
 
 // ---------------------------------------------------------------------------- measuring
 
-fn secs(t: Tick) -> f64 {
+pub(crate) fn secs(t: Tick) -> f64 {
     t.0 as f64 / TICKS_PER_SECOND as f64
 }
 
-fn to_value<T: serde::Serialize>(v: &T) -> Value {
+pub(crate) fn to_value<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
 /// The picture of a frame at `time`, measured; `Err` says why it could not be.
-fn frame_at(src: &SharedSource, time: Tick, scale: f32) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn frame_at(src: &SharedSource, time: Tick, scale: f32) -> std::result::Result<(u32, u32, Vec<u8>), String> {
     let f = src.video_frame(FrameRequest { time, scale }).map_err(|e| e.to_string())?;
     Ok((f.width, f.height, f.to_rgba8()))
 }
 
-fn motion_between(src: &SharedSource, a: Tick, b: Tick, seconds: f64, scale: f32) -> Option<an::MotionPair> {
+pub(crate) fn motion_between(src: &SharedSource, a: Tick, b: Tick, seconds: f64, scale: f32) -> Option<an::MotionPair> {
     let (fa, fb) = (frame_at(src, a, scale).ok()?, frame_at(src, b, scale).ok()?);
     let (ma, mb) = (an::Frame::new(fa.0, fa.1, &fa.2).ok()?, an::Frame::new(fb.0, fb.1, &fb.2).ok()?);
     an::analyze_motion(&ma, &mb, seconds).ok()

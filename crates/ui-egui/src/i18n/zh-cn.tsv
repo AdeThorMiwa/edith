@@ -3886,3 +3886,5 @@
 	usual range	常见范围
 	{amount} {unit} below the target	比目标低 {amount} {unit}
 	{amount} {unit} above the target	比目标高 {amount} {unit}
+	Measure Reference	测量参考片
+	Reference Result	参考片结果

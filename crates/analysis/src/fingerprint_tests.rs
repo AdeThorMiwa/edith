@@ -158,7 +158,7 @@ fn the_sound_is_summed_up_and_followed_through_the_film() {
     });
     let s = fingerprint(&f).unwrap().sound.unwrap();
     assert_eq!((s.integrated_lufs, s.loudness_range_lu, s.true_peak_dbtp), (Some(-18.0), Some(9.0), Some(-2.0)));
-    assert!((s.speech_share - 0.5).abs() < 1e-6 && (s.music_share - 0.5).abs() < 1e-6 && s.ambience_share == 0.0);
+    assert!((s.speech_share - 0.5).abs() < 1e-6 && (s.music_share - 0.5).abs() < 1e-6 && s.ambience_share == 0.0 && s.ambience_share.is_sign_positive());
     assert!((s.silence_share - 0.1).abs() < 1e-6);
     assert_eq!(s.loudness_curve.len(), CURVE_POINTS);
     assert!((s.loudness_curve[0] + 30.0).abs() < 1e-4 && (s.loudness_curve[19] + 11.0).abs() < 1e-4, "{:?}", s.loudness_curve);
@@ -171,6 +171,14 @@ fn the_sound_is_summed_up_and_followed_through_the_film() {
     let c = fingerprint(&gap).unwrap().sound.unwrap().loudness_curve;
     assert_eq!(c[2], -70.0, "silent");
     assert_eq!(c[10], c[4], "past the last piece it holds the last value");
+    // pieces that begin partway in: the stretch before them is taken to be as loud as the first piece, not silent
+    let mut late = film(600.0, vec![]);
+    late.sound = Some(SoundInput {
+        mix: Mix { duration_seconds: 600.0, integrated_lufs: Some(-20.0), loudness_range_lu: None, true_peak_dbtp: None, silence_share: 0.0 },
+        segments: vec![SoundSegment { start_seconds: 300.0, duration_seconds: 30.0, kind: AudioKind::Music, loudness_lufs: Some(-22.0) }],
+    });
+    let c = fingerprint(&late).unwrap().sound.unwrap().loudness_curve;
+    assert!(c.iter().all(|v| (*v + 22.0).abs() < 1e-4), "{c:?}");
     // no sound at all
     assert!(fingerprint(&film(100.0, vec![])).unwrap().sound.is_none());
     // pieces that are not numbers, a mix that is not

@@ -3910,3 +3910,5 @@
 	usual range	通常の範囲
 	{amount} {unit} below the target	目標より {amount} {unit} 低い
 	{amount} {unit} above the target	目標より {amount} {unit} 高い
+	Measure Reference	リファレンスを測定
+	Reference Result	リファレンスの結果
