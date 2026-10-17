@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SECTIONS: usize = 40;
 pub const MAX_BEATS: usize = 400;
 pub const MAX_SHOTS_PER_BEAT: usize = 40;
+/// Most effect cues and silences in one beat.
+pub const MAX_CUES_PER_BEAT: usize = 60;
 pub const MAX_TITLE: usize = 200;
 pub const MAX_NAME: usize = 120;
 pub const MAX_PURPOSE: usize = 500;
@@ -81,6 +83,65 @@ pub struct Shot {
     pub clip: Option<u64>,
 }
 
+/// What a cue is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CueKind {
+    /// A sound effect at a moment.
+    #[default]
+    Effect,
+    /// Deliberate silence: the sound drops out for a while.
+    Silence,
+}
+
+impl CueKind {
+    pub fn id(self) -> &'static str {
+        match self {
+            CueKind::Effect => "effect",
+            CueKind::Silence => "silence",
+        }
+    }
+    pub fn from_id(s: &str) -> Option<CueKind> {
+        [CueKind::Effect, CueKind::Silence].into_iter().find(|k| k.id().eq_ignore_ascii_case(s.trim()))
+    }
+}
+
+/// An effect or a silence in a beat. Times are from the start of the beat, so a beat that moves
+/// takes its cues with it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Cue {
+    pub id: u64,
+    pub kind: CueKind,
+    pub at: Tick,
+    /// How long a silence lasts (an effect has none).
+    pub length: Tick,
+    /// What the sound is ("a door closing far away"), or why the silence is there.
+    pub text: String,
+}
+
+/// The music under a beat: its mood and where it comes in and goes out, from the start of the beat.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MusicCue {
+    pub mood: String,
+    /// Where it comes in (0: with the beat).
+    pub enters: Tick,
+    /// Where it goes out; none: it plays to the end of the beat.
+    pub leaves: Option<Tick>,
+}
+
+/// The sound plan of one beat (a *spotting sheet* row): the bed under it, the music, the effects and
+/// the silences.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SoundPlan {
+    /// The ambience or room tone under the beat ("wind over a shingle shore, low").
+    pub ambience: String,
+    pub music: Option<MusicCue>,
+    pub cues: Vec<Cue>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Beat {
@@ -94,6 +155,8 @@ pub struct Beat {
     pub narration: String,
     pub visual_intent: String,
     pub sound_note: String,
+    /// The beat's spotting-sheet row (F13).
+    pub sound: SoundPlan,
     pub status: Status,
     pub link: Option<Link>,
     pub shots: Vec<Shot>,
@@ -190,6 +253,7 @@ impl Planner {
             for b in &s.beats {
                 v.push(b.id);
                 v.extend(b.shots.iter().map(|x| x.id));
+                v.extend(b.sound.cues.iter().map(|c| c.id));
             }
         }
         v
@@ -244,6 +308,23 @@ impl Planner {
                 }
                 if b.shots.len() > MAX_SHOTS_PER_BEAT {
                     return Err(format!("at most {MAX_SHOTS_PER_BEAT} shots per beat"));
+                }
+                text(&b.sound.ambience, MAX_NOTE, "ambience")?;
+                if let Some(m) = &b.sound.music {
+                    text(&m.mood, MAX_NAME, "music mood")?;
+                    let leaves = m.leaves.map_or(0, |t| t.0);
+                    if !(0..=MAX_TARGET.0).contains(&m.enters.0) || !(0..=MAX_TARGET.0).contains(&leaves) {
+                        return Err("a music cue's time is out of range".into());
+                    }
+                }
+                if b.sound.cues.len() > MAX_CUES_PER_BEAT {
+                    return Err(format!("at most {MAX_CUES_PER_BEAT} sound cues per beat"));
+                }
+                for c in &b.sound.cues {
+                    text(&c.text, MAX_NAME, "cue text")?;
+                    if !(0..=MAX_TARGET.0).contains(&c.at.0) || !(0..=MAX_TARGET.0).contains(&c.length.0) {
+                        return Err("a sound cue's time is out of range".into());
+                    }
                 }
                 for x in &b.shots {
                     text(&x.intent, MAX_PURPOSE, "shot intent")?;
@@ -310,6 +391,23 @@ impl Planner {
                     let ok = l.start.0 >= 0 && l.duration.0 >= 0 && l.start.0.checked_add(l.duration.0).is_some();
                     ok.then_some(l)
                 });
+                b.sound.ambience = clean(&b.sound.ambience, MAX_NOTE, true);
+                b.sound.music = b.sound.music.take().map(|mut m| {
+                    m.mood = clean(&m.mood, MAX_NAME, false);
+                    m.enters = span(m.enters, MAX_TARGET);
+                    m.leaves = m.leaves.map(|t| span(t, MAX_TARGET));
+                    m
+                });
+                b.sound.cues.truncate(MAX_CUES_PER_BEAT);
+                for c in &mut b.sound.cues {
+                    if !keep(c.id, &mut seen) {
+                        c.id = fresh(&mut seen, &mut next);
+                    }
+                    max_id = max_id.max(c.id);
+                    c.text = clean(&c.text, MAX_NAME, false);
+                    c.at = span(c.at, MAX_TARGET);
+                    c.length = if c.kind == CueKind::Silence { span(c.length, MAX_TARGET) } else { Tick::ZERO };
+                }
                 b.shots.truncate(MAX_SHOTS_PER_BEAT);
                 for x in &mut b.shots {
                     if !keep(x.id, &mut seen) {

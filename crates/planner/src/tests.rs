@@ -443,3 +443,98 @@ fn a_shot_remembers_its_sentence_and_older_plans_without_one_still_load() {
     let with = Shot { line: Some(2), ..shot };
     assert_eq!(serde_json::from_str::<Shot>(&serde_json::to_string(&with).unwrap()).unwrap().line, Some(2));
 }
+
+// ---------------------------------------------------------------------------- the sound plan (F13.1)
+
+fn plan_with_sound() -> Planner {
+    let mut p = pack("mystery").instantiate(secs(600), None).unwrap();
+    let id1 = p.new_id();
+    let id2 = p.new_id();
+    if let Some(b) = p.sections.get_mut(0).and_then(|s| s.beats.get_mut(0)) {
+        b.sound = SoundPlan {
+            ambience: "wind over a shore".into(),
+            music: Some(MusicCue { mood: "uneasy strings".into(), enters: secs(2), leaves: Some(secs(20)) }),
+            cues: vec![
+                Cue { id: id1, kind: CueKind::Effect, at: secs(5), length: Tick::ZERO, text: "a bell, far off".into() },
+                Cue { id: id2, kind: CueKind::Silence, at: secs(12), length: secs(3), text: "after the name".into() },
+            ],
+        };
+    }
+    p
+}
+
+#[test]
+fn a_sound_plan_round_trips_and_a_plan_saved_before_it_existed_still_loads() {
+    let p = plan_with_sound();
+    assert!(p.check().is_ok(), "{:?}", p.check());
+    let json = serde_json::to_string(&p).unwrap();
+    let back: Planner = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, p);
+    // an older plan has no `sound` on its beats: the field is empty, nothing fails
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    for s in v["sections"].as_array_mut().unwrap() {
+        for b in s["beats"].as_array_mut().unwrap() {
+            b.as_object_mut().unwrap().remove("sound");
+        }
+    }
+    let old: Planner = serde_json::from_value(v).unwrap();
+    assert!(old.beats().all(|b| b.sound == SoundPlan::default()));
+    assert!(old.check().is_ok());
+}
+
+#[test]
+fn the_sound_limits_are_checked() {
+    let mut p = plan_with_sound();
+    p.sections[0].beats[0].sound.ambience = "x".repeat(MAX_NOTE + 1);
+    assert!(p.check().is_err());
+    let mut p = plan_with_sound();
+    p.sections[0].beats[0].sound.cues[0].at = Tick(-1);
+    assert!(p.check().is_err());
+    let mut p = plan_with_sound();
+    p.sections[0].beats[0].sound.music.as_mut().unwrap().leaves = Some(Tick(MAX_TARGET.0 + 1));
+    assert!(p.check().is_err());
+    let mut p = plan_with_sound();
+    let extra = p.new_id();
+    p.sections[0].beats[0].sound.cues[0].id = extra - 2;
+    p.sections[0].beats[0].sound.cues[1].id = extra - 2;
+    assert!(p.check().is_err(), "two cues with one id");
+    let mut p = plan_with_sound();
+    for _ in 0..MAX_CUES_PER_BEAT {
+        let id = p.new_id();
+        p.sections[0].beats[0].sound.cues.push(Cue { id, ..Default::default() });
+    }
+    assert!(p.check().is_err(), "too many cues");
+}
+
+#[test]
+fn hostile_sound_plans_are_cut_down_to_valid_ones() {
+    let mut p = plan_with_sound();
+    {
+        let b = &mut p.sections[0].beats[0];
+        b.sound.ambience = "a\u{7}".repeat(MAX_NOTE * 3);
+        b.sound.music = Some(MusicCue { mood: "m\u{0}".repeat(500), enters: Tick(i64::MIN), leaves: Some(Tick(i64::MAX)) });
+        b.sound.cues = (0..200)
+            .map(|i| Cue {
+                id: if i % 2 == 0 { 0 } else { 3 },
+                kind: if i % 3 == 0 { CueKind::Silence } else { CueKind::Effect },
+                at: Tick(i64::MIN),
+                length: Tick(i64::MAX),
+                text: "t\u{1}".repeat(400),
+            })
+            .collect();
+    }
+    let c = p.sanitized();
+    assert!(c.check().is_ok(), "{:?}", c.check());
+    let b = &c.sections[0].beats[0];
+    assert!(b.sound.cues.len() <= MAX_CUES_PER_BEAT);
+    assert!(b.sound.cues.iter().all(|c| c.kind == CueKind::Silence || c.length == Tick::ZERO), "an effect has no length");
+    assert_eq!(b.sound.music.as_ref().unwrap().enters, Tick::ZERO);
+    let mut ids: Vec<u64> = b.sound.cues.iter().map(|c| c.id).collect();
+    let n = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), n, "cue ids are unique");
+    // a valid sound plan is left exactly as it was
+    let good = plan_with_sound();
+    assert_eq!(good.clone().sanitized(), good);
+}

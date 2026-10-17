@@ -13,7 +13,7 @@ pub mod model;
 pub mod pack;
 pub mod script;
 
-pub use model::{Beat, Link, Planner, Section, Shot, Status};
+pub use model::{Beat, Cue, CueKind, Link, MusicCue, Planner, Section, Shot, SoundPlan, Status};
 pub use pack::{FormatPack, builtin_packs, split};
 pub use script::{BeatRange, ranges, sentences, speech_ticks};
 

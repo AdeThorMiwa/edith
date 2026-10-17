@@ -585,6 +585,13 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Done when.** A sequence with narration, one music bed and no ambience shows a map with the gap; the spotting sheet round-trips through the project and exports as text.
 
+**Steps** (planned 2026-10-17).
+- F13.1 ✅ (2026-10-17) **The sound plan in the planner**: each beat now has a sound plan, the spotting sheet's row: the ambience or room tone under it, a music cue (mood, where it comes in and goes out, from the start of the beat; no end means it plays to the end of the beat), and **cues**, each an effect at a moment or a deliberate silence with a length. `planner.setSound {beat, ambience?, music?, musicInSeconds?, musicOutSeconds?, musicToEnd?}` (music null or empty takes it off), `planner.addCue {beat, kind?, text?, atSeconds, lengthSeconds?}`, `planner.updateCue`, `planner.removeCue`. Times are from the start of the beat so a beat that moves takes its sound plan with it; cues are kept in the order they happen; a silence needs a length and an effect has none; every change is one undo step. Plans saved before this have an empty sound plan. Everything is checked against limits (60 cues a beat, texts and times bounded) and refused, not cut; a plan read from a project or an import is cut down to fit.
+- F13.2 **The sound map**: four lanes (narration, music, ambience, effects), each clip placed by its Essential Sound tag, else narration, else the analysis's guess of what it is. From the clips alone it shows where each lane has sound and where it has none (the missing ambience bed). A background measurement adds loudness over time per lane. Detectors: dead air, abrupt room-tone changes, and a lane that has gone missing under the narration.
+- F13.3 **Cues on the timeline and a text spotting sheet**: a beat's cues become typed markers on the timeline; the spotting sheet exports as plain text.
+- F13.4 **Two panels**: the Sound Map and the Spotting Sheet, completing the planner views (F09).
+- F13.5 **The assistant**: tools to read the map and the sound plan, and a view of the map inside an answer.
+
 **Notes.** Instincts to encode as guidance, not rules: continuous room tone, restraint, silence as a tool, diegetic sound before stock whooshes.
 
 ---

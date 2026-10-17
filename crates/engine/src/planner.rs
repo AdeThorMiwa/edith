@@ -22,6 +22,7 @@
 //! | `planner.setShotSource {shot, item\|null}` | give a shot the project item that fills it (or none) |
 //! | `planner.refreshLinks {start?, track?}` | after the plan's order changed: lay the markers out again to match (what `buildSkeleton` does, markers move and nothing doubles) |
 //! | `planner.buildSkeleton {start?, track?}` | lay the plan on the timeline: a range marker for every beat and an offline placeholder clip for every shot that has no source yet |
+//! | `planner.setSound`, `planner.addCue`, `planner.updateCue`, `planner.removeCue` | each beat's sound plan: the bed, the music (mood, in, out), effects and deliberate silences (see `planner/sound.rs`) |
 //! | `planner.export {path?}`, `planner.import {path\|plan}` | the plan as JSON, and back |
 //!
 //! Every change is one undo step. Everything from a parameter, a pack file, an import or a project
@@ -33,6 +34,8 @@
 //! one; a file that does not check out is skipped and named in `planner.packs`.
 
 use std::path::PathBuf;
+
+mod sound;
 
 use edith_planner::model::{MAX_INTENSITY, MAX_NAME, MAX_NARRATION, MAX_NOTE, MAX_PURPOSE, MAX_TARGET, MAX_TITLE};
 use edith_planner::{Beat, FormatPack, Link, Planner, Section, Shot, Status, builtin_packs, script};
@@ -1154,7 +1157,7 @@ pub fn commands() -> Vec<CommandSpec> {
     }
     let beat_params: &'static str = concat!(r#"{"beat":id,"#, fields!(), "}");
     let add_beat_params: &'static str = concat!(r#"{"section":id,"at":n?,"#, fields!(), "}");
-    vec![
+    let mut v = vec![
         spec("planner.get", "Get Plan", "{}", get_cmd, false),
         spec("planner.packs", "List Format Packs", "{}", packs_cmd, false),
         spec("planner.create", "Create Plan", r#"{"pack":str?,"minutes"|"seconds"|"ticks":n?,"title":str?,"clues":n?,"replace":bool?}"#, create, true),
@@ -1197,5 +1200,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("planner.buildSkeleton", "Build Plan Skeleton", r#"{"startSeconds"|"startTicks":n?,"track":"V2"?}"#, build_skeleton, true),
         spec("planner.export", "Export Plan", r#"{"path":str?}"#, export, false),
         spec("planner.import", "Import Plan", r#"{"path":str?,"plan":object?}"#, import, true),
-    ]
+    ];
+    v.extend(sound::commands());
+    v
 }

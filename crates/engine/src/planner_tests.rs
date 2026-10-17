@@ -860,3 +860,125 @@ fn changing_the_order_then_refreshing_lays_the_markers_out_again_without_doublin
     let _ = c;
     assert!(Session::default().execute("planner.refreshLinks", json!({})).is_err());
 }
+
+// ---------------------------------------------------------------------------- the sound plan (F13.1)
+
+fn sound(s: &Session, beat: u64) -> edith_planner::SoundPlan {
+    plan(s).beat_ref(beat).unwrap().sound.clone()
+}
+
+#[test]
+fn a_beats_sound_plan_is_set_and_cues_are_added_edited_and_removed_one_undo_step_each() {
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    let b = beat_id(&s, "Cold open");
+    s.execute("planner.setSound", json!({"beat": b, "ambience": "wind over a shore", "music": "uneasy strings", "musicInSeconds": 2, "musicOutSeconds": 20}))
+        .unwrap();
+    let sp = sound(&s, b);
+    assert_eq!(sp.ambience, "wind over a shore");
+    let m = sp.music.unwrap();
+    assert_eq!((m.mood.as_str(), m.enters.0, m.leaves.map(|t| t.0)), ("uneasy strings", 2 * TICKS_PER_SECOND, Some(20 * TICKS_PER_SECOND)));
+    // later, only the mood changes: the times stay
+    s.execute("planner.setSound", json!({"beat": b, "music": "slow piano"})).unwrap();
+    let m = sound(&s, b).music.unwrap();
+    assert_eq!((m.mood.as_str(), m.enters.0), ("slow piano", 2 * TICKS_PER_SECOND));
+    s.execute("planner.setSound", json!({"beat": b, "musicToEnd": true})).unwrap();
+    assert_eq!(sound(&s, b).music.unwrap().leaves, None, "it plays to the end of the beat");
+    // cues, kept in the order they happen
+    let late = s.execute("planner.addCue", json!({"beat": b, "text": "a door closing", "atSeconds": 9})).unwrap()["cue"].as_u64().unwrap();
+    let early = s.execute("planner.addCue", json!({"beat": b, "kind": "effect", "text": "a bell", "atSeconds": 3})).unwrap()["cue"].as_u64().unwrap();
+    let quiet =
+        s.execute("planner.addCue", json!({"beat": b, "kind": "silence", "text": "after the name", "atSeconds": 6, "lengthSeconds": 2.5})).unwrap()["cue"]
+            .as_u64()
+            .unwrap();
+    let order: Vec<u64> = sound(&s, b).cues.iter().map(|c| c.id).collect();
+    assert_eq!(order, [early, quiet, late]);
+    assert!(![late, early, quiet].contains(&b), "ids are fresh");
+    s.execute("planner.updateCue", json!({"cue": late, "atSeconds": 4, "text": "a door closing, far away"})).unwrap();
+    assert_eq!(sound(&s, b).cues.iter().map(|c| c.id).collect::<Vec<_>>(), [early, late, quiet], "moved to where it now happens");
+    // a silence becoming an effect loses its length
+    s.execute("planner.updateCue", json!({"cue": quiet, "kind": "effect"})).unwrap();
+    assert_eq!(sound(&s, b).cues.iter().find(|c| c.id == quiet).unwrap().length.0, 0);
+    s.execute("planner.removeCue", json!({"cue": early})).unwrap();
+    assert_eq!(sound(&s, b).cues.len(), 2);
+    // music comes off with null
+    s.execute("planner.setSound", json!({"beat": b, "music": null})).unwrap();
+    assert!(sound(&s, b).music.is_none());
+    // every change is one undo step, back to an empty sound plan
+    for _ in 0..10 {
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    assert_eq!(sound(&s, b), edith_planner::SoundPlan::default());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(sound(&s, b).ambience, "wind over a shore");
+}
+
+#[test]
+fn hostile_sound_parameters_are_refused_and_change_nothing() {
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    let b = beat_id(&s, "Cold open");
+    s.execute("planner.setSound", json!({"beat": b, "ambience": "rain", "music": "calm", "musicInSeconds": 1, "musicOutSeconds": 9})).unwrap();
+    let cue = s.execute("planner.addCue", json!({"beat": b, "text": "a bell", "atSeconds": 3})).unwrap()["cue"].as_u64().unwrap();
+    let before = plan(&s);
+    let bad: Vec<(&str, Value)> = vec![
+        ("planner.setSound", json!({"beat": 99999, "ambience": "x"})),
+        ("planner.setSound", json!({"beat": b, "ambience": "x".repeat(501)})),
+        ("planner.setSound", json!({"beat": b, "ambience": 5})),
+        ("planner.setSound", json!({"beat": b, "music": 5})),
+        ("planner.setSound", json!({"beat": b, "music": "m\u{7}"})),
+        ("planner.setSound", json!({"beat": b, "music": "m".repeat(121)})),
+        ("planner.setSound", json!({"beat": b, "musicInSeconds": -1})),
+        ("planner.setSound", json!({"beat": b, "musicInSeconds": 1e300})),
+        ("planner.setSound", json!({"beat": b, "musicInSeconds": "soon"})),
+        ("planner.setSound", json!({"beat": b, "musicInSeconds": 10, "musicOutSeconds": 5})),
+        ("planner.setSound", json!({"beat": 0})),
+        ("planner.addCue", json!({"beat": b, "kind": "boom", "atSeconds": 1})),
+        ("planner.addCue", json!({"beat": b, "kind": "silence", "atSeconds": 1})),
+        ("planner.addCue", json!({"beat": b, "kind": "silence", "atSeconds": 1, "lengthSeconds": 0})),
+        ("planner.addCue", json!({"beat": b, "atSeconds": -3})),
+        ("planner.addCue", json!({"beat": b, "atSeconds": 1e300})),
+        ("planner.addCue", json!({"beat": b, "text": "t".repeat(121)})),
+        ("planner.addCue", json!({"beat": 99999, "atSeconds": 1})),
+        ("planner.addCue", json!({"atSeconds": 1})),
+        ("planner.updateCue", json!({"cue": 99999, "text": "x"})),
+        ("planner.updateCue", json!({"cue": cue, "kind": "silence"})),
+        ("planner.updateCue", json!({"cue": cue, "atSeconds": "x"})),
+        ("planner.removeCue", json!({"cue": 99999})),
+        ("planner.removeCue", json!({})),
+    ];
+    for (cmd, p) in bad {
+        assert!(s.execute(cmd, p.clone()).is_err(), "{cmd} {p}");
+        assert_eq!(plan(&s), before, "{cmd} {p} changed the plan");
+    }
+    // no music yet: its times cannot be set
+    let other = beat_id(&s, "The question");
+    assert!(s.execute("planner.setSound", json!({"beat": other, "musicInSeconds": 2})).is_err());
+    // the limit on cues
+    for i in 0..edith_planner::model::MAX_CUES_PER_BEAT - 1 {
+        s.execute("planner.addCue", json!({"beat": b, "atSeconds": i})).unwrap();
+    }
+    assert!(s.execute("planner.addCue", json!({"beat": b, "atSeconds": 1})).is_err());
+}
+
+#[test]
+fn deleting_a_beat_takes_its_sound_plan_and_the_plan_survives_save_and_open() {
+    let dir = scratch("sound-save");
+    let path = dir.join("p.fcproj").to_string_lossy().to_string();
+    let mut s = demo();
+    mystery(&mut s, 10.0);
+    let b = beat_id(&s, "Cold open");
+    s.execute("planner.setSound", json!({"beat": b, "ambience": "wind", "music": "strings", "musicInSeconds": 1})).unwrap();
+    s.execute("planner.addCue", json!({"beat": b, "kind": "silence", "text": "hold", "atSeconds": 5, "lengthSeconds": 2})).unwrap();
+    let before = plan(&s);
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    let mut t = Session::default();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(plan(&t), before, "the sound plan comes back with the project");
+    t.execute("planner.delete", json!({"beat": b})).unwrap();
+    assert!(plan(&t).beats().all(|x| x.sound.cues.is_empty()), "the cues went with the beat");
+    // ids stay unique after a delete and a new cue
+    let c = t.execute("planner.addCue", json!({"beat": beat_id(&t, "The question"), "atSeconds": 1})).unwrap()["cue"].as_u64().unwrap();
+    assert!(plan(&t).check().is_ok() && c > 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
