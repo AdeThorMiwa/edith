@@ -3,8 +3,9 @@
 //!
 //! | command | does |
 //! |---|---|
-//! | `analysis.run {item \| sequence, samples?, shots?, maxShots?, wait?, force?}` | measure a media item (pictures at `samples` evenly spaced moments with the camera motion around each, and the first five minutes of its sound) or a sequence (the edit's own numbers, and the picture of each shot); a background job unless `wait` |
-//! | `analysis.get {item \| sequence \| key}` | the cached report |
+//! | `analysis.run {item \| sequence \| mix, samples?, shots?, maxShots?, wait?, force?}` | measure a media item (pictures at `samples` evenly spaced moments with the camera motion around each, and the first five minutes of its sound), a sequence (the edit's own numbers, and the picture of each shot) or its mix (loudness, loudness range, true peak and silence over the whole programme, up to three hours); a background job unless `wait` |
+//! | `analysis.get {item \| sequence \| mix \| key}` | the cached report |
+//! | `coach.findings {sequence?}` | what is worth telling the editor about the edit (the rules in `edith_analysis::coach`), measured against the plan's Format Pack targets and, when it has been measured, the mix |
 //! | `analysis.list` | every cached report, and whether it is still current |
 //! | `analysis.clear {key \| item \| sequence \| stale \| all}` | remove reports |
 //!
@@ -162,15 +163,25 @@ fn hash128(parts: &[&[u8]]) -> String {
     format!("{a:016x}{b:016x}")
 }
 
-/// What identifies a media item's content: the file as it is now (its size and a hash of its first and
-/// last MiB), else what it was when imported, else (a generator) its definition.
-fn media_fingerprint(s: &Session, m: &MediaClip) -> String {
+/// What identifies a media item's content. `fresh` reads the file as it is now (its size and a hash of
+/// its first and last MiB): right for one file. The quick form, for an edit with many files, trusts the
+/// fingerprint taken at import while the file's size is unchanged, and reads the file when it is not.
+/// A generator is identified by its definition.
+fn media_fingerprint(s: &Session, m: &MediaClip, fresh: bool) -> String {
     let of = |id: filmcraft_project::MediaIdentity| format!("{}-{:016x}", id.size, id.fingerprint);
     match &m.media {
-        MediaRef::File { path } => match crate::relink::identity_of(&*s.services, path) {
-            Ok(id) => of(id),
-            Err(_) => m.identity.map_or_else(|| hash128(&[path.as_bytes(), &m.info.file_size.unwrap_or(0).to_le_bytes()]), of),
-        },
+        MediaRef::File { path } => {
+            if !fresh
+                && let Some(id) = m.identity
+                && s.services.file_size(path).is_ok_and(|size| size == id.size)
+            {
+                return of(id);
+            }
+            match crate::relink::identity_of(&*s.services, path) {
+                Ok(id) => of(id),
+                Err(_) => m.identity.map_or_else(|| hash128(&[path.as_bytes(), &m.info.file_size.unwrap_or(0).to_le_bytes()]), of),
+            }
+        }
         MediaRef::Generator(g) => hash128(&[serde_json::to_string(g).unwrap_or_default().as_bytes()]),
     }
 }
@@ -199,9 +210,20 @@ struct SeqWork {
     shots_total: usize,
 }
 
+/// Measuring the whole mix of a sequence: its sound as the mixer makes it, a second at a time.
+struct MixWork {
+    project: Arc<Project>,
+    seq: ItemId,
+    provider: crate::media_pool::PoolProvider,
+    rate: u32,
+    frames: i64,
+    truncated: bool,
+}
+
 enum Work {
     Item(ItemWork),
     Sequence(SeqWork),
+    Mix(MixWork),
 }
 
 struct Plan {
@@ -224,7 +246,7 @@ fn plan_item(s: &Session, id: ItemId, samples: usize, cmd: &str) -> Result<Plan>
     let src = s.source(root).ok_or_else(|| bad(cmd, format!("“{}” is offline: link its media first", item.name)))?;
     let info = media.info.clone();
     let window = range.unwrap_or(TimeRange { start: Tick::ZERO, duration: info.duration });
-    let key = format!("item-{}-{}-{}-n{samples}-{}", media_fingerprint(s, media), window.start.0, window.duration.0, version_tag());
+    let key = format!("item-{}-{}-{}-n{samples}-{}", media_fingerprint(s, media, true), window.start.0, window.duration.0, version_tag());
     Ok(Plan {
         key,
         kind: "item",
@@ -245,9 +267,9 @@ fn is_shot_item(p: &Project, id: ItemId) -> bool {
     }
 }
 
-fn plan_sequence(s: &Session, id: ItemId, shots: bool, max_shots: usize, cmd: &str) -> Result<Plan> {
-    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
-    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+/// The timeline as the analysis sees it: clips, transitions and narration as plain spans. A switched-off
+/// track and a disabled clip are left out: they show and sound like nothing.
+pub(crate) fn sequence_input(s: &Session, q: &filmcraft_project::Sequence) -> an::SequenceInput {
     let span = |t: &filmcraft_project::TrackItem, link: Option<u64>, is_shot: bool| an::sequence::ClipSpan {
         id: t.id.0,
         start: t.start.0,
@@ -296,7 +318,13 @@ fn plan_sequence(s: &Session, id: ItemId, shots: bool, max_shots: usize, cmd: &s
             Some(an::sequence::NarrationSpan { start: c.start.0, duration: c.duration.0, words: u32::try_from(words).unwrap_or(u32::MAX) })
         })
         .collect();
-    let input = an::SequenceInput { video: tracks(TrackKind::Video, &q.video_tracks), audio: tracks(TrackKind::Audio, &q.audio_tracks), narration };
+    an::SequenceInput { video: tracks(TrackKind::Video, &q.video_tracks), audio: tracks(TrackKind::Audio, &q.audio_tracks), narration }
+}
+
+fn plan_sequence(s: &Session, id: ItemId, shots: bool, max_shots: usize, cmd: &str) -> Result<Plan> {
+    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
+    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+    let input = sequence_input(s, q);
     // the shots to measure: evenly spread when there are more than `max_shots`
     let all = an::shot_spans(&input).map_err(|e| bad(cmd, e.to_string()))?;
     let shots_total = all.len();
@@ -314,7 +342,7 @@ fn plan_sequence(s: &Session, id: ItemId, shots: bool, max_shots: usize, cmd: &s
         let root = s.project.resolve_media(it.item).map(|r| r.0).or(Some(it.item));
         let src = root.and_then(|r| s.source(r));
         if let Some((_, m, _)) = s.project.resolve_media(it.item) {
-            fingerprints.push(media_fingerprint(s, m));
+            fingerprints.push(media_fingerprint(s, m, false));
         }
         works.push(ShotWork { clip: sh.clip, start: Tick(sh.start), end: Tick(sh.end), item: it.clone(), src });
     }
@@ -338,10 +366,55 @@ fn plan_sequence(s: &Session, id: ItemId, shots: bool, max_shots: usize, cmd: &s
     })
 }
 
+/// The longest stretch of a mix that is measured.
+const MAX_MIX_SECONDS: i64 = 3 * 3600;
+
+fn plan_mix(s: &Session, id: ItemId, cmd: &str) -> Result<Plan> {
+    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
+    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+    let rate = q.settings.sample_rate.clamp(8_000, 384_000);
+    let end = q.audio_tracks.iter().filter(|t| !t.muted).flat_map(|t| t.items.iter().filter(|c| c.enabled)).map(|c| c.end()).max().unwrap_or(Tick::ZERO);
+    let frames = end.to_units_floor(i64::from(rate));
+    if frames <= 0 {
+        return Err(bad(cmd, format!("“{}” has nothing on its audio tracks to measure", item.name)));
+    }
+    let mut items: Vec<u64> = q.audio_tracks.iter().flat_map(|t| &t.items).map(|c| c.item.0).collect();
+    items.sort_unstable();
+    items.dedup();
+    let fingerprints: Vec<String> = items.iter().filter_map(|i| s.project.resolve_media(ItemId(*i)).map(|(_, m, _)| media_fingerprint(s, m, false))).collect();
+    let key = format!(
+        "mix-{}-{}",
+        // only what makes the sound: a change to the picture leaves a measured mix current
+        hash128(&[
+            serde_json::to_string(&(&q.audio_tracks, &q.submix_tracks, q.master_volume_db, &q.master_effects, &q.master_mixer)).unwrap_or_default().as_bytes(),
+            fingerprints.join(",").as_bytes(),
+            &rate.to_le_bytes(),
+        ]),
+        version_tag()
+    );
+    let limit = i64::from(rate) * MAX_MIX_SECONDS;
+    let provider = s.media.full_res_provider(s.project.clone(), s.services.clone());
+    Ok(Plan {
+        key,
+        kind: "mix",
+        target: id.0,
+        name: item.name.clone(),
+        params: json!({}),
+        work: Work::Mix(MixWork { project: s.project.clone(), seq: id, provider, rate, frames: frames.min(limit), truncated: frames > limit }),
+    })
+}
+
 /// The target of a command: `item` (a project item id) or `sequence` (`true` for the open one, or an id).
 fn plan(s: &Session, p: &Value, cmd: &str) -> Result<Plan> {
     if let Some(item) = u64_p(p, "item") {
         return plan_item(s, ItemId(item), samples_param(p), cmd);
+    }
+    if bool_p(p, "mix") == Some(true) {
+        let id = match p.get("sequence").and_then(Value::as_u64) {
+            Some(id) => ItemId(id),
+            None => s.state.active_sequence.ok_or(EngineError::NoSequence)?,
+        };
+        return plan_mix(s, id, cmd);
     }
     match p.get("sequence") {
         Some(Value::Bool(true)) => {
@@ -349,7 +422,7 @@ fn plan(s: &Session, p: &Value, cmd: &str) -> Result<Plan> {
             plan_sequence(s, id, bool_p(p, "shots").unwrap_or(true), max_shots_param(p), cmd)
         }
         Some(v) if v.as_u64().is_some() => plan_sequence(s, ItemId(v.as_u64().unwrap_or(0)), bool_p(p, "shots").unwrap_or(true), max_shots_param(p), cmd),
-        _ => Err(bad(cmd, "give `item` (a project item id) or `sequence` (true for the open sequence, or its item id)")),
+        _ => Err(bad(cmd, "give `item` (a project item id), `sequence` (true for the open sequence, or its item id) or `mix: true`")),
     }
 }
 
@@ -606,6 +679,34 @@ fn sequence_report(w: &SeqWork, prog: &filmcraft_export::Progress) -> std::resul
     Ok(json!({"sequence": to_value(&stats), "shots": shots, "shotsTotal": w.shots_total, "shotsAnalysed": w.shots.len()}))
 }
 
+fn mix_report(w: &MixWork, prog: &filmcraft_export::Progress) -> std::result::Result<Value, String> {
+    let Some(q) = w.project.sequence(w.seq) else { return Err("the sequence is gone".into()) };
+    let mut meter = an::MixMeter::new(w.rate, 2).map_err(|e| e.to_string())?;
+    let rate = i64::from(w.rate);
+    prog.total.store(((w.frames + rate - 1) / rate).max(1) as u64, Ordering::Relaxed);
+    let mut pos = 0i64;
+    let mut inter: Vec<f32> = Vec::new();
+    while pos < w.frames {
+        if prog.cancel.load(Ordering::Relaxed) {
+            return Err("stopped".into());
+        }
+        *lock(&prog.status) = format!("Mix {} of {} s", pos / rate, w.frames / rate);
+        let n = (w.frames - pos).min(rate) as usize;
+        let buf = filmcraft_render::audio::mix_sequence(&w.project, q, pos, n, &w.provider);
+        inter.clear();
+        for i in 0..buf.frames() {
+            for c in 0..2 {
+                inter.push(buf.channels.get(c).or_else(|| buf.channels.first()).and_then(|ch| ch.get(i)).copied().unwrap_or(0.0));
+            }
+        }
+        meter.push(&inter);
+        pos += n as i64;
+        prog.done.fetch_add(1, Ordering::Relaxed);
+    }
+    let mix = meter.finish();
+    Ok(json!({"mix": to_value(&mix), "analysedSeconds": w.frames as f64 / f64::from(w.rate), "truncated": w.truncated, "sampleRate": w.rate}))
+}
+
 // ---------------------------------------------------------------------------- commands
 
 fn header(plan: &Plan) -> Value {
@@ -640,6 +741,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let measured = match &work {
             Work::Item(w) => item_report(w, &prog),
             Work::Sequence(w) => sequence_report(w, &prog),
+            Work::Mix(w) => mix_report(w, &prog),
         };
         let secs = t0.elapsed().as_secs_f64();
         let done = prog.done.load(Ordering::Relaxed);
@@ -690,6 +792,7 @@ fn current_key(s: &Session, header: &Value) -> Option<String> {
     let cmd = "analysis.list";
     match header["kind"].as_str()? {
         "item" => plan_item(s, ItemId(id), usize::try_from(header["params"]["samples"].as_u64()?).ok()?.clamp(1, MAX_SAMPLES), cmd).ok().map(|p| p.key),
+        "mix" => plan_mix(s, ItemId(id), cmd).ok().map(|p| p.key),
         "sequence" => {
             let shots = header["params"]["shots"].as_bool().unwrap_or(true);
             let max = usize::try_from(header["params"]["maxShots"].as_u64().unwrap_or(DEFAULT_SHOTS as u64)).ok()?.clamp(1, MAX_SHOTS);
@@ -781,6 +884,62 @@ fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"removed": removed}))
 }
 
+// ---------------------------------------------------------------------------- the coach
+
+/// What the edit is measured against: the plan's Format Pack targets, and, for each plan section that is
+/// laid on the timeline, where it is.
+fn coach_targets(s: &Session) -> an::coach::Targets {
+    let mut t = an::coach::Targets::default();
+    if let Some(plan) = crate::planner::get(&s.project) {
+        t.words_per_minute = crate::planner::pack_target(s, &plan, "words_per_minute");
+        t.average_shot_seconds = crate::planner::pack_target(s, &plan, "average_shot_seconds");
+        for sec in &plan.sections {
+            let links: Vec<_> = sec.beats.iter().filter_map(|b| b.link).collect();
+            let (Some(start), Some(end)) = (links.iter().map(|l| l.start.0).min(), links.iter().map(|l| l.start.0.saturating_add(l.duration.0)).max()) else {
+                continue;
+            };
+            t.sections.push(an::coach::SectionTarget { name: sec.name.clone(), start, end, average_shot_seconds: None });
+        }
+    }
+    t
+}
+
+/// The sequence the coach looks at: `sequence` (an id) or the open one.
+fn coach_sequence(s: &Session, p: &Value, cmd: &str) -> Result<ItemId> {
+    match p.get("sequence").filter(|v| !v.is_null() && **v != json!(true)) {
+        Some(v) => v.as_u64().map(ItemId).ok_or_else(|| bad(cmd, "`sequence` must be a sequence's item id")),
+        None => s.state.active_sequence.ok_or(EngineError::NoSequence),
+    }
+}
+
+/// The mix measurement of this edit, if one has been made and the edit has not changed since.
+pub(crate) fn measured_mix(s: &Session, id: ItemId) -> Option<an::Mix> {
+    let key = plan_mix(s, id, "coach.findings").ok()?.key;
+    let report = Cache::of(s).read(&key)?;
+    serde_json::from_value(report["mix"].clone()).ok()
+}
+
+fn coach_findings(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "coach.findings";
+    let id = coach_sequence(s, p, cmd)?;
+    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
+    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+    let input = sequence_input(s, q);
+    let targets = coach_targets(s);
+    let mix = measured_mix(s, id);
+    let found = an::coach::findings(&input, &targets, mix.as_ref()).map_err(|e| bad(cmd, e.to_string()))?;
+    let shots = an::shot_spans(&input).map(|v| v.len()).unwrap_or(0);
+    Ok(json!({
+        "sequence": {"id": id.0, "name": item.name},
+        "findings": found,
+        "targets": to_value(&targets),
+        "mix": mix.map(|m| to_value(&m)),
+        "mixMeasured": mix.is_some(),
+        "shots": shots,
+        "coachVersion": an::coach::COACH_VERSION,
+    }))
+}
+
 pub fn commands() -> Vec<CommandSpec> {
     let spec = |id, label, params, run: fn(&mut Session, &Value) -> Result<Value>| CommandSpec {
         id,
@@ -796,11 +955,12 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "analysis.run",
             "Analyse",
-            r#"{"item":id | "sequence":true|id,"samples":n=60,"shots":bool=true,"maxShots":n=300,"wait":bool=false,"force":bool=false}"#,
+            r#"{"item":id | "sequence":true|id | "mix":true,"samples":n=60,"shots":bool=true,"maxShots":n=300,"wait":bool=false,"force":bool=false}"#,
             run,
         ),
         spec("analysis.get", "Get Analysis", r#"{"item":id | "sequence":true|id | "key":str}"#, get),
         spec("analysis.list", "List Analyses", "{}", list),
+        spec("coach.findings", "Coach Findings", r#"{"sequence":id?}"#, coach_findings),
         spec("analysis.clear", "Clear Analyses", r#"{"key":str | "item":id | "sequence":true|id | "stale":bool | "all":bool}"#, clear),
     ]
 }

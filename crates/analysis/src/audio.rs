@@ -149,6 +149,104 @@ pub struct AudioStats {
     pub tempo: Option<Tempo>,
 }
 
+/// The few numbers about a whole programme that the coach's loudness rules need, measured without
+/// holding the audio in memory ([`MixMeter`]), or taken from an [`AudioStats`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Mix {
+    pub duration_seconds: f64,
+    pub integrated_lufs: Option<f64>,
+    pub loudness_range_lu: Option<f64>,
+    pub true_peak_dbtp: Option<f64>,
+    /// The share of 50 ms windows quieter than −60 dBFS.
+    pub silence_share: f32,
+}
+
+impl From<&AudioStats> for Mix {
+    fn from(a: &AudioStats) -> Mix {
+        Mix {
+            duration_seconds: a.duration_seconds,
+            integrated_lufs: a.integrated_lufs,
+            loudness_range_lu: a.loudness_range_lu,
+            true_peak_dbtp: a.true_peak_dbtp,
+            silence_share: a.silence_share,
+        }
+    }
+}
+
+/// Measures a programme of any length as it is produced: feed it interleaved samples with
+/// [`MixMeter::push`] and read the result with [`MixMeter::finish`]. It uses the same meter and the
+/// same silence rule as [`analyze_audio`], so for the same audio the numbers agree.
+pub struct MixMeter {
+    meter: LoudnessMeter,
+    sample_rate: u32,
+    channels: usize,
+    window: usize,
+    in_window: usize,
+    energy: f64,
+    windows: u64,
+    quiet: u64,
+    frames: u64,
+}
+
+impl MixMeter {
+    pub fn new(sample_rate: u32, channels: u16) -> Result<MixMeter> {
+        if !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate) || channels == 0 || channels > MAX_CHANNELS {
+            return Err(AnalysisError::BadAudioFormat { sample_rate, channels });
+        }
+        Ok(MixMeter {
+            meter: LoudnessMeter::new(f64::from(sample_rate), usize::from(channels)),
+            sample_rate,
+            channels: usize::from(channels),
+            window: (sample_rate as usize / 20).max(1),
+            in_window: 0,
+            energy: 0.0,
+            windows: 0,
+            quiet: 0,
+            frames: 0,
+        })
+    }
+
+    /// Adds samples (interleaved); a trailing part of a frame is ignored.
+    pub fn push(&mut self, samples: &[f32]) {
+        let whole = samples.len() / self.channels * self.channels;
+        let Some(samples) = samples.get(..whole) else { return };
+        let clean: Vec<f32> = samples.iter().map(|v| AudioBuffer::clean(*v)).collect();
+        self.meter.process_interleaved(&clean);
+        for frame in clean.chunks_exact(self.channels) {
+            self.energy += frame.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+            self.in_window += 1;
+            self.frames += 1;
+            if self.in_window == self.window {
+                self.close_window();
+            }
+        }
+    }
+
+    fn close_window(&mut self) {
+        let ms = self.energy / (self.in_window * self.channels) as f64;
+        self.windows += 1;
+        self.quiet += u64::from(db(ms) < SILENCE_DB);
+        self.in_window = 0;
+        self.energy = 0.0;
+    }
+
+    pub fn finish(&mut self) -> Mix {
+        // less than one window in all: that short stretch is the one window
+        if self.windows == 0 && self.in_window > 0 {
+            self.close_window();
+        }
+        let s = self.meter.summary();
+        Mix {
+            duration_seconds: self.frames as f64 / f64::from(self.sample_rate),
+            integrated_lufs: finite(s.integrated_lufs),
+            loudness_range_lu: finite(s.loudness_range_lu).filter(|_| finite(s.integrated_lufs).is_some()),
+            true_peak_dbtp: finite(s.true_peak_dbtp),
+            silence_share: if self.windows == 0 { 0.0 } else { self.quiet as f32 / self.windows as f32 },
+        }
+    }
+}
+
 fn finite(v: f64) -> Option<f64> {
     v.is_finite().then_some(v)
 }

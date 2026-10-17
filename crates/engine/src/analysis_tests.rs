@@ -323,3 +323,152 @@ fn keys_cannot_name_a_path_and_the_disk_cache_round_trips_and_shrugs_off_junk() 
     c.write("kept", &json!({"b": 1}));
     assert_eq!(c.read("kept"), Some(json!({"b": 1})));
 }
+
+/// An open sequence of colour-matte shots of the given lengths (seconds), end to end on V1, with a
+/// tone on A1 under all of it.
+fn edit_of(lengths: &[f64]) -> Session {
+    use filmcraft_media::generators::GeneratorSource;
+    use filmcraft_media::{Generator, MediaSource};
+    use filmcraft_project::{Label, MediaClip, MediaRef, SequenceSettings, TrackKind};
+    use filmcraft_time::{FrameRate, Tick, TimeRange};
+    let mut s = Session::default();
+    let rate = FrameRate::FPS_24;
+    let mut p = (*s.project).clone();
+    let seq = p.new_sequence("Coach test", SequenceSettings { width: 160, height: 90, frame_rate: rate, ..Default::default() }, 1, 1, None);
+    let total_ticks = rate.tick_of(lengths.iter().map(|l| (l * 24.0).round() as i64).sum());
+    let mut at = Tick::ZERO;
+    for (i, len) in lengths.iter().enumerate() {
+        // whole frames, so the shots meet exactly
+        let dur = rate.tick_of((*len * 24.0).round() as i64);
+        let g = Generator::ColorMatte { color: [0.2, 0.3 + 0.05 * (i % 5) as f32, 0.5, 1.0] };
+        let src = GeneratorSource::new(g.clone(), 160, 90, rate, dur);
+        let clip = MediaClip {
+            media: MediaRef::Generator(g),
+            info: src.info().clone(),
+            interpret: Default::default(),
+            mark_in: None,
+            mark_out: None,
+            markers: vec![],
+            offline: false,
+            proxy: None,
+            identity: None,
+        };
+        let item = p.add_item(&format!("shot{i}"), Label::Iris, ItemKind::Media(clip), None);
+        let v = p.make_track_item(item, TrackKind::Video, at, TimeRange::new(Tick::ZERO, dur), rate).unwrap();
+        p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+        at += dur;
+    }
+    // sound under the whole edit
+    let tone = Generator::Tone { hz: 440.0, db: -20.0 };
+    let tsrc = GeneratorSource::new(tone.clone(), 160, 90, rate, total_ticks);
+    let tclip = MediaClip {
+        media: MediaRef::Generator(tone),
+        info: tsrc.info().clone(),
+        interpret: Default::default(),
+        mark_in: None,
+        mark_out: None,
+        markers: vec![],
+        offline: false,
+        proxy: None,
+        identity: None,
+    };
+    let titem = p.add_item("tone", Label::Iris, ItemKind::Media(tclip), None);
+    let a = p.make_track_item(titem, TrackKind::Audio, Tick::ZERO, TimeRange::new(Tick::ZERO, total_ticks), rate).unwrap();
+    p.sequence_mut(seq).unwrap().audio_tracks[0].items.push(a);
+    s.project = Arc::new(p);
+    s.state.active_sequence = Some(seq);
+    s.state.open_sequences = vec![seq];
+    s
+}
+
+#[test]
+fn the_coach_finds_a_jarring_shot_in_a_real_sequence_at_its_timecode() {
+    let mut s = edit_of(&[6.0, 0.8, 6.0]);
+    let r = s.execute("coach.findings", json!({})).unwrap();
+    assert_eq!(r["shots"], 3);
+    let f = r["findings"].as_array().unwrap();
+    let jolt = f.iter().find(|x| x["kind"] == "shortBetweenLong").unwrap_or_else(|| panic!("{f:?}"));
+    assert_eq!(jolt["severity"], "look");
+    assert_eq!(jolt["start"], 6 * filmcraft_time::TICKS_PER_SECOND, "the shots are whole frames, so 6 s is exact");
+    assert!(jolt["title"].as_str().unwrap().contains("0.8 s"), "{jolt}");
+    assert_eq!(r["mixMeasured"], false);
+    // nothing to say about an ordinary edit
+    let mut ok = edit_of(&[4.0, 5.0, 6.0, 5.0]);
+    assert!(ok.execute("coach.findings", json!({})).unwrap()["findings"].as_array().unwrap().is_empty());
+    // no sequence open, an id that is not a sequence
+    let mut none = Session::default();
+    assert!(none.execute("coach.findings", json!({})).is_err());
+    let item = footage(&demo());
+    assert!(s.execute("coach.findings", json!({"sequence": item})).is_err());
+    assert!(s.execute("coach.findings", json!({"sequence": "x"})).is_err());
+}
+
+#[test]
+fn the_coach_measures_against_the_plans_pack_and_its_sections_on_the_timeline() {
+    let mut s = edit_of(&[12.0, 12.0, 12.0, 12.0, 12.0, 12.0]);
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1.2})).unwrap();
+    let r = s.execute("coach.findings", json!({})).unwrap();
+    assert_eq!(r["targets"]["wordsPerMinute"], 140.0);
+    assert_eq!(r["targets"]["averageShotSeconds"], 7.0);
+    assert!(r["targets"]["sections"].as_array().unwrap().is_empty(), "the plan is not on the timeline yet");
+    assert!(
+        r["findings"].as_array().unwrap().iter().any(|x| x["kind"] == "paceVsPlan" && x["title"].as_str().unwrap().contains("slower")),
+        "{}",
+        r["findings"]
+    );
+    s.execute("planner.buildSkeleton", json!({})).unwrap();
+    let r = s.execute("coach.findings", json!({})).unwrap();
+    let sections = r["targets"]["sections"].as_array().unwrap();
+    assert!(!sections.is_empty() && sections.iter().all(|x| x["start"].as_i64() < x["end"].as_i64()), "{sections:?}");
+    // without a plan there are no targets, and only the rules that need none fire
+    let mut bare = edit_of(&[12.0, 12.0, 12.0, 12.0, 12.0, 12.0]);
+    let r = bare.execute("coach.findings", json!({})).unwrap();
+    assert!(r["targets"]["wordsPerMinute"].is_null());
+    assert!(!r["findings"].as_array().unwrap().iter().any(|x| x["kind"] == "paceVsPlan"));
+}
+
+#[test]
+fn the_mix_is_measured_over_the_whole_programme_cached_and_feeds_the_coach() {
+    let mut s = edit_of(&[10.0, 10.0]);
+    assert!(s.execute("analysis.get", json!({"mix": true})).is_err(), "not measured yet");
+    let r = analyse(&mut s, json!({"mix": true}));
+    assert_eq!(r["report"]["kind"], "mix");
+    let mix = &r["report"]["mix"];
+    assert!((mix["durationSeconds"].as_f64().unwrap() - 20.0).abs() < 0.1, "{mix}");
+    let lufs = mix["integratedLufs"].as_f64().unwrap();
+    assert!((-30.0..-10.0).contains(&lufs), "a -20 dB tone: {lufs}");
+    assert_eq!(mix["silenceShare"].as_f64().unwrap(), 0.0);
+    // cached; the key is the edit's
+    let again = s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();
+    assert_eq!((again["cached"].clone(), again["key"].clone()), (json!(true), r["key"].clone()));
+    assert_eq!(s.execute("analysis.get", json!({"mix": true})).unwrap()["key"], r["key"]);
+    // the coach uses it: this mix is 6+ LU under -14, so loudness is off target
+    let c = s.execute("coach.findings", json!({})).unwrap();
+    assert_eq!(c["mixMeasured"], true);
+    assert!(c["findings"].as_array().unwrap().iter().any(|x| x["kind"] == "loudnessOffTarget"), "{}", c["findings"]);
+    // change the edit (a clip off) and the old mix is no longer current: the coach goes back to not knowing
+    let first = s.active_sequence().unwrap().video_tracks[0].items[0].id;
+    s.execute("timeline.select", json!({"clips": [first.0]})).unwrap();
+    s.execute("edit.clear", json!({})).unwrap();
+    let c2 = s.execute("coach.findings", json!({})).unwrap();
+    assert_eq!(c2["mixMeasured"], true, "the audio is unchanged, so the mix is too");
+    let audio = s.active_sequence().unwrap().audio_tracks[0].items[0].id;
+    s.execute("timeline.select", json!({"clips": [audio.0]})).unwrap();
+    s.execute("edit.clear", json!({})).unwrap();
+    assert!(s.execute("analysis.run", json!({"mix": true, "wait": true})).is_err(), "nothing on the audio tracks");
+    let l = list(&mut s);
+    assert!(l.iter().any(|e| e["kind"] == "mix" && e["current"] == false), "{l:?}");
+}
+
+#[test]
+fn a_silent_mix_and_a_missing_one_are_handled() {
+    let mut s = demo();
+    // the demo's sound is measured without trouble, whatever it holds
+    let r = s.execute("analysis.run", json!({"mix": true, "wait": true}));
+    if let Ok(r) = r {
+        assert!(r["report"]["mix"]["silenceShare"].as_f64().unwrap().is_finite());
+    }
+    let mut empty = Session::default();
+    assert!(empty.execute("analysis.run", json!({"mix": true, "wait": true})).is_err());
+    assert!(s.execute("analysis.run", json!({"mix": true, "sequence": 999_999, "wait": true})).is_err());
+}

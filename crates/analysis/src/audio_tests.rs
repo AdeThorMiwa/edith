@@ -225,3 +225,64 @@ fn the_same_audio_always_gives_the_same_numbers_and_they_round_trip_as_json() {
     assert_eq!(a, back);
     assert!(serde_json::to_value(&a).unwrap().get("silenceShare").is_some());
 }
+
+#[test]
+fn the_mix_meter_agrees_with_measuring_the_whole_buffer_however_it_is_fed() {
+    use crate::audio::{Mix, MixMeter};
+    let mut v = sine(997.0, 0.1, 6.0);
+    v.extend(vec![0.0; SR as usize * 2]);
+    v.extend(sine(200.0, 0.4, 5.0));
+    let whole = analyze_audio(SR, 1, &v).unwrap();
+    let reference = Mix::from(&whole);
+    for chunk in [v.len(), 48_000, 4_800, 777, 1] {
+        let mut m = MixMeter::new(SR, 1).unwrap();
+        for part in v.chunks(chunk.max(1)) {
+            m.push(part);
+        }
+        let got = m.finish();
+        assert!((got.duration_seconds - reference.duration_seconds).abs() < 1e-9, "{chunk}");
+        assert!((got.integrated_lufs.unwrap() - reference.integrated_lufs.unwrap()).abs() < 1e-6, "{chunk}: {got:?} vs {reference:?}");
+        assert!((got.loudness_range_lu.unwrap() - reference.loudness_range_lu.unwrap()).abs() < 1e-6, "{chunk}");
+        assert!((got.true_peak_dbtp.unwrap() - reference.true_peak_dbtp.unwrap()).abs() < 1e-6, "{chunk}");
+        // windows are counted from the start of the stream, however the chunks fall
+        assert!((got.silence_share - reference.silence_share).abs() < 1e-6, "{chunk}: {} vs {}", got.silence_share, reference.silence_share);
+    }
+    // two channels, fed in pieces that cut a frame in half: the stray half frame is ignored
+    let stereo: Vec<f32> = v.iter().flat_map(|s| [*s, *s]).collect();
+    let mut m = MixMeter::new(SR, 2).unwrap();
+    for part in stereo.chunks(10_001) {
+        m.push(part);
+    }
+    let got = m.finish();
+    assert!((got.duration_seconds - whole.duration_seconds).abs() < 1.0, "{}", got.duration_seconds);
+}
+
+#[test]
+fn the_mix_meter_measures_an_hour_without_holding_it_and_survives_hostile_input() {
+    use crate::audio::MixMeter;
+    // an hour at 8 kHz, one second at a time: nothing is kept
+    let second = sine(440.0, 0.05, 1.0);
+    let quiet = vec![0.0f32; 8000];
+    let mut m = MixMeter::new(8000, 1).unwrap();
+    let tone: Vec<f32> = second.iter().step_by(6).copied().collect();
+    for i in 0..3600 {
+        m.push(if i % 4 == 3 { &quiet } else { &tone });
+    }
+    let r = m.finish();
+    assert!((r.duration_seconds - 3600.0).abs() < 1.0 || r.duration_seconds > 3000.0, "{}", r.duration_seconds);
+    assert!((r.silence_share - 0.25).abs() < 0.02, "{}", r.silence_share);
+    assert!(r.integrated_lufs.is_some_and(f64::is_finite));
+    // formats are checked, and nothing makes it panic
+    assert!(MixMeter::new(0, 1).is_err() && MixMeter::new(48_000, 0).is_err() && MixMeter::new(48_000, 99).is_err() && MixMeter::new(u32::MAX, 2).is_err());
+    let mut h = MixMeter::new(48_000, 2).unwrap();
+    h.push(&[]);
+    h.push(&[f32::NAN, f32::INFINITY, -f32::INFINITY, 1e30, -1e30, 0.5, 0.5]);
+    let r = h.finish();
+    assert!(r.silence_share.is_finite() && r.duration_seconds.is_finite());
+    assert!(r.integrated_lufs.is_none_or(f64::is_finite));
+    // less than one window is one window; nothing at all is no silence
+    let mut short = MixMeter::new(48_000, 1).unwrap();
+    short.push(&vec![0.0; 100]);
+    assert_eq!(short.finish().silence_share, 1.0);
+    assert_eq!(MixMeter::new(48_000, 1).unwrap().finish().silence_share, 0.0);
+}

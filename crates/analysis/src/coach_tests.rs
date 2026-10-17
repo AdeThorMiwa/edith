@@ -3,7 +3,7 @@
 
 use filmcraft_time::TICKS_PER_SECOND;
 
-use crate::audio::{AudioKind, AudioStats};
+use crate::audio::Mix;
 use crate::coach::{Finding, Kind, MAX_FINDINGS, SectionTarget, Severity, Targets, findings};
 use crate::sequence::{ClipSpan, NarrationSpan, SequenceInput, TrackSpans, TransitionSpan};
 
@@ -201,19 +201,8 @@ fn few_split_cuts_and_many_dissolves_are_pointed_out() {
     assert!(!run(&d, &Targets::default()).iter().any(|f| f.kind == Kind::ManyDissolves));
 }
 
-fn mix(silence: f32, lra: Option<f64>, lufs: Option<f64>, peak: Option<f64>) -> AudioStats {
-    AudioStats {
-        duration_seconds: 120.0,
-        integrated_lufs: lufs,
-        loudness_range_lu: lra,
-        true_peak_dbtp: peak,
-        sample_peak_dbfs: peak,
-        silence_share: silence,
-        spectral: Default::default(),
-        kind: AudioKind::Music,
-        scores: Default::default(),
-        tempo: None,
-    }
+fn mix(silence: f32, lra: Option<f64>, lufs: Option<f64>, peak: Option<f64>) -> Mix {
+    Mix { duration_seconds: 120.0, integrated_lufs: lufs, loudness_range_lu: lra, true_peak_dbtp: peak, silence_share: silence }
 }
 
 #[test]
@@ -234,7 +223,7 @@ fn a_measured_mix_adds_the_loudness_rules() {
     let mild = findings(&e, &t, Some(&mix(0.0, None, Some(-18.5), None))).unwrap();
     assert_eq!((mild.len(), mild[0].severity), (1, Severity::Look));
     assert!(findings(&e, &t, Some(&mix(0.9, None, None, None))).unwrap().iter().any(|f| f.kind == Kind::MostlySilent));
-    let short = AudioStats { duration_seconds: 5.0, ..mix(0.9, None, None, None) };
+    let short = Mix { duration_seconds: 5.0, ..mix(0.9, None, None, None) };
     assert!(findings(&e, &t, Some(&short)).unwrap().is_empty(), "a five second clip being quiet is not news");
     let loud = Targets { loudness_lufs: -23.0, ..Default::default() };
     assert!(findings(&e, &loud, Some(&mix(0.0, None, Some(-23.5), None))).unwrap().is_empty(), "the target can be changed");

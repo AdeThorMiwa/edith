@@ -33,7 +33,7 @@ use filmcraft_time::TICKS_PER_SECOND;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::audio::AudioStats;
+use crate::audio::Mix;
 use crate::sequence::{SequenceInput, SequenceStats, ShotSpan, analyze_sequence, shot_spans};
 
 /// Bumped whenever a rule, a threshold or a wording could change a finding.
@@ -471,7 +471,7 @@ fn split_rules(stats: &SequenceStats, out: &mut Vec<Finding>) {
     }
 }
 
-fn audio_rules(a: &AudioStats, targets: &Targets, out: &mut Vec<Finding>) {
+fn audio_rules(a: &Mix, targets: &Targets, out: &mut Vec<Finding>) {
     if a.silence_share > 0.25 && a.duration_seconds > 20.0 {
         out.push(finding(
             Kind::MostlySilent,
@@ -563,8 +563,8 @@ fn finish(mut all: Vec<Finding>) -> Vec<Finding> {
 }
 
 /// What is worth telling the editor about this edit, the worst first and then in time order. `audio`
-/// is a measurement of the mix when there is one (the audio rules need it).
-pub fn findings(input: &SequenceInput, targets: &Targets, audio: Option<&AudioStats>) -> Result<Vec<Finding>> {
+/// is a measurement of the mix when there is one (the loudness rules need it).
+pub fn findings(input: &SequenceInput, targets: &Targets, mix: Option<&Mix>) -> Result<Vec<Finding>> {
     let stats = analyze_sequence(input)?;
     let shots = shot_spans(input)?;
     let mut out = Vec::new();
@@ -574,7 +574,7 @@ pub fn findings(input: &SequenceInput, targets: &Targets, audio: Option<&AudioSt
     cut_rules(&stats, &mut out);
     narration_rules(&stats, input, targets, &mut out);
     split_rules(&stats, &mut out);
-    if let Some(a) = audio {
+    if let Some(a) = mix {
         audio_rules(a, targets, &mut out);
     }
     Ok(finish(out))

@@ -332,6 +332,12 @@ fn fix_lines(plan: &mut Planner) {
     }
 }
 
+/// A number from the plan's Format Pack `[targets]` table (`words_per_minute`, `average_shot_seconds`), if
+/// the plan came from a pack that sets it (the coach measures an edit against these).
+pub(crate) fn pack_target(s: &Session, plan: &Planner, key: &str) -> Option<f64> {
+    plan.pack.as_deref().and_then(|id| find_pack(s, id, "coach.findings").ok()).and_then(|p| p.targets.get(key).copied()).filter(|v| v.is_finite())
+}
+
 /// Words per minute for this plan: its pack's target, else 150.
 fn words_per_minute(s: &Session, plan: &Planner) -> u32 {
     plan.pack
