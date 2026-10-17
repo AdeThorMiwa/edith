@@ -130,6 +130,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::Storyboard => storyboard::show(app, ui, rect),
         PanelKind::References => references::show(app, ui, rect),
         PanelKind::LookBible => look_bible::show(app, ui, rect),
+        PanelKind::SoundMap => sound_map::show(app, ui, rect),
+        PanelKind::SpottingSheet => spotting_sheet::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }
@@ -137,8 +139,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
 pub mod look_bible;
 pub mod look_pictures;
 pub mod references;
+pub mod sound_map;
 pub mod source_drag;
 pub mod source_range;
+pub mod spotting_sheet;
 pub mod storyboard;
 
 #[derive(Clone, Debug)]

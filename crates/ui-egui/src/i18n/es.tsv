@@ -4004,3 +4004,47 @@
 	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	Imágenes que dicen cómo debe sentirse tu película. Guarda solo imágenes que tengas derecho a usar: cada una lleva una nota de por qué.
 	Picture added to the look.	Imagen añadida al aspecto.
 	Place Sound Cues on the Timeline	Colocar las marcas de sonido en la línea de tiempo
+	Unsorted	Sin clasificar
+	Nothing on the audio tracks yet. Put narration, music or ambience on the timeline to see the sound map.	Aún no hay nada en las pistas de audio. Pon narración, música o ambiente en la línea de tiempo para ver el mapa de sonido.
+	Measure again	Medir de nuevo
+	Measure loudness	Medir el volumen
+	Loudness measured: the curves show how loud each lane is.	Volumen medido: las curvas muestran lo fuerte que es cada carril.
+	Not measured yet: lanes show where each sound is. Measuring adds loudness and finds more.	Aún sin medir: los carriles muestran dónde está cada sonido. Medir añade el volumen y encuentra más cosas.
+	{l} LUFS typical	{l} LUFS típico
+	nothing here	nada aquí
+	{p}% of the video	{p}% del vídeo
+	{n} sound clips are not sorted into a lane. Mark each as Dialogue, Music, SFX or Ambience in Essential Sound, and the map can tell you what is missing.	{n} clips de sonido no están clasificados en un carril. Márcalos como Diálogo, Música, SFX o Ambiente en Sonido esencial y el mapa podrá decirte qué falta.
+	Nothing stands out in the sound.	Nada destaca en el sonido.
+	No plan yet: open Window ▸ Planner and make one. Its beats are what the spotting sheet plans the sound for.	Aún no hay plan: abre Ventana ▸ Planificador y crea uno. Sus beats son para los que la hoja de spotting planifica el sonido.
+	{planned} of {total} beats have a sound plan	{planned} de {total} beats tienen plan de sonido
+	Put cues on the timeline	Poner las marcas en la línea de tiempo
+	Makes a marker for each bed, music and cue. Asking again moves them; none of your own markers are touched.	Crea un marcador por cada ambiente, música y marca. Si lo pides otra vez, se mueven; ninguno de tus marcadores se toca.
+	Take them off	Quitarlas
+	Removes the markers this panel put on the timeline.	Quita los marcadores que este panel puso en la línea de tiempo.
+	Export as text…	Exportar como texto…
+	Copy as text	Copiar como texto
+	Spotting sheet copied.	Hoja de spotting copiada.
+	Put {n} sound cues on the timeline.	Se pusieron {n} marcas de sonido en la línea de tiempo.
+	Took the sound cues off the timeline.	Se quitaron las marcas de sonido de la línea de tiempo.
+	Spotting sheet saved.	Hoja de spotting guardada.
+	click to go there	haz clic para ir allí
+	the room tone or bed under this beat, e.g. wind over a shore, low	el ambiente o sonido de fondo bajo este beat, p. ej. viento sobre una orilla, bajo
+	Add music	Añadir música
+	mood	ambiente
+	A time looks like 1:25, and cannot be before the beat starts.	Un tiempo se escribe como 1:25 y no puede ser anterior al comienzo del beat.
+	end of beat	fin del beat
+	Click to give it a time.	Haz clic para darle un tiempo.
+	to the end	hasta el final
+	Let it play to the end of the beat.	Que suene hasta el final del beat.
+	Remove music	Quitar la música
+	Silence	Silencio
+	Click to switch between an effect and a silence.	Haz clic para cambiar entre un efecto y un silencio.
+	A silence needs a length in seconds, more than 0.	Un silencio necesita una duración en segundos, mayor que 0.
+	why it is quiet	por qué hay silencio
+	what the sound is	qué sonido es
+	Remove this cue	Quitar esta marca
+	+ Effect	+ Efecto
+	+ Silence	+ Silencio
+	Note	Nota
+	Sound Map	Mapa de sonido
+	Spotting Sheet	Hoja de spotting

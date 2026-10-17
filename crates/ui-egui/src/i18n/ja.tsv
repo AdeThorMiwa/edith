@@ -4006,3 +4006,47 @@
 	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	作品の雰囲気を伝える画像。使用する権利のある画像だけを保存してください。それぞれに理由のメモが付きます。
 	Picture added to the look.	画像をルックに追加しました。
 	Place Sound Cues on the Timeline	サウンドキューをタイムラインに配置
+	Unsorted	未分類
+	Nothing on the audio tracks yet. Put narration, music or ambience on the timeline to see the sound map.	オーディオトラックにはまだ何もありません。ナレーション、音楽、環境音をタイムラインに置くとサウンドマップが表示されます。
+	Measure again	もう一度測定
+	Measure loudness	音量を測定
+	Loudness measured: the curves show how loud each lane is.	音量を測定しました。曲線は各レーンの音量を示します。
+	Not measured yet: lanes show where each sound is. Measuring adds loudness and finds more.	未測定：レーンは各音の位置を示します。測定すると音量が加わり、より多くの問題を見つけます。
+	{l} LUFS typical	標準 {l} LUFS
+	nothing here	なし
+	{p}% of the video	映像の {p}%
+	{n} sound clips are not sorted into a lane. Mark each as Dialogue, Music, SFX or Ambience in Essential Sound, and the map can tell you what is missing.	{n} 個のサウンドクリップがレーンに分類されていません。エッセンシャルサウンドで、ダイアログ、ミュージック、SFX、アンビエンスのいずれかに設定すると、不足しているものをマップが教えてくれます。
+	Nothing stands out in the sound.	サウンドに目立つ問題はありません。
+	No plan yet: open Window ▸ Planner and make one. Its beats are what the spotting sheet plans the sound for.	プランはまだありません。ウィンドウ ▸ プランナーで作成してください。スポッティングシートはそのビートごとにサウンドを計画します。
+	{planned} of {total} beats have a sound plan	{total} 個のビートのうち {planned} 個にサウンド計画があります
+	Put cues on the timeline	キューをタイムラインに置く
+	Makes a marker for each bed, music and cue. Asking again moves them; none of your own markers are touched.	各ベッド、音楽、キューにマーカーを作ります。もう一度実行すると移動し、あなた自身のマーカーには触れません。
+	Take them off	取り除く
+	Removes the markers this panel put on the timeline.	このパネルがタイムラインに置いたマーカーを削除します。
+	Export as text…	テキストとして書き出す…
+	Copy as text	テキストとしてコピー
+	Spotting sheet copied.	スポッティングシートをコピーしました。
+	Put {n} sound cues on the timeline.	サウンドキュー {n} 件をタイムラインに置きました。
+	Took the sound cues off the timeline.	サウンドキューをタイムラインから取り除きました。
+	Spotting sheet saved.	スポッティングシートを保存しました。
+	click to go there	クリックでそこへ移動
+	the room tone or bed under this beat, e.g. wind over a shore, low	このビートの下の環境音やベッド（例：岸辺の風、小さめ）
+	Add music	音楽を追加
+	mood	雰囲気
+	A time looks like 1:25, and cannot be before the beat starts.	時間は 1:25 のように入力し、ビートの開始より前にはできません。
+	end of beat	ビートの終わり
+	Click to give it a time.	クリックで時間を指定します。
+	to the end	最後まで
+	Let it play to the end of the beat.	ビートの終わりまで流します。
+	Remove music	音楽を削除
+	Silence	無音
+	Click to switch between an effect and a silence.	クリックで効果音と無音を切り替えます。
+	A silence needs a length in seconds, more than 0.	無音には 0 より大きい秒数の長さが必要です。
+	why it is quiet	静かな理由
+	what the sound is	どんな音か
+	Remove this cue	このキューを削除
+	+ Effect	+ 効果音
+	+ Silence	+ 無音
+	Note	メモ
+	Sound Map	サウンドマップ
+	Spotting Sheet	スポッティングシート

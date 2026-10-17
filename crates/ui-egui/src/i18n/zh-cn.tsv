@@ -3982,3 +3982,47 @@
 	Pictures that say how your film should feel. Keep only pictures you have the right to use: each one carries a note of why.	说明你的影片应有何种感觉的图片。只保留你有权使用的图片：每张都带有说明原因的备注。
 	Picture added to the look.	已将图片添加到风格。
 	Place Sound Cues on the Timeline	将声音提示放到时间线上
+	Unsorted	未分类
+	Nothing on the audio tracks yet. Put narration, music or ambience on the timeline to see the sound map.	音频轨道上还没有内容。把旁白、音乐或环境声放到时间线上，即可看到声音地图。
+	Measure again	重新测量
+	Measure loudness	测量响度
+	Loudness measured: the curves show how loud each lane is.	已测量响度：曲线显示各通道的响度。
+	Not measured yet: lanes show where each sound is. Measuring adds loudness and finds more.	尚未测量：通道显示各声音的位置。测量后会加入响度并发现更多问题。
+	{l} LUFS typical	通常 {l} LUFS
+	nothing here	这里没有内容
+	{p}% of the video	占视频的 {p}%
+	{n} sound clips are not sorted into a lane. Mark each as Dialogue, Music, SFX or Ambience in Essential Sound, and the map can tell you what is missing.	有 {n} 个声音片段未归入通道。请在“基本声音”中将每个片段标记为对白、音乐、音效或环境声，声音地图就能告诉你缺少什么。
+	Nothing stands out in the sound.	声音方面没有突出的问题。
+	No plan yet: open Window ▸ Planner and make one. Its beats are what the spotting sheet plans the sound for.	还没有计划：打开“窗口 ▸ 规划器”创建一个。声音设计表会为它的每个节拍规划声音。
+	{planned} of {total} beats have a sound plan	{total} 个节拍中有 {planned} 个有声音计划
+	Put cues on the timeline	把提示放到时间线上
+	Makes a marker for each bed, music and cue. Asking again moves them; none of your own markers are touched.	为每个铺底、音乐和提示创建标记。再次执行会移动它们；不会改动你自己的任何标记。
+	Take them off	移除它们
+	Removes the markers this panel put on the timeline.	移除此面板放到时间线上的标记。
+	Export as text…	导出为文本…
+	Copy as text	复制为文本
+	Spotting sheet copied.	已复制声音设计表。
+	Put {n} sound cues on the timeline.	已把 {n} 个声音提示放到时间线上。
+	Took the sound cues off the timeline.	已从时间线上移除声音提示。
+	Spotting sheet saved.	已保存声音设计表。
+	click to go there	点击跳转到那里
+	the room tone or bed under this beat, e.g. wind over a shore, low	此节拍下的环境声或底噪，例如：海岸上的风声，轻
+	Add music	添加音乐
+	mood	情绪
+	A time looks like 1:25, and cannot be before the beat starts.	时间的格式如 1:25，且不能早于节拍的开始。
+	end of beat	节拍结束
+	Click to give it a time.	点击为它指定时间。
+	to the end	到结尾
+	Let it play to the end of the beat.	让它一直播放到节拍结束。
+	Remove music	移除音乐
+	Silence	静音
+	Click to switch between an effect and a silence.	点击在音效和静音之间切换。
+	A silence needs a length in seconds, more than 0.	静音需要以秒为单位、大于 0 的长度。
+	why it is quiet	安静的原因
+	what the sound is	是什么声音
+	Remove this cue	移除此提示
+	+ Effect	+ 音效
+	+ Silence	+ 静音
+	Note	备注
+	Sound Map	声音地图
+	Spotting Sheet	声音设计表
