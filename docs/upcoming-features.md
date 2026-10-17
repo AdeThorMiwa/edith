@@ -492,7 +492,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Done when.** Editing a line in the A/V script updates the beat board, the lane and the narration in the TTS panel; every widget has automation ids and state in `state.rs`.
 
-### F10 Analysis core · Must · L · ⬜
+### F10 Analysis core · Must · L · 🟡
 
 **Needs:** F01 · **Unlocks:** F11, F12, F13, F18, F21, F23.
 
@@ -504,6 +504,10 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 - **Sequence level** (from the model, no decoding): shot-length distribution, cut density, J/L-cut share, transition use, narration words per minute, track occupancy.
 - Reuses what exists: `SceneDetector` for cuts, the optical-flow code behind Morph Cut, the scopes maths.
 - Commands `analysis.run|get|list|clear`.
+
+**Steps.**
+- F10.1 ✅ (2026-10-17) **Picture measures**: the new `edith-analysis` crate (pure functions, no decoding; layer 3, checks for wasm). `analyze_rgba(width, height, rgba)` gives `FrameStats`: mean luma and its 5th and 95th percentile, contrast (the span between them), saturation, a palette of up to five colours in Lab with the share each covers (k-means from well-spread starting points, so the same picture always gives the same palette), colour temperature in kelvin of the average colour, sharpness, grain, black bars on each side and the aspect of what is inside them. Every number is measured on a reduced copy or a fixed crop, so it does not depend on how many pixels the picture has. Sizes are checked before anything is allocated; no input panics. Tested on synthetic pictures with known answers (the sRGB primaries in Lab against published values, D65 white at 6504 K, bars of a known size, added noise of a known level).
+- F10.2 **Audio measures**, F10.3 **Motion and the sequence's own numbers**, F10.4 **`analysis.run|get|list|clear` as background jobs with a cache**: next.
 
 **Done when.** Synthetic fixtures with known properties produce the expected numbers; results are cached and invalidated correctly; hostile media never panics.
 

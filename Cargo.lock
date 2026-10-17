@@ -1454,6 +1454,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "edith-analysis"
+version = "0.7.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "edith-llm"
 version = "0.7.2"
 dependencies = [

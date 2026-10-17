@@ -77,6 +77,7 @@ const LAYERS: &[(&str, u8)] = &[
     ("llm", 3),
     ("sources", 3),
     ("planner", 3),
+    ("analysis", 3),
     ("agent", 3),
     ("ai", 3),
     ("render", 3),

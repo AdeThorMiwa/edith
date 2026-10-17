@@ -1,0 +1,16 @@
+[package]
+name = "edith-analysis"
+description = "Edith analysis: pure functions that measure footage and audio (luma, contrast, saturation, palette, colour temperature, sharpness, grain, letterbox; later loudness, motion, pace) so later features can talk in numbers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
