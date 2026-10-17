@@ -61,6 +61,19 @@ pub(crate) fn tools() -> Vec<ToolDef> {
             analysis_list,
         ),
         def(
+            "show",
+            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
+            json!({
+                "view": {"type": "string", "enum": ["findings", "timeline", "histogram"], "description": "Which view."},
+                "ids": {"type": "array", "items": {"type": "string"}, "description": "findings view: which findings, by id from coach_findings. Default: the first eight."},
+                "highlight": {"type": "array", "items": {"type": "string"}, "description": "timeline view: finding ids to mark. Default: every finding that has a place on the timeline."},
+                "from": {"type": "string", "description": "timeline view: start of the stretch to draw (seconds or timecode). Default: the start."},
+                "to": {"type": "string", "description": "timeline view: end of the stretch. Default: the end."},
+                "caption": {"type": "string", "description": "A short line over the view (up to 120 characters)."},
+            }),
+            show,
+        ),
+        def(
             "analysis_run",
             "Measure something that has not been measured: an item (pictures and sound), the open sequence (a look at each shot), or its mix. It takes seconds to a minute; you get the result when it finishes. Use it when analysis_get says there are no measurements, and tell the person what you are about to measure.",
             target(json!({
@@ -551,4 +564,180 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
     ));
     out.push_str("Pull coach_findings for the explanations and numbers before you say anything about them.");
     Some(out)
+}
+
+// ---------------------------------------------------------------------------- views
+
+/// The views `show` can draw.
+const VIEWS: [&str; 3] = ["findings", "timeline", "histogram"];
+/// Shots drawn in one timeline view.
+const MAX_SHOTS_DRAWN: usize = 1200;
+/// Findings marked on one timeline view.
+const MAX_MARKS: usize = 40;
+/// Kinds of finding that sit at a place on the timeline (the others are about the whole edit).
+const PLACED: [&str; 6] = ["flashFrame", "emptyGap", "shortBetweenLong", "longHold", "sectionPace", "cutBurst"];
+
+fn show(s: &Session, p: &Value) -> ToolOutput {
+    match show_view(s, p) {
+        Ok(out) => out,
+        Err(e) => ToolOutput::error(e),
+    }
+}
+
+fn caption_of(o: &serde_json::Map<String, Value>) -> Option<String> {
+    let c: String = o.get("caption")?.as_str()?.chars().filter(|c| !c.is_control()).take(120).collect();
+    let c = c.trim().to_string();
+    (!c.is_empty()).then_some(c)
+}
+
+fn id_list(o: &serde_json::Map<String, Value>, key: &str, max: usize) -> Result<Option<Vec<String>>, String> {
+    let Some(v) = o.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
+    let a = v.as_array().ok_or_else(|| format!("`{key}` must be a list of finding ids"))?;
+    if a.len() > max {
+        return Err(format!("`{key}` may name at most {max} findings"));
+    }
+    a.iter()
+        .map(|x| x.as_str().map(str::to_string).ok_or_else(|| format!("`{key}` must be a list of finding ids (text)")))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// The findings with these ids, or an error that lists the ones there are.
+fn pick<'a>(all: &'a [Value], ids: &[String]) -> Result<Vec<&'a Value>, String> {
+    ids.iter()
+        .map(|id| {
+            all.iter().find(|f| f["id"].as_str() == Some(id.as_str())).ok_or_else(|| {
+                let known: Vec<&str> = all.iter().take(10).filter_map(|f| f["id"].as_str()).collect();
+                format!(
+                    "there is no finding {id:?}. The ids are: {}.",
+                    if known.is_empty() { "none (nothing was found)".to_string() } else { known.join(", ") }
+                )
+            })
+        })
+        .collect()
+}
+
+fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
+    let o = p.as_object().ok_or("show takes an object such as {\"view\": \"timeline\"}")?;
+    let view = o.get("view").and_then(Value::as_str).ok_or_else(|| format!("`view` is required: one of {}", VIEWS.join(", ")))?;
+    if !VIEWS.contains(&view) {
+        return Err(format!("there is no view {:?}; use one of {}", view.chars().take(30).collect::<String>(), VIEWS.join(", ")));
+    }
+    let report = crate::analysis::coach_report(s, &json!({})).map_err(|e| e.to_string())?;
+    let all: Vec<Value> = report["findings"].as_array().cloned().unwrap_or_default();
+    let name = report["sequence"]["name"].as_str().unwrap_or("").to_string();
+    let caption = caption_of(o);
+    match view {
+        "findings" => {
+            let ids = id_list(o, "ids", 12)?;
+            let chosen: Vec<&Value> = match &ids {
+                Some(ids) => pick(&all, ids)?,
+                None => all.iter().take(8).collect(),
+            };
+            if chosen.is_empty() {
+                return Ok(ToolOutput::ok("There are no findings to show: no rule fired. Say that nothing stands out, and why that is good news."));
+            }
+            let rows: Vec<Value> = chosen
+                .iter()
+                .map(|f| json!({"id": f["id"], "kind": f["kind"], "severity": f["severity"], "start": f["start"], "end": f["end"], "title": f["title"]}))
+                .collect();
+            let names: Vec<&str> = chosen.iter().filter_map(|f| f["id"].as_str()).collect();
+            let v = json!({"view": "findings", "caption": caption, "sequence": name, "total": all.len(), "findings": rows});
+            Ok(ToolOutput::ok(format!("Shown to the person: a card with {} of {} findings ({}). It lists each one's timecode (they can click it) and title, so add the explanation and what to try; do not repeat the titles.", chosen.len(), all.len(), names.join(", "))).with_view(v))
+        }
+        "timeline" => {
+            let id = s.state.active_sequence.ok_or("no sequence is open")?;
+            let Some(filmcraft_project::ItemKind::Sequence(q)) = s.project.item(id).map(|i| &i.kind) else { return Err("no sequence is open".into()) };
+            let input = crate::analysis::sequence_input(s, q);
+            let shots = edith_analysis::shot_spans(&input).map_err(|e| e.to_string())?;
+            let end = shots.iter().map(|x| x.end).max().unwrap_or(0);
+            if shots.is_empty() || end <= 0 {
+                return Err("the open edit has no shots on its video tracks to draw".into());
+            }
+            let from = match o.get("from").filter(|v| !v.is_null()) {
+                Some(v) => crate::assistant_tools::parse_time(v, q, "`from`")?.0.clamp(0, end),
+                None => 0,
+            };
+            let to = match o.get("to").filter(|v| !v.is_null()) {
+                Some(v) => crate::assistant_tools::parse_time(v, q, "`to`")?.0.clamp(0, end),
+                None => end,
+            };
+            if to <= from {
+                return Err("`to` must be after `from`".into());
+            }
+            let in_range: Vec<&edith_analysis::ShotSpan> = shots.iter().filter(|x| x.end > from && x.start < to).collect();
+            let truncated = in_range.len() > MAX_SHOTS_DRAWN;
+            let drawn: Vec<Value> = in_range.iter().take(MAX_SHOTS_DRAWN).map(|x| json!([x.start, x.end, x.clip])).collect();
+            let highlight = id_list(o, "highlight", MAX_MARKS)?;
+            let marks: Vec<&Value> = match &highlight {
+                Some(ids) => pick(&all, ids)?,
+                None => all.iter().filter(|f| f["kind"].as_str().is_some_and(|k| PLACED.contains(&k))).take(MAX_MARKS).collect(),
+            };
+            let marks: Vec<Value> = marks
+                .iter()
+                .filter(|f| f["start"].as_i64().is_some_and(|t| t >= from && t < to))
+                .map(|f| json!({"id": f["id"], "severity": f["severity"], "start": f["start"], "title": f["title"]}))
+                .collect();
+            let sections: Vec<Value> = report["targets"]["sections"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter(|x| x["end"].as_i64().unwrap_or(0) > from && x["start"].as_i64().unwrap_or(0) < to)
+                        .take(12)
+                        .map(|x| json!({"name": x["name"], "start": x["start"], "end": x["end"]}))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let marked: Vec<&str> = marks.iter().filter_map(|m| m["id"].as_str()).collect();
+            let v = json!({"view": "timeline", "caption": caption, "sequence": name, "from": from, "to": to, "shots": drawn, "marks": marks, "sections": sections, "truncated": truncated});
+            Ok(ToolOutput::ok(format!(
+                "Shown to the person: a timeline of {} shots from {} to {} with {} finding{} marked{}. They can click it to jump the playhead there. Say what it means; do not read out the shots.",
+                in_range.len().min(MAX_SHOTS_DRAWN),
+                ticks_clock(&json!(from)),
+                ticks_clock(&json!(to)),
+                marked.len(),
+                if marked.len() == 1 { "" } else { "s" },
+                if marked.is_empty() { String::new() } else { format!(" ({})", marked.join(", ")) }
+            ))
+            .with_view(v))
+        }
+        _ => {
+            let id = s.state.active_sequence.ok_or("no sequence is open")?;
+            let Some(filmcraft_project::ItemKind::Sequence(q)) = s.project.item(id).map(|i| &i.kind) else { return Err("no sequence is open".into()) };
+            let stats = edith_analysis::analyze_sequence(&crate::analysis::sequence_input(s, q)).map_err(|e| e.to_string())?;
+            if stats.shots.count == 0 {
+                return Err("the open edit has no shots to count".into());
+            }
+            let mut lower = 0.0;
+            let buckets: Vec<Value> = stats
+                .shots
+                .histogram
+                .iter()
+                .map(|b| {
+                    let (label, up) = match b.below_seconds {
+                        Some(up) => (format!("{}–{} s", lower as u32, up as u32), Some(up)),
+                        None => (format!("{} s +", lower as u32), None),
+                    };
+                    let v = json!({"label": label, "count": b.count, "lowerSeconds": lower, "upperSeconds": up});
+                    if let Some(u) = up {
+                        lower = u;
+                    }
+                    v
+                })
+                .collect();
+            let v = json!({
+                "view": "histogram", "caption": caption, "sequence": name, "shots": stats.shots.count,
+                "buckets": buckets, "meanSeconds": stats.shots.mean_seconds, "medianSeconds": stats.shots.median_seconds,
+                "targetSeconds": report["targets"]["averageShotSeconds"],
+            });
+            Ok(ToolOutput::ok(format!(
+                "Shown to the person: a histogram of the {} shots by length (mean {}, median {}){}. Say what the shape means for the pace.",
+                stats.shots.count,
+                len(stats.shots.mean_seconds),
+                len(stats.shots.median_seconds),
+                num(&report["targets"]["averageShotSeconds"]).map_or(String::new(), |t| format!(", with the plan's target of about {} marked", len(t)))
+            ))
+            .with_view(v))
+        }
+    }
 }

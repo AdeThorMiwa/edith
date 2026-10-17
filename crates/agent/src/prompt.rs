@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "3");
+        assert_eq!(p.version, "4");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();
@@ -151,6 +151,8 @@ mod tests {
         assert!(coach.starts_with(ask.split("This thread is read-only").next().unwrap_or("")), "the shared sections come first and are identical");
         assert!(coach.contains("Coach mode and read-only") && !coach.contains("This thread is read-only"));
         assert!(ask.contains("analysis_get"), "Ask is told it has the measurements too");
+        assert!(ask.contains("`show`") && ask.contains("never type numbers into it"), "both modes know about views");
+        assert!(coach.contains("Show where it happens"));
     }
 
     #[test]

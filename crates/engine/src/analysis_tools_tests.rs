@@ -253,3 +253,146 @@ fn coach_mode_with_nothing_open_asks_without_a_starting_block() {
     let u = model.requests()[0].messages[0].text();
     assert!(!u.contains("[coach]") && u.contains("help"), "{u}");
 }
+
+#[test]
+fn show_hands_the_person_a_view_of_the_real_numbers_and_the_model_only_a_note() {
+    let s = edit_of(&[6.0, 0.8, 6.0]);
+    let tools = crate::assistant_tools::tools();
+    let d = tools.iter().find(|d| d.spec.name == "show").expect("a show tool");
+    assert!(d.read_only);
+    assert_eq!(d.spec.input_schema["properties"]["view"]["enum"], json!(["findings", "timeline", "histogram"]));
+
+    // findings: a card of what the rules found, by id
+    let r = run(&s, "show", json!({"view": "findings", "caption": "What I noticed"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.clone().expect("a view");
+    assert_eq!((v["view"].as_str(), v["caption"].as_str(), v["total"].as_u64()), (Some("findings"), Some("What I noticed"), Some(1)));
+    let row = &v["findings"][0];
+    assert_eq!(
+        (row["kind"].as_str(), row["severity"].as_str(), row["start"].as_i64()),
+        (Some("shortBetweenLong"), Some("look"), Some(6 * filmcraft_time::TICKS_PER_SECOND))
+    );
+    assert!(row["title"].as_str().unwrap().contains("0.8 s"));
+    // what the model reads is a note, not the data
+    assert!(
+        r.content.starts_with("Shown to the person: a card with 1 of 1 findings") && !r.content.contains("startTicks") && !r.content.contains("\"findings\""),
+        "{}",
+        r.content
+    );
+    let id = row["id"].as_str().unwrap().to_string();
+    let by_id = run(&s, "show", json!({"view": "findings", "ids": [id]}));
+    assert_eq!(by_id.view.unwrap()["findings"].as_array().unwrap().len(), 1);
+    // a wrong id says which ids there are
+    let bad = run(&s, "show", json!({"view": "findings", "ids": ["nope@1"]}));
+    assert!(bad.is_error && bad.content.contains("shortBetweenLong@"), "{}", bad.content);
+    // nothing found: no card, and a note to say so
+    let none = run(&edit_of(&[4.0, 5.0, 6.0, 5.0]), "show", json!({"view": "findings"}));
+    assert!(!none.is_error && none.view.is_none() && none.content.contains("no rule fired"), "{}", none.content);
+}
+
+#[test]
+fn the_timeline_view_carries_the_shots_the_marks_and_the_range() {
+    let s = edit_of(&[6.0, 0.8, 6.0, 5.0]);
+    let r = run(&s, "show", json!({"view": "timeline"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.unwrap();
+    assert_eq!(v["shots"].as_array().unwrap().len(), 4);
+    assert_eq!((v["from"].as_i64(), v["truncated"].clone()), (Some(0), json!(false)));
+    let t = filmcraft_time::TICKS_PER_SECOND;
+    assert!(v["to"].as_i64().unwrap() > 17 * t && v["to"].as_i64().unwrap() < 18 * t);
+    let marks = v["marks"].as_array().unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!((marks[0]["severity"].as_str(), marks[0]["start"].as_i64()), (Some("look"), Some(6 * t)));
+    // shots are [start, end, clip] and end to end
+    let shots = v["shots"].as_array().unwrap();
+    assert!(shots.windows(2).all(|w| w[0][1] == w[1][0]) && shots.iter().all(|x| x[2].is_u64()));
+    // a stretch: only the shots that overlap it, and only the marks inside it
+    let part = run(&s, "show", json!({"view": "timeline", "from": 6.5, "to": 12})).view.unwrap();
+    assert_eq!(part["shots"].as_array().unwrap().len(), 2, "the 0.8 s shot ends at 6.8 and the next runs to 12.8");
+    assert!(part["marks"].as_array().unwrap().is_empty(), "the finding is at 6 s, before the stretch");
+    // highlight: named findings only
+    let id = marks[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(run(&s, "show", json!({"view": "timeline", "highlight": [id]})).view.unwrap()["marks"].as_array().unwrap().len(), 1);
+    assert_eq!(run(&s, "show", json!({"view": "timeline", "highlight": []})).view.unwrap()["marks"].as_array().unwrap().len(), 0);
+    // timecodes work too, and a backwards stretch is refused
+    assert!(!run(&s, "show", json!({"view": "timeline", "from": "00:00:02:00", "to": "00:00:09:00"})).is_error);
+    assert!(run(&s, "show", json!({"view": "timeline", "from": 9, "to": 3})).is_error);
+    assert!(run(&s, "show", json!({"view": "timeline", "from": "soon"})).is_error);
+    // no open edit
+    assert!(run(&Session::default(), "show", json!({"view": "timeline"})).is_error);
+}
+
+#[test]
+fn a_very_long_edit_is_cut_to_what_one_view_can_draw() {
+    let s = edit_of(&vec![1.0; 1300]);
+    let v = run(&s, "show", json!({"view": "timeline"})).view.unwrap();
+    assert_eq!(v["shots"].as_array().unwrap().len(), 1200);
+    assert_eq!(v["truncated"], true);
+}
+
+#[test]
+fn the_histogram_view_counts_the_shots_by_length_with_the_plans_target() {
+    let mut s = edit_of(&[3.0, 4.0, 5.0, 6.0, 12.0]);
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 0.5})).unwrap();
+    let r = run(&s, "show", json!({"view": "histogram"}));
+    assert!(!r.is_error, "{}", r.content);
+    let v = r.view.unwrap();
+    let counts: Vec<u64> = v["buckets"].as_array().unwrap().iter().map(|b| b["count"].as_u64().unwrap()).collect();
+    assert_eq!(counts, [0, 0, 1, 3, 1, 0]);
+    assert_eq!((v["buckets"][2]["label"].as_str(), v["buckets"][5]["label"].as_str()), (Some("2–4 s"), Some("16 s +")));
+    assert_eq!(v["targetSeconds"], 7.0);
+    assert!(v["meanSeconds"].as_f64().unwrap() > 5.0 && v["shots"] == 5);
+    assert!(r.content.contains("the plan's target of about 7.0 s"), "{}", r.content);
+    assert!(run(&Session::default(), "show", json!({"view": "histogram"})).is_error);
+}
+
+#[test]
+fn hostile_show_input_is_refused_in_words() {
+    let s = edit_of(&[6.0, 0.8, 6.0]);
+    for odd in [
+        json!(null),
+        json!([]),
+        json!("timeline"),
+        json!(7),
+        json!({}),
+        json!({"view": 7}),
+        json!({"view": "pie"}),
+        json!({"view": "findings", "ids": "x"}),
+        json!({"view": "findings", "ids": [1]}),
+        json!({"view": "timeline", "highlight": {"a": 1}}),
+    ] {
+        let r = run(&s, "show", odd.clone());
+        assert!(r.is_error && r.view.is_none(), "{odd}: {}", r.content);
+    }
+    // too many ids, and absurd times, are refused or clamped, never a panic
+    let many: Vec<String> = (0..100).map(|i| format!("x@{i}")).collect();
+    assert!(run(&s, "show", json!({"view": "findings", "ids": many})).is_error);
+    for t in [json!(1e300), json!(-5), json!(f64::MAX), json!("99:99:99:99"), json!(null)] {
+        let _ = run(&s, "show", json!({"view": "timeline", "from": t.clone(), "to": t}));
+    }
+    // a caption is cleaned and cut
+    let c = run(&s, "show", json!({"view": "findings", "caption": format!("a\u{7}b{}", "x".repeat(500))})).view.unwrap();
+    let cap = c["caption"].as_str().unwrap();
+    assert!(cap.chars().count() <= 120 && !cap.contains('\u{7}'), "{cap}");
+}
+
+#[test]
+fn a_view_reaches_the_conversation_but_never_the_model() {
+    let mut s = edit_of(&[6.0, 0.8, 6.0]);
+    let model = Arc::new(ScriptedModel::new());
+    let (e, r) = tool_reply(&[("v1", "show", json!({"view": "timeline"}))]);
+    model.push_reply(e, r);
+    let (e, r) = text_reply("There it is.");
+    model.push_reply(e, r);
+    s.assistant.use_model(model.clone());
+    let r = s.execute("assistant.send", json!({"text": "show me", "wait": true})).unwrap();
+    assert_eq!(r["finish"]["kind"], "done", "{r}");
+    // what the model got back
+    let Part::ToolResult { content, .. } = &model.requests()[1].messages[2].parts[0] else { panic!() };
+    assert!(content.starts_with("Shown to the person: a timeline of 3 shots") && !content.contains("\"shots\""), "{content}");
+    // what the panel gets: the result event carries the view
+    let v = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap();
+    let ev = v["events"].as_array().unwrap().iter().find(|e| e["type"] == "tool_result").expect("a tool result");
+    assert_eq!(ev["view"]["view"], "timeline");
+    assert_eq!(ev["view"]["shots"].as_array().unwrap().len(), 3);
+}

@@ -189,6 +189,9 @@ pub enum AgentEvent {
         /// How many pictures came with the answer (the pictures themselves are not streamed).
         #[serde(default)]
         pictures: u32,
+        /// A view for the person, shown in the conversation; the model never sees it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<Value>,
     },
     Usage {
         reply: Usage,
@@ -404,6 +407,7 @@ impl Agent<'_> {
                     content: content.clone(),
                     is_error: out.is_error,
                     pictures: out.images.len() as u32,
+                    view: out.view.clone(),
                 });
                 results.push(Part::ToolResult { tool_use_id: id.clone(), content, is_error: out.is_error, images: out.images.clone() });
             }

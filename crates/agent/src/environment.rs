@@ -11,20 +11,29 @@ pub struct ToolOutput {
     pub content: String,
     pub is_error: bool,
     pub images: Vec<edith_llm::Image>,
+    /// A view for the person: shown in the conversation (a timeline, a findings card…), saved with
+    /// it, and never sent to the model, which gets `content` only.
+    pub view: Option<Value>,
 }
 
 impl ToolOutput {
     pub fn ok(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: false, images: Vec::new() }
+        Self { content: content.into(), is_error: false, images: Vec::new(), view: None }
     }
 
     pub fn error(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_error: true, images: Vec::new() }
+        Self { content: content.into(), is_error: true, images: Vec::new(), view: None }
+    }
+
+    /// Words for the model and a view for the person.
+    pub fn with_view(mut self, view: Value) -> Self {
+        self.view = Some(view);
+        self
     }
 
     /// Words and a picture.
     pub fn with_image(content: impl Into<String>, image: edith_llm::Image) -> Self {
-        Self { content: content.into(), is_error: false, images: vec![image] }
+        Self { content: content.into(), is_error: false, images: vec![image], view: None }
     }
 }
 

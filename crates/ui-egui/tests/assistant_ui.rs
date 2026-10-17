@@ -804,3 +804,153 @@ fn the_mode_is_chosen_beside_the_model_and_changes_the_next_message() {
     d.click("assistant.mode.ask");
     d.wait("the setting to change back", |d| d.exec("assistant.settings", json!({}))["settings"]["mode"] == "ask");
 }
+
+/// Words and then a tool call in one reply, as a model writes a sentence and then asks for a view.
+fn says_then_shows(text: &str, id: &str, name: &str, input: Value) -> (Vec<StreamEvent>, Response) {
+    (
+        vec![StreamEvent::Text(text.into())],
+        Response {
+            message: Message {
+                role: Role::Assistant,
+                parts: vec![Part::Text { text: text.into() }, Part::ToolUse { id: id.into(), name: name.into(), input, input_error: None }],
+            },
+            stop_reason: StopReason::ToolUse,
+            usage: Usage { input_tokens: 1_500, output_tokens: 60, ..Default::default() },
+            model: "claude-haiku-5-5".into(),
+        },
+    )
+}
+
+/// An open edit of colour-matte shots of the given lengths (seconds), end to end on V1, with a tone under it.
+fn edit_of(lengths: &[f64]) -> Session {
+    use filmcraft_media::generators::GeneratorSource;
+    use filmcraft_media::{Generator, MediaSource};
+    use filmcraft_project::{ItemKind, Label, MediaClip, MediaRef, SequenceSettings, TrackKind};
+    use filmcraft_time::{FrameRate, Tick, TimeRange};
+    let mut s = Session::default();
+    let rate = FrameRate::FPS_24;
+    let mut p = (*s.project).clone();
+    let seq = p.new_sequence("Coach test", SequenceSettings { width: 160, height: 90, frame_rate: rate, ..Default::default() }, 1, 1, None);
+    let total = rate.tick_of(lengths.iter().map(|l| (l * 24.0).round() as i64).sum());
+    let mut at = Tick::ZERO;
+    let item_of = |p: &mut filmcraft_project::Project, name: &str, g: Generator, dur: Tick| {
+        let src = GeneratorSource::new(g.clone(), 160, 90, rate, dur);
+        let clip = MediaClip {
+            media: MediaRef::Generator(g),
+            info: src.info().clone(),
+            interpret: Default::default(),
+            mark_in: None,
+            mark_out: None,
+            markers: vec![],
+            offline: false,
+            proxy: None,
+            identity: None,
+        };
+        p.add_item(name, Label::Iris, ItemKind::Media(clip), None)
+    };
+    for (i, len) in lengths.iter().enumerate() {
+        let dur = rate.tick_of((*len * 24.0).round() as i64);
+        let item = item_of(&mut p, &format!("shot{i}"), Generator::ColorMatte { color: [0.2, 0.3 + 0.05 * (i % 5) as f32, 0.5, 1.0] }, dur);
+        let v = p.make_track_item(item, TrackKind::Video, at, TimeRange::new(Tick::ZERO, dur), rate).unwrap();
+        p.sequence_mut(seq).unwrap().video_tracks[0].items.push(v);
+        at += dur;
+    }
+    let tone = item_of(&mut p, "tone", Generator::Tone { hz: 440.0, db: -20.0 }, total);
+    let a = p.make_track_item(tone, TrackKind::Audio, Tick::ZERO, TimeRange::new(Tick::ZERO, total), rate).unwrap();
+    p.sequence_mut(seq).unwrap().audio_tracks[0].items.push(a);
+    s.project = Arc::new(p);
+    s.state.active_sequence = Some(seq);
+    s.state.open_sequences = vec![seq];
+    s
+}
+
+fn entry_number(id: &str) -> u32 {
+    id.rsplit('.').next().and_then(|n| n.parse().ok()).unwrap_or(u32::MAX)
+}
+
+fn playhead_seconds(d: &mut Driver) -> f64 {
+    d.app().session.playhead().0 as f64 / filmcraft_time::TICKS_PER_SECOND as f64
+}
+
+#[test]
+fn views_appear_between_the_sentences_and_their_timecodes_move_the_playhead() {
+    let _g = guard();
+    let mut d = Driver::with(edit_of(&[6.0, 0.8, 6.0, 5.0, 7.0]));
+    d.app().session.assistant.use_model(scripted(vec![
+        says_then_shows("One shot stands out.", "v1", "show", json!({"view": "findings", "caption": "What I noticed"})),
+        says_then_shows("Here is where it sits in the edit.", "v2", "show", json!({"view": "timeline"})),
+        says_then_shows("And this is how the shot lengths spread.", "v3", "show", json!({"view": "histogram"})),
+        text_reply("Try giving the short shot two seconds."),
+    ]));
+    d.exec("assistant.settings", json!({"mode": "coach"}));
+    d.open_assistant();
+    // large enough that the whole conversation is on screen (clicks on scrolled-away rows do nothing)
+    d.exec("window.floatPanel", json!({"panel": "Assistant", "rect": [40.0, 40.0, 700.0, 900.0]}));
+    d.frames(6);
+    d.type_into_input("how is the pacing?");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("two seconds")));
+    d.frames(4);
+    // the order in the conversation: your question, what was sent along (Coach mode attaches the numbers),
+    // then words, view, words, view, words, view, words
+    let mut items: Vec<(u32, String)> = d
+        .elements("assistant.")
+        .into_iter()
+        .filter_map(|e| e["id"].as_str().map(str::to_string))
+        .filter(|id| id.starts_with("assistant.entry.") || id.matches('.').count() == 2 && id.starts_with("assistant.view."))
+        .map(|id| (entry_number(&id), id))
+        .collect();
+    items.sort();
+    let order: Vec<&str> = items.iter().map(|(_, id)| if id.contains(".view.") { "view" } else { "words" }).collect();
+    assert_eq!(order, ["words", "words", "words", "view", "words", "view", "words", "view", "words"], "{items:?}");
+    let views: Vec<&String> = items.iter().filter(|(_, id)| id.contains(".view.")).map(|(_, id)| id).collect();
+
+    // findings: the timecode of the finding is a link that moves the playhead
+    let finding = d.elements(&format!("{}.finding.", views[0])).into_iter().next().expect("a finding row");
+    let (id, label) = (finding["id"].as_str().unwrap().to_string(), finding["label"].as_str().unwrap().to_string());
+    assert!(label.contains("0.8 s") && label.contains("0:06"), "{label}");
+    d.click(&id);
+    let p = playhead_seconds(&mut d);
+    assert!((p - 6.0).abs() < 0.1, "the playhead went to the finding: {p}");
+    d.snapshot("assistant-view-findings");
+
+    // timeline: a mark jumps to exactly its place, the strip to where you point
+    d.app().session.set_playhead(filmcraft_time::Tick::ZERO);
+    let mark = d.elements(&format!("{}.mark.", views[1])).into_iter().next().expect("a mark on the timeline");
+    d.click(mark["id"].as_str().unwrap());
+    assert!((playhead_seconds(&mut d) - 6.0).abs() < 0.1);
+    let strip = d.elements(&format!("{}.shot", views[1])).into_iter().find(|e| e["id"].as_str().is_some_and(|i| i.ends_with(".shot"))).unwrap();
+    let r = strip["rect"].as_array().unwrap().iter().filter_map(Value::as_f64).collect::<Vec<_>>();
+    d.ok("ui.click", json!({"x": r[0] + r[2] * 0.9, "y": r[1] + 20.0}));
+    d.frames(3);
+    let late = playhead_seconds(&mut d);
+    assert!(late > 18.0 && late < 26.0, "90% along a 24.9 s edit: {late}");
+    d.snapshot("assistant-view-timeline");
+
+    // histogram: one bar per length band
+    assert_eq!(d.elements(&format!("{}.bucket.", views[2])).len(), 6);
+    d.snapshot("assistant-view-histogram");
+
+    // no hand-written numbers anywhere: the answer text carries none of the views' data
+    let thread = d.exec("assistant.threads", json!({}))["threads"][0]["id"].clone();
+    let events = d.exec("assistant.thread", json!({"thread": thread}));
+    assert_eq!(events["events"].as_array().unwrap().iter().filter(|e| e["type"] == "tool_result" && e["view"].is_object()).count(), 3);
+}
+
+#[test]
+fn a_view_the_tool_refused_is_an_ordinary_tool_card_and_a_damaged_one_draws_as_nothing() {
+    let _g = guard();
+    let mut d = Driver::with(edit_of(&[6.0, 6.0]));
+    d.app()
+        .session
+        .assistant
+        .use_model(scripted(vec![says_then_shows("Let me show you.", "v1", "show", json!({"view": "pie"})), text_reply("I could not draw that one.")]));
+    d.open_assistant();
+    d.type_into_input("show me a pie");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("could not draw")));
+    let entries = d.entries();
+    let tool = entries.iter().find(|(id, _)| id.starts_with("assistant.tool.")).expect("the refused call is a card");
+    assert!(tool.1.contains("there is no view"), "{tool:?}");
+    assert!(d.elements("assistant.view.").is_empty(), "no view was drawn");
+}

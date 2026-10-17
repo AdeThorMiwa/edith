@@ -105,7 +105,7 @@ fn secs(t: Tick) -> f64 {
 }
 
 /// A time argument: seconds as a number or string, or `HH:MM:SS:FF`, `MM:SS:FF`, `SS:FF`.
-fn parse_time(v: &Value, q: &Sequence, what: &str) -> Result<Tick, String> {
+pub(crate) fn parse_time(v: &Value, q: &Sequence, what: &str) -> Result<Tick, String> {
     let seconds = match v {
         Value::Number(n) => n.as_f64().ok_or_else(|| format!("{what} is not a usable number"))?,
         Value::String(s) if s.contains([':', ';']) => {

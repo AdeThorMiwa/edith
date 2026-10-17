@@ -141,6 +141,8 @@ enum Action {
     },
     CancelEdit,
     Copy(String),
+    /// Move the playhead to a place a view pointed at (ticks).
+    Seek(i64),
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -554,6 +556,14 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             });
                         elems.push((format!("assistant.entry.{i}"), h.header_response, text.clone()));
                     }
+                    Entry::Tool { view: Some(view), is_error: false, .. } => {
+                        // a view the assistant placed in its answer: drawn in place, between its sentences
+                        ui.add_space(2.0);
+                        if let Some(at) = super::assistant_views::draw(ui, view, i, &t, &mut elems) {
+                            actions.push(Action::Seek(at));
+                        }
+                        ui.add_space(2.0);
+                    }
                     Entry::Tool { name, input, result, is_error, pictures, .. } => {
                         let color = if *is_error { WARN } else { t.text_faint };
                         let waiting = if result.is_none() {
@@ -866,6 +876,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 ctx.copy_text(text);
                 app.ui.status = tl!("Copied to the clipboard.").to_string();
             }
+            Action::Seek(ticks) => app.session.set_playhead(filmcraft_time::Tick(ticks.max(0))),
             Action::Branch { turn, text } => {
                 let Some(from) = chat.thread else { continue };
                 let mut params = json!({"thread": from, "turn": turn, "context": context_blocks(app, chips)});

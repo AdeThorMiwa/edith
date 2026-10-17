@@ -569,3 +569,36 @@ fn the_user_message_event_names_the_context_that_was_sent_and_saved_threads_drop
     assert_valid(&saved);
     assert_eq!(saved.messages.len(), t.messages.len());
 }
+
+#[test]
+fn a_view_travels_with_the_tool_result_event_and_old_events_without_one_still_load() {
+    let e = AgentEvent::ToolResult {
+        id: "t".into(),
+        name: "show".into(),
+        content: "Shown to the person.".into(),
+        is_error: false,
+        pictures: 0,
+        view: Some(json!({"view": "timeline", "shots": [[0, 5, 1]]})),
+    };
+    let back: AgentEvent = serde_json::from_value(serde_json::to_value(&e).unwrap()).unwrap();
+    assert!(matches!(&back, AgentEvent::ToolResult { view: Some(v), .. } if v["view"] == "timeline"));
+    // an event saved before views existed has no `view`, and one without a view writes none
+    let old = json!({"type": "tool_result", "id": "t", "name": "x", "content": "c", "is_error": false});
+    assert!(matches!(serde_json::from_value::<AgentEvent>(old).unwrap(), AgentEvent::ToolResult { view: None, .. }));
+    let plain = AgentEvent::ToolResult { id: "t".into(), name: "x".into(), content: "c".into(), is_error: false, pictures: 0, view: None };
+    assert!(serde_json::to_value(&plain).unwrap().get("view").is_none());
+}
+
+#[test]
+fn a_tools_view_reaches_the_event_stream_but_not_the_model() {
+    let e = FakeEnvironment::new().tool("show", true, |_| ToolOutput::ok("Shown to the person: a timeline.").with_view(json!({"view": "timeline"})));
+    let m = ScriptedModel::new();
+    push(&m, tool_reply(vec![use_part("t1", "show", json!({}))]));
+    push(&m, text_reply("Done."));
+    let mut t = Thread::new();
+    let (_, events) = run(&agent(&m, &e, |_| {}), &mut t, "go");
+    let view = events.iter().find_map(|ev| if let AgentEvent::ToolResult { view, .. } = ev { view.clone() } else { None });
+    assert_eq!(view, Some(json!({"view": "timeline"})));
+    let sent = serde_json::to_string(&t.messages).unwrap();
+    assert!(sent.contains("Shown to the person") && !sent.contains("\"timeline\""), "{sent}");
+}

@@ -21,6 +21,8 @@ pub enum Entry {
         is_error: bool,
         /// How many pictures came back with the answer.
         pictures: u32,
+        /// A view for the person (a timeline, a findings card…) the assistant placed with `show`.
+        view: Option<Value>,
     },
     /// What was sent along with the message above (`playhead`, `selection`, `frame`, …).
     Attached(Vec<String>),
@@ -91,24 +93,28 @@ impl ChatLog {
                 Some(Entry::Thinking(t)) => t.push_str(&s("text")),
                 _ => self.entries.push(Entry::Thinking(s("text"))),
             },
-            "tool_started" => self.entries.push(Entry::Tool { id: s("id"), name: s("name"), input: String::new(), result: None, is_error: false, pictures: 0 }),
+            "tool_started" => {
+                self.entries.push(Entry::Tool { id: s("id"), name: s("name"), input: String::new(), result: None, is_error: false, pictures: 0, view: None })
+            }
             "tool_call" => {
                 let (id, name, input) = (s("id"), s("name"), input_summary(ev.get("input").unwrap_or(&Value::Null)));
                 match self.tool_mut(&id) {
                     Some(Entry::Tool { input: i, .. }) => *i = input,
-                    _ => self.entries.push(Entry::Tool { id, name, input, result: None, is_error: false, pictures: 0 }),
+                    _ => self.entries.push(Entry::Tool { id, name, input, result: None, is_error: false, pictures: 0, view: None }),
                 }
             }
             "tool_result" => {
                 let (id, name, content, err) = (s("id"), s("name"), s("content"), ev.get("is_error").and_then(Value::as_bool).unwrap_or(false));
                 let pics = ev.get("pictures").and_then(Value::as_u64).unwrap_or(0) as u32;
+                let shown = ev.get("view").filter(|v| v.is_object()).cloned();
                 match self.tool_mut(&id) {
-                    Some(Entry::Tool { result, is_error, pictures, .. }) => {
+                    Some(Entry::Tool { result, is_error, pictures, view, .. }) => {
                         *result = Some(content);
                         *is_error = err;
                         *pictures = pics;
+                        *view = shown;
                     }
-                    _ => self.entries.push(Entry::Tool { id, name, input: String::new(), result: Some(content), is_error: err, pictures: pics }),
+                    _ => self.entries.push(Entry::Tool { id, name, input: String::new(), result: Some(content), is_error: err, pictures: pics, view: shown }),
                 }
             }
             "notice" => self.push_note(&s("text"), false),
