@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 filmcraft-audio-dsp = { workspace = true }
+filmcraft-time = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]

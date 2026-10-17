@@ -6,6 +6,8 @@
 //!   silence share, spectral balance, a rough speech/music/ambience guess and a beat grid.
 //! - [`motion`]: [`MotionPair`] between two pictures (how much changed, how the camera moved, how much
 //!   moves on its own) and a rough camera-move class for a run of them.
+//! - [`sequence`]: [`SequenceStats`] from the layout of the timeline alone (shot lengths, cuts, J and L
+//!   cuts, transitions, narration pace, track occupancy): no decoding.
 //! - [`image`]: [`FrameStats`] for one picture: luma, contrast, saturation, a five-colour palette in
 //!   Lab, colour temperature, sharpness, grain and letterbox/aspect.
 //!
@@ -20,10 +22,12 @@ pub mod audio;
 pub mod color;
 pub mod image;
 pub mod motion;
+pub mod sequence;
 
 pub use audio::{AudioBuffer, AudioKind, AudioStats, analyze_audio};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
 pub use motion::{CameraMove, MotionPair, MotionSummary, analyze_motion, summarize};
+pub use sequence::{SequenceInput, SequenceStats, analyze_sequence};
 
 /// Why a measurement could not be made.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +44,8 @@ pub enum AnalysisError {
     MismatchedFrames,
     /// The time between two pictures is not a number from 0 (exclusive) to 60 seconds.
     BadInterval,
+    /// More clips than [`sequence::MAX_CLIPS`].
+    TooManyClips { clips: usize },
 }
 
 impl std::fmt::Display for AnalysisError {
@@ -48,6 +54,7 @@ impl std::fmt::Display for AnalysisError {
             AnalysisError::Empty => write!(f, "there is nothing to measure"),
             AnalysisError::TooLarge { width, height } => write!(f, "a {width}x{height} picture is larger than can be analysed"),
             AnalysisError::ShortBuffer { need, have } => write!(f, "the picture needs {need} bytes but has {have}"),
+            AnalysisError::TooManyClips { clips } => write!(f, "{clips} clips are more than can be analysed"),
             AnalysisError::MismatchedFrames => write!(f, "the two pictures differ in size"),
             AnalysisError::BadInterval => write!(f, "the time between the two pictures must be more than 0 and at most 60 seconds"),
             AnalysisError::BadAudioFormat { sample_rate, channels } => write!(f, "audio of {channels} channels at {sample_rate} Hz cannot be analysed"),
@@ -63,5 +70,7 @@ pub type Result<T> = std::result::Result<T, AnalysisError>;
 mod audio_tests;
 #[cfg(test)]
 mod motion_tests;
+#[cfg(test)]
+mod sequence_tests;
 #[cfg(test)]
 mod tests;

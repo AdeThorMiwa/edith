@@ -1458,6 +1458,7 @@ name = "edith-analysis"
 version = "0.7.2"
 dependencies = [
  "filmcraft-audio-dsp",
+ "filmcraft-time",
  "serde",
  "serde_json",
 ]
