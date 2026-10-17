@@ -3959,3 +3959,14 @@
 	shots average	los planos duran de media
 	the coach aims at this	el coach apunta a esta
 	“{sequence}” against “{reference}”: {close} close, {differ} differ	«{sequence}» frente a «{reference}»: {close} parecidos, {differ} distintos
+	The Program frame at {time}. Click to go there.	El fotograma del Programa en {time}. Haz clic para ir allí.
+	The Program frame	El fotograma del Programa
+	Your frame	Tu fotograma
+	cool ({k} K)	fría ({k} K)
+	grain	grano
+	left: your frame; right: the look	izquierda: tu fotograma; derecha: el aspecto
+	neutral ({k} K)	neutra ({k} K)
+	picture not available	imagen no disponible
+	picture shape	forma de la imagen
+	warm ({k} K)	cálida ({k} K)
+	brightness {b} · contrast {c} · saturation {s} · {w}	brillo {b} · contraste {c} · saturación {s} · {w}

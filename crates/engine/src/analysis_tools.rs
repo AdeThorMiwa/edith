@@ -62,13 +62,16 @@ pub(crate) fn tools() -> Vec<ToolDef> {
         ),
         def(
             "show",
-            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence), compare (your numbers beside a reference's, row by row), rhythm (your cutting against the planned intensity and a reference's rhythm). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
+            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence), compare (your numbers beside a reference's, row by row), rhythm (your cutting against the planned intensity and a reference's rhythm), look (a look's pictures with its colours and numbers, and the Program frame beside it with what differs). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
             json!({
-                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm"], "description": "Which view."},
+                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look"], "description": "Which view."},
                 "reference": {"type": "string", "description": "compare and rhythm views: a reference id from reference_list. Default: the adopted reference."},
                 "rows": {"type": "array", "items": {"type": "string"}, "description": "compare view: which rows, by name as reference_compare lists them (meanShot, cutsPerMinute, loudness…). Default: what differs most."},
                 "metric": {"type": "string", "enum": ["narrationPace", "averageShot", "loudness", "cutsPerMinute"], "description": "gauge view: which number to set against its target."},
                 "of": {"type": "string", "enum": ["screenTime", "narration", "silence"], "description": "pie view: what to divide up. screenTime: how much of the running time is in short, medium and long shots; narration: narrated or not; silence: sound or silence (needs the mix measured)."},
+                "look": {"type": "string", "description": "look view: a look id from look_list. Default: the only look."},
+                "stills": {"type": "array", "items": {"type": "string"}, "description": "look view: which pictures, by id from look_get (at most 8). Default: the first eight."},
+                "time": {"type": "string", "description": "look view: the Program moment to put beside the look (seconds or timecode). Default: the playhead."},
                 "item": {"type": "integer", "description": "palette view: a media item that has been measured."},
                 "ids": {"type": "array", "items": {"type": "string"}, "description": "findings view: which findings, by id from coach_findings. Default: the first eight."},
                 "highlight": {"type": "array", "items": {"type": "string"}, "description": "timeline view: finding ids to mark. Default: every finding that has a place on the timeline."},
@@ -576,7 +579,7 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
 // ---------------------------------------------------------------------------- views
 
 /// The views `show` can draw.
-const VIEWS: [&str; 9] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm"];
+const VIEWS: [&str; 10] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look"];
 /// Shots drawn in one timeline view.
 const MAX_SHOTS_DRAWN: usize = 1200;
 /// Findings marked on one timeline view.
@@ -629,6 +632,9 @@ fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
     let view = o.get("view").and_then(Value::as_str).ok_or_else(|| format!("`view` is required: one of {}", VIEWS.join(", ")))?;
     if !VIEWS.contains(&view) {
         return Err(format!("there is no view {:?}; use one of {}", view.chars().take(30).collect::<String>(), VIEWS.join(", ")));
+    }
+    if view == "look" {
+        return crate::look::view(s, o, caption_of(o));
     }
     let report = crate::analysis::coach_report(s, &json!({})).map_err(|e| e.to_string())?;
     let all: Vec<Value> = report["findings"].as_array().cloned().unwrap_or_default();

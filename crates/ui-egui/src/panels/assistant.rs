@@ -563,7 +563,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     Entry::Tool { view: Some(view), is_error: false, .. } => {
                         // a view the assistant placed in its answer: drawn in place, between its sentences
                         ui.add_space(2.0);
-                        if let Some(at) = super::assistant_views::draw(ui, view, i, &t, &mut elems) {
+                        let ctx = ui.ctx().clone();
+                        let mut pics = |p: super::assistant_views::Pic<'_>| match p {
+                            super::assistant_views::Pic::Still(look, still) => super::look_pictures::still(app, &ctx, look, still),
+                            super::assistant_views::Pic::Inline(b64) => super::look_pictures::inline(&ctx, b64),
+                        };
+                        if let Some(at) = super::assistant_views::draw(ui, view, i, &t, &mut elems, &mut pics) {
                             actions.push(Action::Seek(at));
                         }
                         ui.add_space(2.0);

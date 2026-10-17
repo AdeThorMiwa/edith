@@ -43,6 +43,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::analysis_tools::tools());
     // references (fork; roadmap F12.5)
     all.extend(crate::reference::tools());
+    // looks (fork; roadmap F12.7b)
+    all.extend(crate::look::tools());
     all
 }
 

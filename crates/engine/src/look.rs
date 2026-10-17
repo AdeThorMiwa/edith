@@ -203,13 +203,18 @@ fn write<T>(s: &Session, f: impl FnOnce(&mut Library) -> (T, bool)) -> T {
 
 /// A picture of at most [`STILL_SIDE`] on its long side, by averaging blocks of pixels.
 fn shrink(w: u32, h: u32, rgba: &[u8]) -> std::result::Result<(u32, u32, Vec<u8>), String> {
+    shrink_to(w, h, rgba, STILL_SIDE)
+}
+
+/// [`shrink`] to `side` on the long side.
+fn shrink_to(w: u32, h: u32, rgba: &[u8], side_max: u32) -> std::result::Result<(u32, u32, Vec<u8>), String> {
     let (wu, hu) = (w as usize, h as usize);
     let need = wu.checked_mul(hu).and_then(|n| n.checked_mul(4)).ok_or("the picture is too large")?;
     if w == 0 || h == 0 || rgba.len() < need {
         return Err("the picture has no pixels".into());
     }
     let side = wu.max(hu);
-    let f = side.div_ceil(STILL_SIDE as usize).max(1);
+    let f = side.div_ceil(side_max.max(1) as usize).max(1);
     let (ow, oh) = (wu.div_ceil(f), hu.div_ceil(f));
     let mut out = Vec::with_capacity(ow * oh * 4);
     for oy in 0..oh {
@@ -635,5 +640,355 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("look.picture", "Look Picture", r#"{"look":str,"still":str}"#, picture_command),
         spec("look.compare", "Compare With Look", r#"{"look":str,"time":ticks?|"frame":n?|"seconds":n?|"timecode":str?}"#, compare_command),
         spec("look.match", "Match to Look", r#"{"look":str,"still":str?,"clip":id?,"faceDetection":bool=true}"#, match_command),
+    ]
+}
+
+// ---------------------------------------------------------------------------- the assistant
+
+use crate::assistant_tools::ToolDef;
+use edith_ai::ToolOutput;
+
+/// Pictures `look_see` sends in one answer.
+const MAX_SEEN: usize = 6;
+/// Pictures a `look` view draws.
+const MAX_DRAWN: usize = 8;
+/// Rows a `look` view's comparison shows.
+const MAX_VIEW_ROWS: usize = 6;
+/// The long side of the Program frame kept inside a `look` view.
+const VIEW_SIDE: u32 = 256;
+
+fn hex(rgb: [f32; 3]) -> String {
+    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", b(rgb[0]), b(rgb[1]), b(rgb[2]))
+}
+
+fn percent(v: f32) -> String {
+    format!("{:.0}%", f64::from(v) * 100.0)
+}
+
+fn warmth_word(kelvin: Option<f32>) -> String {
+    match kelvin {
+        Some(k) if k < 4500.0 => format!("warm ({k:.0} K)"),
+        Some(k) if k > 6500.0 => format!("cool ({k:.0} K)"),
+        Some(k) => format!("neutral ({k:.0} K)"),
+        None => "no colour cast".into(),
+    }
+}
+
+fn picture_line(st: &Still) -> String {
+    let f = &st.stats;
+    format!(
+        "- {}{}: from {}{}; brightness {}, contrast {}, saturation {}, {}, grain {:.3}; palette {}; rights note: {}",
+        st.id,
+        if st.caption.is_empty() { String::new() } else { format!(" “{}”", st.caption) },
+        st.source,
+        st.time_seconds.map_or(String::new(), |t| format!(" at {}", clock(t))),
+        percent(f.luma_mean),
+        percent(f.contrast),
+        percent(f.saturation),
+        warmth_word(f.colour_temperature),
+        f.grain,
+        f.palette.iter().map(|c| format!("{} {}", hex(c.rgb), percent(c.share))).collect::<Vec<_>>().join(" "),
+        st.rights
+    )
+}
+
+fn clock(seconds: f64) -> String {
+    let n = seconds.max(0.0) as u64;
+    if n >= 3600 { format!("{}:{:02}:{:02}", n / 3600, (n / 60) % 60, n % 60) } else { format!("{}:{:02}", n / 60, n % 60) }
+}
+
+fn look_text(l: &Look) -> String {
+    let mut out = format!("Look {} “{}”: {} picture{}.\n", l.id, l.name, l.stills.len(), if l.stills.len() == 1 { "" } else { "s" });
+    for (what, v) in [("Notes", &l.notes), ("Picture shape wanted", &l.aspect), ("Grain wanted", &l.grain), ("LUT", &l.lut)] {
+        if !v.is_empty() {
+            out.push_str(&format!("{what}: {v}\n"));
+        }
+    }
+    if let Ok(fp) = picture_fingerprint(&l.name, l.stills.iter().map(|x| x.stats.clone()).collect())
+        && let Some(p) = fp.picture.as_ref().filter(|_| !l.stills.is_empty())
+    {
+        out.push_str(&format!(
+            "On average: brightness {}, contrast {}, saturation {}, {}, grain {:.3}, picture shape {:.2}:1; recurring colours {}.\n",
+            percent(p.luma_mean),
+            percent(p.contrast),
+            percent(p.saturation),
+            warmth_word(p.colour_temperature),
+            p.grain,
+            p.active_aspect,
+            p.palette.iter().map(|c| format!("{} {}", hex(c.rgb), percent(c.share))).collect::<Vec<_>>().join(" ")
+        ));
+        out.push_str("(Measured on pictures kept at most 640 px wide, so grain reads lower than in the original.)\n");
+    }
+    for st in &l.stills {
+        out.push_str(&picture_line(st));
+        out.push('\n');
+    }
+    out
+}
+
+fn input_object(p: &Value) -> Value {
+    if p.is_object() { p.clone() } else { json!({}) }
+}
+
+fn pick_look(s: &Session, p: &Value, tool: &str) -> std::result::Result<Look, String> {
+    let id = str_p(p, "id").or_else(|| str_p(p, "look")).filter(|i| id_ok(i));
+    match id {
+        Some(id) => find(s, id).ok_or_else(|| format!("there is no look {id:?}; look_list shows what there is")),
+        None => {
+            let all = read_only(s, |lib| lib.looks.clone());
+            match all.as_slice() {
+                [only] => Ok(only.clone()),
+                [] => Err("there are no looks yet. The person makes one in the Look Bible panel from pictures they have the right to use.".into()),
+                _ => Err(format!("{tool} needs `id`: one of the looks look_list shows")),
+            }
+        }
+    }
+}
+
+fn look_list_tool(s: &Session, _p: &Value) -> ToolOutput {
+    let all = read_only(s, |lib| lib.looks.clone());
+    if all.is_empty() {
+        return ToolOutput::ok(
+            "There are no looks yet. A look is a small board of pictures the person keeps to say how a film should feel (each with a note of why it may be used), with its numbers measured.",
+        );
+    }
+    let mut out = String::new();
+    for l in &all {
+        out.push_str(&format!("- {} “{}”: {} picture{}", l.id, l.name, l.stills.len(), if l.stills.len() == 1 { "" } else { "s" }));
+        for (what, v) in [("aspect", &l.aspect), ("grain", &l.grain), ("LUT", &l.lut)] {
+            if !v.is_empty() {
+                out.push_str(&format!("; {what}: {v}"));
+            }
+        }
+        if !l.notes.is_empty() {
+            out.push_str(&format!("; notes: {}", l.notes.lines().next().unwrap_or("")));
+        }
+        out.push('\n');
+    }
+    ToolOutput::ok(out)
+}
+
+fn look_get_tool(s: &Session, p: &Value) -> ToolOutput {
+    match pick_look(s, &input_object(p), "look_get") {
+        Ok(l) => ToolOutput::ok(look_text(&l)),
+        Err(e) => ToolOutput::error(e),
+    }
+}
+
+fn look_see_tool(s: &Session, p: &Value) -> ToolOutput {
+    let p = input_object(p);
+    let l = match pick_look(s, &p, "look_see") {
+        Ok(l) => l,
+        Err(e) => return ToolOutput::error(e),
+    };
+    if l.stills.is_empty() {
+        return ToolOutput::error("that look has no pictures yet");
+    }
+    let chosen: Vec<&Still> = match p.get("still").filter(|v| !v.is_null()) {
+        Some(v) => match v.as_str().and_then(|sid| l.stills.iter().find(|x| x.id == sid)) {
+            Some(st) => vec![st],
+            None => {
+                return ToolOutput::error(format!(
+                    "there is no such picture; the look's pictures are {}",
+                    l.stills.iter().map(|x| x.id.as_str()).collect::<Vec<_>>().join(", ")
+                ));
+            }
+        },
+        // up to six, spread over the look when it has more
+        None => {
+            let n = l.stills.len();
+            let take = n.min(MAX_SEEN);
+            (0..take).filter_map(|i| l.stills.get(i * n / take)).collect()
+        }
+    };
+    let mut images = Vec::new();
+    let mut lines = Vec::new();
+    for st in &chosen {
+        let Some(bytes) = base64_decode(&st.jpeg) else { continue };
+        images.push(edith_ai::Image::from_bytes("image/jpeg", &bytes));
+        lines.push(format!(
+            "picture {} of {}: {}{}",
+            images.len(),
+            chosen.len(),
+            st.id,
+            if st.caption.is_empty() { String::new() } else { format!(" “{}”", st.caption) }
+        ));
+    }
+    if images.is_empty() {
+        return ToolOutput::error("those pictures are damaged");
+    }
+    let mut out = ToolOutput::ok(format!("The look “{}”, in order: {}. The pictures follow.", l.name, lines.join("; ")));
+    out.images = images;
+    out
+}
+
+fn compare_text(c: &Value) -> String {
+    let mut out = format!(
+        "The Program frame at {} against the look “{}”: {} of the picture rows are close, {} differ.\n",
+        clock(c["time"].as_f64().unwrap_or(0.0)),
+        c["look"]["name"].as_str().unwrap_or(""),
+        c["close"].as_u64().unwrap_or(0),
+        c["differ"].as_u64().unwrap_or(0)
+    );
+    for r in c["rows"].as_array().into_iter().flatten() {
+        out.push_str(&format!("- [{}] {}\n", r["verdict"].as_str().unwrap_or(""), r["words"].as_str().unwrap_or("")));
+    }
+    for (what, k) in [("picture shape wanted", "aspect"), ("grain wanted", "grain"), ("LUT", "lut")] {
+        if let Some(v) = c["notes"][k].as_str().filter(|v| !v.is_empty()) {
+            out.push_str(&format!("The look's note on {what}: {v}\n"));
+        }
+    }
+    out
+}
+
+fn look_compare_tool(s: &Session, p: &Value) -> ToolOutput {
+    let p = input_object(p);
+    let l = match pick_look(s, &p, "look_compare") {
+        Ok(l) => l,
+        Err(e) => return ToolOutput::error(e),
+    };
+    let Some(q) = s.active_sequence() else { return ToolOutput::error("no sequence is open") };
+    let t = match p.get("time").filter(|v| !v.is_null()).map(|v| crate::assistant_tools::parse_time(v, q, "time")).transpose() {
+        Ok(v) => v.unwrap_or_else(|| s.playhead()),
+        Err(e) => return ToolOutput::error(e),
+    };
+    match compare(s, &l, t, "look_compare") {
+        Ok(c) => ToolOutput::ok(compare_text(&c)),
+        Err(e) => ToolOutput::error(e.to_string()),
+    }
+}
+
+/// The `look` view of `show`: the look's pictures, its colours and numbers, and, when an edit is open,
+/// the Program frame beside it with what differs. The pictures are drawn from the library by id; the
+/// Program frame is kept small inside the view, since it changes as the edit does.
+pub(crate) fn view(s: &Session, o: &serde_json::Map<String, Value>, caption: Option<String>) -> std::result::Result<ToolOutput, String> {
+    let params = Value::Object(o.clone());
+    let l = pick_look(s, &json!({"id": o.get("look").cloned().unwrap_or(Value::Null)}), "show")?;
+    if l.stills.is_empty() {
+        return Err("that look has no pictures to show yet".into());
+    }
+    let wanted: Option<Vec<String>> = match o.get("stills").filter(|v| !v.is_null()) {
+        Some(v) => Some(
+            v.as_array()
+                .ok_or("`stills` must be a list of picture ids")?
+                .iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or("`stills` must be a list of picture ids (text)"))
+                .collect::<std::result::Result<_, _>>()?,
+        ),
+        None => None,
+    };
+    let chosen: Vec<&Still> = match &wanted {
+        Some(ids) => ids
+            .iter()
+            .take(MAX_DRAWN)
+            .map(|id| {
+                l.stills.iter().find(|x| &x.id == id).ok_or_else(|| {
+                    format!(
+                        "there is no picture {id:?} in that look; its pictures are {}",
+                        l.stills.iter().map(|x| x.id.as_str()).collect::<Vec<_>>().join(", ")
+                    )
+                })
+            })
+            .collect::<std::result::Result<_, _>>()?,
+        None => l.stills.iter().take(MAX_DRAWN).collect(),
+    };
+    let measured = picture_fingerprint(&l.name, l.stills.iter().map(|x| x.stats.clone()).collect()).ok().and_then(|f| f.picture);
+    // the Program frame, if there is an edit to look at (a look is still worth showing without one)
+    let yours = if s.active_sequence().is_some() {
+        let t = match params.get("time").filter(|v| !v.is_null()) {
+            Some(v) => s.active_sequence().and_then(|q| crate::assistant_tools::parse_time(v, q, "time").ok()).unwrap_or_else(|| s.playhead()),
+            None => s.playhead(),
+        };
+        match compare(s, &l, t, "show") {
+            Ok(c) => {
+                let jpeg = program_rgba(s, t)
+                    .and_then(|(w, h, rgba)| shrink_to(w, h, &rgba, VIEW_SIDE))
+                    .and_then(|(w, h, rgba)| encode_jpeg(w, h, &rgba))
+                    .map(|b| base64_encode(&b))
+                    .ok();
+                let mut rows: Vec<Value> = c["rows"].as_array().cloned().unwrap_or_default();
+                rows.sort_by_key(|r| r["verdict"] == "close");
+                rows.truncate(MAX_VIEW_ROWS);
+                Some(
+                    json!({"time": Tick::from_seconds_f64(c["time"].as_f64().unwrap_or(0.0)).0, "jpegBase64": jpeg, "rows": rows, "close": c["close"], "differ": c["differ"], "text": compare_text(&c)}),
+                )
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let v = json!({
+        "view": "look", "caption": caption,
+        "look": {"id": l.id, "name": l.name, "notes": l.notes, "aspect": l.aspect, "grain": l.grain, "lut": l.lut, "count": l.stills.len()},
+        "pictures": chosen.iter().map(|x| json!({"id": x.id, "caption": x.caption, "source": x.source})).collect::<Vec<_>>(),
+        "palette": measured.as_ref().map(|m| m.palette.iter().map(|c| json!({"rgb": c.rgb, "share": c.share})).collect::<Vec<_>>()).unwrap_or_default(),
+        "measured": measured.as_ref().map(|m| json!({"brightness": m.luma_mean, "contrast": m.contrast, "saturation": m.saturation, "warmthKelvin": m.colour_temperature, "grain": m.grain, "aspect": m.active_aspect})),
+        "yours": yours,
+    });
+    let compared = yours_summary(&v);
+    Ok(ToolOutput::ok(format!(
+        "Shown to the person: {} of the {} picture{} of the look “{}”, its recurring colours and numbers{}. Say what the look is about and what it asks of the edit; do not read the numbers out.{}",
+        chosen.len(),
+        l.stills.len(),
+        if l.stills.len() == 1 { "" } else { "s" },
+        l.name,
+        if v["yours"].is_null() { String::new() } else { ", and the Program frame beside it with what differs".to_string() },
+        compared
+    ))
+    .with_view(v))
+}
+
+fn yours_summary(v: &Value) -> String {
+    match v["yours"]["text"].as_str() {
+        Some(t) => format!("\nWhat differs, from the measurements:\n{t}"),
+        None => String::new(),
+    }
+}
+
+pub(crate) fn tools() -> Vec<ToolDef> {
+    use crate::assistant_tools::def;
+    let id = json!({"id": {"type": "string", "description": "A look id from look_list, such as l1. Default: the only look, if there is just one."}});
+    vec![
+        def(
+            "look_list",
+            "The looks the person keeps: boards of small pictures that say how a film should feel (each picture with a note of why it may be used), with what they want written down (picture shape, grain, LUT). Empty if there are none.",
+            json!({}),
+            look_list_tool,
+        ),
+        def(
+            "look_get",
+            "One look in words and numbers: the person's notes, the picture shape, grain and LUT they want, the average brightness, contrast, saturation, colour warmth and recurring colours of its pictures, and each picture's own numbers, caption and where it came from. To actually see the pictures use look_see.",
+            id.clone(),
+            look_get_tool,
+        ),
+        def(
+            "look_see",
+            "The pictures of a look, so you can see them: up to six, spread over the look, or one with still. Costs more than text. Look at them before you judge a frame against the look, and describe what you see (light, colour, framing, mood), not only the numbers. Not available to models that cannot see pictures.",
+            {
+                let mut p = id.clone();
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("still".into(), json!({"type": "string", "description": "One picture's id from look_get. Default: up to six pictures."}));
+                }
+                p
+            },
+            look_see_tool,
+        ),
+        def(
+            "look_compare",
+            "The Program frame at one moment against a look, row by row with a verdict and a sentence each (brightness, contrast, saturation, colour warmth, grain, picture shape), plus the look's notes on grain, shape and LUT. Combine it with frame_view and look_see to describe how the shot differs from the look, and say what would bring it closer; the person applies a match with Match to Look.",
+            {
+                let mut p = id;
+                if let Some(o) = p.as_object_mut() {
+                    o.insert(
+                        "time".into(),
+                        json!({"type": "string", "description": "The moment: seconds (12.5) or timecode in the sequence's rate. Default: the playhead."}),
+                    );
+                }
+                p
+            },
+            look_compare_tool,
+        ),
     ]
 }

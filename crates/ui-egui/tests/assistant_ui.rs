@@ -1115,3 +1115,56 @@ fn the_compare_and_rhythm_views_set_your_edit_beside_a_reference() {
     assert!(ids.iter().any(|(i, _)| i.ends_with(".rhythm")), "{ids:?}");
     d.snapshot("assistant-view-compare-rhythm");
 }
+
+fn look_png(dir: &std::path::Path, name: &str, rgb: [u8; 3]) -> String {
+    let path = dir.join(name);
+    image::RgbaImage::from_fn(320, 180, |_, _| image::Rgba([rgb[0], rgb[1], rgb[2], 255])).save(&path).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn the_look_view_shows_the_looks_pictures_beside_your_frame_and_the_frame_jumps_the_playhead() {
+    let _g = guard();
+    let mut session = measured_edit();
+    let dir = std::env::temp_dir().join(format!("edith-ui-look-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let look = session.execute("look.create", json!({"name": "Cold harbour", "notes": "grey light, wet stone", "aspect": "2.39:1"})).unwrap()["look"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (name, rgb) in [("a.png", [30, 70, 90]), ("b.png", [90, 110, 120])] {
+        session.execute("look.addStill", json!({"look": look, "path": look_png(&dir, name, rgb), "rights": "made for this test"})).unwrap();
+    }
+    session.set_playhead(filmcraft_time::Tick(3 * filmcraft_time::TICKS_PER_SECOND));
+    let mut d = Driver::with(session);
+    coach_asks(
+        &mut d,
+        vec![
+            says_then_shows("Here is the look next to your frame.", "l1", "show", json!({"view": "look", "look": look, "caption": "The look you keep"})),
+            text_reply("Your frame is warmer and brighter than the look."),
+        ],
+        "warmer and brighter",
+    );
+    let ids: Vec<(String, String)> = d
+        .elements("assistant.view.")
+        .into_iter()
+        .map(|e| (e["id"].as_str().unwrap_or("").to_string(), e["label"].as_str().unwrap_or("").to_string()))
+        .collect();
+    assert_eq!(ids.iter().filter(|(i, _)| i.contains(".still.")).count(), 2, "{ids:?}");
+    assert!(ids.iter().any(|(i, _)| i.ends_with(".yours")), "{ids:?}");
+    assert!(ids.iter().any(|(i, _)| i.contains(".row.brightness")), "{ids:?}");
+    assert!(ids.iter().any(|(i, _)| i.contains(".swatch.0")), "the look's colours: {ids:?}");
+    d.snapshot("assistant-view-look");
+    // the frame is where the playhead was when it was shown: clicking it comes back there
+    d.exec("playhead.set", json!({"seconds": 0.0}));
+    assert!(playhead_seconds(&mut d) < 0.1);
+    let yours = ids.iter().find(|(i, _)| i.ends_with(".yours")).map(|(i, _)| i.clone()).unwrap();
+    d.click(&yours);
+    assert!((playhead_seconds(&mut d) - 3.0).abs() < 0.1, "{}", playhead_seconds(&mut d));
+    let events = d.exec("events.list", json!({}));
+    assert_eq!(events["counts"]["error"], json!(0), "{events}");
+    // a look removed afterwards leaves the view standing, with the pictures marked unavailable
+    d.exec("look.remove", json!({"id": look}));
+    d.frames(6);
+    assert!(d.elements("assistant.view.").iter().any(|e| e["id"].as_str().is_some_and(|i| i.ends_with(".yours"))));
+}

@@ -901,7 +901,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let defs = assistant_tools::tools();
     let env = Arc::new(ChannelEnvironment {
-        specs: defs.iter().filter(|d| can_see || d.spec.name != "frame_view").map(|d| (d.spec.clone(), d.read_only)).collect(),
+        specs: defs.iter().filter(|d| can_see || !matches!(d.spec.name.as_str(), "frame_view" | "look_see")).map(|d| (d.spec.clone(), d.read_only)).collect(),
         tx: Mutex::new(s.assistant.tool_tx.clone()),
     });
     let mut assistant = Assistant::new(model, env, &settings, info.as_ref(), profile);

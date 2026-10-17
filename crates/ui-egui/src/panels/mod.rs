@@ -133,6 +133,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
     }
 }
 
+pub mod look_pictures;
 pub mod references;
 pub mod source_drag;
 pub mod source_range;

@@ -3937,3 +3937,14 @@
 	shots average	镜头平均
 	the coach aims at this	教练以此为目标
 	“{sequence}” against “{reference}”: {close} close, {differ} differ	“{sequence}”对比“{reference}”：{close} 项接近，{differ} 项不同
+	The Program frame at {time}. Click to go there.	{time} 处的节目画面。点击跳转到那里。
+	The Program frame	节目画面
+	Your frame	你的画面
+	cool ({k} K)	偏冷 ({k} K)
+	grain	颗粒
+	left: your frame; right: the look	左：你的画面；右：风格
+	neutral ({k} K)	中性 ({k} K)
+	picture not available	图片不可用
+	picture shape	画面比例
+	warm ({k} K)	偏暖 ({k} K)
+	brightness {b} · contrast {c} · saturation {s} · {w}	亮度 {b} · 对比度 {c} · 饱和度 {s} · {w}

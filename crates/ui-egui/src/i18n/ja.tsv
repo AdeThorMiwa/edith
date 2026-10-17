@@ -3961,3 +3961,14 @@
 	shots average	ショットの平均
 	the coach aims at this	コーチはこれを目標にしています
 	“{sequence}” against “{reference}”: {close} close, {differ} differ	「{sequence}」と「{reference}」：{close}件が近く、{differ}件が異なる
+	The Program frame at {time}. Click to go there.	{time} のプログラムフレーム。クリックでそこへ移動します。
+	The Program frame	プログラムフレーム
+	Your frame	あなたのフレーム
+	cool ({k} K)	寒色 ({k} K)
+	grain	グレイン
+	left: your frame; right: the look	左：あなたのフレーム、右：ルック
+	neutral ({k} K)	中間 ({k} K)
+	picture not available	画像を表示できません
+	picture shape	画面の形
+	warm ({k} K)	暖色 ({k} K)
+	brightness {b} · contrast {c} · saturation {s} · {w}	明るさ {b} · コントラスト {c} · 彩度 {s} · {w}

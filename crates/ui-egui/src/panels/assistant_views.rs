@@ -15,6 +15,8 @@
 //! - **compare**: your numbers beside a reference film's, one row each, with a verdict.
 //! - **rhythm**: how fast the edit cuts along its length, beside the plan's intended intensity and a
 //!   reference's rhythm (cutting is a rough stand-in for intensity).
+//! - **look**: a look's pictures (drawn from the library by id), its colours and numbers, and the Program
+//!   frame beside it with what differs; click the frame to jump the playhead to it.
 //!
 //! Everything in a snapshot is untrusted (a saved thread can be edited by hand): missing or odd
 //! numbers draw as nothing rather than failing, and the number of things drawn is capped.
@@ -40,6 +42,15 @@ const PROBLEM: Color32 = Color32::from_rgb(0xe5, 0x64, 0x5a);
 
 pub type Elems = Vec<(String, egui::Response, String)>;
 
+/// A picture a view wants drawn: one of a look's kept pictures by ids, or one carried in the view.
+pub enum Pic<'a> {
+    Still(&'a str, &'a str),
+    Inline(&'a str),
+}
+
+/// Gives the texture of a picture, or nothing when there is none.
+pub type Pics<'a> = &'a mut dyn FnMut(Pic<'_>) -> Option<(egui::TextureId, egui::Vec2)>;
+
 fn severity_color(v: &Value) -> Color32 {
     if v.as_str() == Some("problem") { PROBLEM } else { LOOK }
 }
@@ -57,7 +68,7 @@ fn seconds_text(s: f64) -> String {
 }
 
 /// Draws `view` and returns a place in the timeline (ticks) if the person clicked one.
-pub fn draw(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) -> Option<i64> {
+pub fn draw(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems, pics: Pics<'_>) -> Option<i64> {
     let mut seek = None;
     let frame = egui::Frame::new().fill(t.field_bg).corner_radius(6.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -75,6 +86,7 @@ pub fn draw(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) 
             Some("pie") => pie(ui, view, n, t, elems),
             Some("compare") => compare(ui, view, n, t, elems),
             Some("rhythm") => rhythm(ui, view, n, t, elems),
+            Some("look") => seek = look(ui, view, n, t, elems, pics),
             _ => {
                 ui.label(RichText::new(tl!("This view cannot be shown.")).size(11.5).color(t.text_faint));
             }
@@ -595,6 +607,105 @@ fn rhythm(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
             ui.label(RichText::new(tlf!("┄ rhythm of “{name}”", name = name)).size(10.5).color(t.text_dim));
         }
     });
+}
+
+/// Pictures drawn in one look view.
+const MAX_PICTURES: usize = 8;
+/// The height of a picture in a look view.
+const PICTURE_H: f32 = 84.0;
+
+fn picture(ui: &mut Ui, tex: Option<(egui::TextureId, egui::Vec2)>, t: &Tokens, tip: &str) -> egui::Response {
+    match tex {
+        Some((id, size)) => {
+            let w = (PICTURE_H * size.x / size.y.max(1.0)).clamp(24.0, 170.0);
+            ui.add(egui::Image::new(egui::load::SizedTexture::new(id, vec2(w, PICTURE_H))).corner_radius(3.0).sense(Sense::click())).on_hover_text(tip)
+        }
+        None => {
+            let (rect, r) = ui.allocate_exact_size(vec2(PICTURE_H * 16.0 / 9.0, PICTURE_H), Sense::hover());
+            ui.painter().rect_filled(rect, 3.0, t.field_border.gamma_multiply(0.5));
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, tl!("picture not available"), Tokens::ui(10.5), t.text_faint);
+            r.on_hover_text(tip)
+        }
+    }
+}
+
+fn warmth_text(kelvin: Option<f64>) -> String {
+    match kelvin {
+        Some(k) if k < 4500.0 => tlf!("warm ({k} K)", k = format!("{k:.0}")),
+        Some(k) if k > 6500.0 => tlf!("cool ({k} K)", k = format!("{k:.0}")),
+        Some(k) => tlf!("neutral ({k} K)", k = format!("{k:.0}")),
+        None => String::new(),
+    }
+}
+
+fn look(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems, pics: Pics<'_>) -> Option<i64> {
+    let mut seek = None;
+    let (name, id) = (text(&view["look"]["name"]), text(&view["look"]["id"]));
+    ui.label(RichText::new(&name).size(12.5).strong().color(t.text));
+    let notes = text(&view["look"]["notes"]);
+    if !notes.is_empty() {
+        ui.add(egui::Label::new(RichText::new(notes).size(11.0).color(t.text_dim)).wrap());
+    }
+    let wanted: Vec<String> =
+        [(tl!("picture shape"), text(&view["look"]["aspect"])), (tl!("grain"), text(&view["look"]["grain"])), (tl!("LUT"), text(&view["look"]["lut"]))]
+            .into_iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(k, v)| format!("{k}: {v}"))
+            .collect();
+    if !wanted.is_empty() {
+        ui.label(RichText::new(wanted.join(" · ")).size(10.5).color(t.text_faint));
+    }
+    ui.add_space(4.0);
+    let yours = &view["yours"];
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        if let Some(b64) = yours["jpegBase64"].as_str() {
+            let at = ticks(&yours["time"]);
+            let tip = match at {
+                Some(a) => tlf!("The Program frame at {time}. Click to go there.", time = clock(a)),
+                None => tl!("The Program frame").to_string(),
+            };
+            let r = picture(ui, pics(Pic::Inline(b64)), t, &tip);
+            if r.clicked() {
+                seek = at;
+            }
+            elems.push((format!("assistant.view.{n}.yours"), r, tl!("Your frame").to_string()));
+            ui.label(RichText::new("│").size(PICTURE_H * 0.5).color(t.separator));
+        }
+        for (i, p) in view["pictures"].as_array().map_or(&[][..], Vec::as_slice).iter().take(MAX_PICTURES).enumerate() {
+            let sid = text(&p["id"]);
+            let caption = text(&p["caption"]);
+            let tip = if caption.is_empty() { text(&p["source"]) } else { caption.clone() };
+            let r = picture(ui, pics(Pic::Still(&id, &sid)), t, &tip);
+            elems.push((format!("assistant.view.{n}.still.{i}"), r, if caption.is_empty() { format!("{name} picture {}", i + 1) } else { caption }));
+        }
+    });
+    if yours["jpegBase64"].is_string() {
+        ui.label(RichText::new(tl!("left: your frame; right: the look")).size(10.0).color(t.text_faint));
+    }
+    if view["palette"].as_array().is_some_and(|p| !p.is_empty()) {
+        ui.add_space(4.0);
+        palette(ui, &serde_json::json!({"colors": view["palette"]}), n, t, elems);
+    }
+    let m = &view["measured"];
+    if let (Some(b), Some(c), Some(s)) = (finite(&m["brightness"]), finite(&m["contrast"]), finite(&m["saturation"])) {
+        ui.label(
+            RichText::new(tlf!(
+                "brightness {b} · contrast {c} · saturation {s} · {w}",
+                b = format!("{:.0}%", b * 100.0),
+                c = format!("{:.0}%", c * 100.0),
+                s = format!("{:.0}%", s * 100.0),
+                w = warmth_text(finite(&m["warmthKelvin"]))
+            ))
+            .size(10.5)
+            .color(t.text_faint),
+        );
+    }
+    if yours["rows"].as_array().is_some_and(|r| !r.is_empty()) {
+        ui.add_space(4.0);
+        compare(ui, &serde_json::json!({"reference": name, "rows": yours["rows"], "missing": []}), n, t, elems);
+    }
+    seek
 }
 
 #[cfg(test)]

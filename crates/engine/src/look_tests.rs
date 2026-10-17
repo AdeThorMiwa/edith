@@ -371,3 +371,150 @@ fn a_damaged_kept_picture_is_reported_and_does_not_crash_a_match() {
     let e = b.execute("look.match", json!({"look": l, "still": sid}));
     assert!(e.is_err());
 }
+
+// ---------------------------------------------------------------------------- the assistant
+
+fn tool(s: &Session, name: &str, input: Value) -> edith_ai::ToolOutput {
+    s.run_assistant_tool(name, &input)
+}
+
+fn look_with_two(s: &mut Session, dir: &Path) -> (String, String, String) {
+    let l = new_look(s, "Teal and orange");
+    s.execute("look.set", json!({"id": l, "notes": "cold shadows, warm skin", "grain": "heavy", "aspect": "2.39:1"})).unwrap();
+    let a = s
+        .execute(
+            "look.addStill",
+            json!({"look": l, "path": png(dir, "teal.png", 320, 180, [20, 90, 110]).to_string_lossy(), "rights": "mine", "caption": "the harbour"}),
+        )
+        .unwrap()["still"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = add_file(s, &l, &png(dir, "orange.png", 320, 180, [210, 130, 70]))["still"].as_str().unwrap().to_string();
+    (l, a, b)
+}
+
+#[test]
+fn the_look_tools_are_read_only_and_listed() {
+    let tools = crate::assistant_tools::tools();
+    for name in ["look_list", "look_get", "look_see", "look_compare"] {
+        let t = tools.iter().find(|t| t.spec.name == name).unwrap_or_else(|| panic!("{name}"));
+        assert!(t.read_only, "{name} changes nothing");
+    }
+}
+
+#[test]
+fn the_assistant_reads_a_look_in_words_and_numbers() {
+    let dir = tmp_dir("look-tools");
+    let mut s = Session::default();
+    let empty = tool(&s, "look_list", json!({}));
+    assert!(!empty.is_error && empty.content.contains("no looks"), "{}", empty.content);
+    assert!(tool(&s, "look_get", json!({})).is_error, "no look to get");
+    let (l, a, _) = look_with_two(&mut s, &dir);
+    let list = tool(&s, "look_list", json!({}));
+    assert!(
+        list.content.contains(&l) && list.content.contains("Teal and orange") && list.content.contains("2 pictures") && list.content.contains("heavy"),
+        "{}",
+        list.content
+    );
+    // the only look is the default
+    let got = tool(&s, "look_get", json!({}));
+    assert!(!got.is_error && got.images.is_empty(), "words only");
+    for want in ["cold shadows", "Picture shape wanted: 2.39:1", "the harbour", "teal.png", "rights note: mine", "On average", "warm", "cool"] {
+        assert!(got.content.contains(want), "{want}: {}", got.content);
+    }
+    assert!(got.content.contains(&a));
+    // two looks: it asks which
+    let second = new_look(&mut s, "Second");
+    let e = tool(&s, "look_get", json!({}));
+    assert!(e.is_error && e.content.contains("look_list"), "{}", e.content);
+    assert!(!tool(&s, "look_get", json!({"id": second})).is_error);
+    assert!(tool(&s, "look_get", json!({"id": "zzz"})).is_error);
+    for odd in [json!(null), json!([1]), json!("x"), json!({"id": 5}), json!({"id": "a".repeat(5000)})] {
+        let _ = tool(&s, "look_get", odd.clone());
+        let _ = tool(&s, "look_see", odd.clone());
+        let _ = tool(&s, "look_compare", odd);
+    }
+}
+
+#[test]
+fn look_see_sends_the_pictures_themselves() {
+    let dir = tmp_dir("look-see");
+    let mut s = Session::default();
+    let (l, a, b) = look_with_two(&mut s, &dir);
+    let all = tool(&s, "look_see", json!({"id": l}));
+    assert!(!all.is_error, "{}", all.content);
+    assert_eq!(all.images.len(), 2);
+    assert!(all.images.iter().all(|i| i.media_type == "image/jpeg" && i.data.starts_with("/9j/")));
+    assert!(all.content.contains("the harbour"));
+    let one = tool(&s, "look_see", json!({"id": l, "still": b}));
+    assert_eq!(one.images.len(), 1);
+    assert_ne!(one.images[0], all.images[0], "the second picture, not the first");
+    assert!(tool(&s, "look_see", json!({"id": l, "still": "s999"})).is_error);
+    assert!(tool(&s, "look_see", json!({"id": l, "still": 4})).is_error);
+    let _ = a;
+    // never more than six, spread over the look
+    let many = new_look(&mut s, "Many");
+    let dot = png(&dir, "dot.png", 16, 16, [50, 60, 70]);
+    for _ in 0..10 {
+        add_file(&mut s, &many, &dot);
+    }
+    assert_eq!(tool(&s, "look_see", json!({"id": many})).images.len(), 6);
+    let nothing = new_look(&mut s, "Nothing");
+    assert!(tool(&s, "look_see", json!({"id": nothing})).is_error);
+}
+
+#[test]
+fn look_compare_says_how_the_frame_differs_in_words() {
+    let dir = tmp_dir("look-tool-compare");
+    let mut s = demo();
+    let (l, ..) = look_with_two(&mut s, &dir);
+    let c = tool(&s, "look_compare", json!({"id": l}));
+    assert!(!c.is_error, "{}", c.content);
+    assert!(c.content.contains("against the look “Teal and orange”") && c.content.contains("Brightness"), "{}", c.content);
+    assert!(c.content.contains("The look's note on grain wanted: heavy"));
+    assert!(tool(&s, "look_compare", json!({"id": l, "time": "00:00:02:00"})).content.contains("0:02"));
+    assert!(tool(&s, "look_compare", json!({"id": l, "time": 100000})).is_error);
+    assert!(tool(&s, "look_compare", json!({"id": l, "time": "banana"})).is_error);
+    assert!(tool(&Session::default(), "look_compare", json!({"id": "l1"})).is_error, "no edit open");
+}
+
+#[test]
+fn the_look_view_shows_pictures_numbers_and_the_frame_beside_them() {
+    let dir = tmp_dir("look-view");
+    let mut s = demo();
+    let (l, a, b) = look_with_two(&mut s, &dir);
+    let out = tool(&s, "show", json!({"view": "look", "look": l, "caption": "The look I am after"}));
+    assert!(!out.is_error, "{}", out.content);
+    let v = out.view.clone().expect("a view for the person");
+    assert_eq!(v["view"], "look");
+    assert_eq!(v["caption"], "The look I am after");
+    assert_eq!(v["look"]["name"], "Teal and orange");
+    assert_eq!(v["pictures"].as_array().unwrap().len(), 2);
+    assert_eq!(v["pictures"][0]["id"], json!(a));
+    assert!(v["pictures"][0].get("jpeg").is_none(), "the pictures are drawn from the library by id, not saved in the view");
+    assert!(v["palette"].as_array().is_some_and(|p| !p.is_empty()));
+    assert!(v["measured"]["brightness"].as_f64().is_some());
+    let yours = &v["yours"];
+    assert!(yours["jpegBase64"].as_str().is_some_and(|j| j.starts_with("/9j/") && j.len() < 60_000), "the Program frame, small");
+    assert!(yours["rows"].as_array().is_some_and(|r| !r.is_empty() && r.len() <= 6));
+    assert!(out.content.contains("Shown to the person") && out.content.contains("What differs"), "{}", out.content);
+    assert!(!out.content.contains("jpeg"), "the model is not sent picture data in the view's words");
+    // some pictures, in the order asked for
+    let some = tool(&s, "show", json!({"view": "look", "look": l, "stills": [b]})).view.unwrap();
+    assert_eq!(some["pictures"].as_array().unwrap().len(), 1);
+    assert_eq!(some["pictures"][0]["id"], json!(b));
+    assert!(tool(&s, "show", json!({"view": "look", "look": l, "stills": ["s999"]})).is_error);
+    assert!(tool(&s, "show", json!({"view": "look", "look": l, "stills": "s1"})).is_error);
+    assert!(tool(&s, "show", json!({"view": "look", "look": "nope"})).is_error);
+    // the only look is the default; with none there is nothing to show
+    assert!(!tool(&s, "show", json!({"view": "look"})).is_error);
+    let none = Session::default();
+    assert!(tool(&none, "show", json!({"view": "look"})).is_error);
+    // with no edit open the look is still shown, without a frame beside it
+    let mut closed = Session::default();
+    let (cl, ..) = look_with_two(&mut closed, &dir);
+    let v = tool(&closed, "show", json!({"view": "look", "look": cl})).view.unwrap();
+    assert!(v["yours"].is_null());
+    assert_eq!(v["pictures"].as_array().unwrap().len(), 2);
+}
