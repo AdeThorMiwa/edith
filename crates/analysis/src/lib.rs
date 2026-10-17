@@ -2,6 +2,8 @@
 //! features (the editing coach, reference analysis, the consistency checker) can talk in numbers.
 //!
 //! - [`color`]: sRGB to CIE Lab, colour distance and correlated colour temperature.
+//! - [`coach`]: [`findings`], the rules that decide what is worth telling an editor about an edit, from
+//!   the numbers and never by a model.
 //! - [`audio`]: [`AudioStats`] for a stretch of audio: EBU R128 loudness (from `filmcraft-audio-dsp`),
 //!   silence share, spectral balance, a rough speech/music/ambience guess and a beat grid.
 //! - [`motion`]: [`MotionPair`] between two pictures (how much changed, how the camera moved, how much
@@ -19,12 +21,14 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod audio;
+pub mod coach;
 pub mod color;
 pub mod image;
 pub mod motion;
 pub mod sequence;
 
 pub use audio::{AudioBuffer, AudioKind, AudioStats, analyze_audio};
+pub use coach::{Finding, Severity, Targets, findings};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
 pub use motion::{CameraMove, MotionPair, MotionSummary, analyze_motion, summarize};
 pub use sequence::{SequenceInput, SequenceStats, ShotSpan, analyze_sequence, shot_spans};
@@ -68,6 +72,8 @@ pub type Result<T> = std::result::Result<T, AnalysisError>;
 
 #[cfg(test)]
 mod audio_tests;
+#[cfg(test)]
+mod coach_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]

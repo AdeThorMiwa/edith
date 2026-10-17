@@ -83,7 +83,7 @@ fn j_and_l_cuts_are_the_cuts_whose_sound_does_not_change_with_the_picture() {
 }
 
 #[test]
-fn transitions_are_counted_by_kind_and_against_the_joints() {
+fn transitions_are_counted_by_kind_and_as_a_share_of_the_joints() {
     let mut v = track(vec![clip(1, 0.0, 4.0, None), clip(2, 4.0, 4.0, None), clip(3, 8.0, 4.0, None)]);
     let t = |at: f64, kind: &str, between: bool| TransitionSpan { start: (at * S as f64) as i64, duration: S, kind: kind.into(), between_clips: between };
     v.transitions = vec![t(3.5, "Cross Dissolve", true), t(0.0, "Fade In", false)];
@@ -91,8 +91,8 @@ fn transitions_are_counted_by_kind_and_against_the_joints() {
     assert_eq!(s.transitions.count, 2);
     assert_eq!(s.transitions.by_kind.get("Cross Dissolve"), Some(&1));
     assert_eq!(s.transitions.by_kind.get("Fade In"), Some(&1));
-    // 2 cuts + 1 dissolve = 3 joints, 1 of them a dissolve
-    assert!((s.transitions.share_of_joints - 1.0 / 3.0).abs() < 1e-9);
+    // two joints between the three shots, one of them dissolved
+    assert!((s.transitions.share_of_joints - 0.5).abs() < 1e-9);
 }
 
 #[test]

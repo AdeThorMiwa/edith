@@ -11,7 +11,7 @@
 //! - **J and L cuts** are cuts whose linked audio does not change at the same moment: the next
 //!   shot's sound starting before the cut (J) or the last shot's sound running past it (L). Only
 //!   cuts where both sides have linked audio count.
-//! - **Transitions** are counted by kind and as a share of the cuts.
+//! - **Transitions** are counted by kind and as a share of the joints between shots.
 //! - **Narration pace** is words over the minutes of narration actually spoken.
 //! - **Occupancy** is the share of the timeline each track has something on, overlaps counted once.
 
@@ -135,7 +135,7 @@ pub struct SplitStats {
 pub struct TransitionStats {
     pub count: u32,
     pub by_kind: BTreeMap<String, u32>,
-    /// Transitions that join two clips, over the cuts plus those transitions (every joint of two shots).
+    /// Transitions that join two clips, over the joints between shots (the cuts, with or without one); at most 1.
     pub share_of_joints: f64,
 }
 
@@ -390,7 +390,8 @@ pub fn analyze_sequence(input: &SequenceInput) -> Result<SequenceStats> {
     let transition_stats = TransitionStats {
         count: transitions.len() as u32,
         by_kind,
-        share_of_joints: if cuts.len() + joins > 0 { joins as f64 / (cuts.len() + joins) as f64 } else { 0.0 },
+        // a transition sits on a joint: it dresses a cut, it does not add one
+        share_of_joints: if !cuts.is_empty() { (joins as f64 / cuts.len() as f64).min(1.0) } else { 0.0 },
     };
 
     let words: u64 = narration.iter().map(|n| u64::from(n.2)).sum();
