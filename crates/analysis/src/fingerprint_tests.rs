@@ -234,3 +234,50 @@ fn a_feature_length_fingerprint_is_small_deterministic_and_round_trips_as_json()
     let name = fingerprint(&n).unwrap().name;
     assert!(name.chars().count() <= 120 && !name.contains('\u{7}'));
 }
+
+#[test]
+fn a_fingerprint_made_here_passes_the_check_and_damaged_ones_do_not() {
+    let mut f = film(900.0, every(900.0, 7.0));
+    f.pictures = (0..30)
+        .map(|i| PictureSample { time_seconds: f64::from(i) * 30.0, stats: solid([90, 100, 110]), camera: Some(CameraMove::Pan), motion_energy: Some(0.05) })
+        .collect();
+    f.sound = Some(SoundInput {
+        mix: Mix { duration_seconds: 900.0, integrated_lufs: Some(-20.0), loudness_range_lu: Some(8.0), true_peak_dbtp: Some(-3.0), silence_share: 0.1 },
+        segments: (0..30)
+            .map(|i| SoundSegment { start_seconds: f64::from(i) * 30.0, duration_seconds: 30.0, kind: AudioKind::Speech, loudness_lufs: Some(-21.0) })
+            .collect(),
+    });
+    let good = fingerprint(&f).unwrap();
+    assert_eq!(good.check(), Ok(()));
+    assert_eq!(fingerprint(&film(10.0, vec![])).unwrap().check(), Ok(()), "even a bare one");
+    let damaged: Vec<(&str, Box<dyn Fn(&mut Fingerprint)>)> = vec![
+        ("version", Box::new(|f| f.version = 99)),
+        ("duration", Box::new(|f| f.duration_seconds = f64::NAN)),
+        ("no length", Box::new(|f| f.duration_seconds = 0.0)),
+        ("name", Box::new(|f| f.name = "x".repeat(500))),
+        ("name control", Box::new(|f| f.name = "a\u{7}b".into())),
+        ("size", Box::new(|f| f.width = u32::MAX)),
+        ("shots", Box::new(|f| f.shots.mean_seconds = f64::INFINITY)),
+        ("negative shots", Box::new(|f| f.shots.min_seconds = -1.0)),
+        ("histogram", Box::new(|f| f.shots.histogram = vec![Default::default(); 100])),
+        ("curve short", Box::new(|f| f.rhythm.curve.truncate(5))),
+        ("curve long", Box::new(|f| f.rhythm.curve = vec![1.0; 10_000])),
+        ("curve nan", Box::new(|f| f.rhythm.curve[3] = f32::NAN)),
+        ("thirds", Box::new(|f| f.rhythm.opening_mean_seconds = Some(f64::NAN))),
+        ("picture", Box::new(|f| f.picture.as_mut().unwrap().luma_mean = f32::NAN)),
+        ("bars", Box::new(|f| f.picture.as_mut().unwrap().letterbox.top = 5.0)),
+        ("palette", Box::new(|f| f.picture.as_mut().unwrap().palette = vec![f.picture.as_ref().unwrap().palette[0]; 50])),
+        ("timeline", Box::new(|f| f.picture.as_mut().unwrap().timeline = vec![f.picture.as_ref().unwrap().timeline[0]; 50])),
+        ("motion", Box::new(|f| f.motion.as_mut().unwrap().energy = f32::INFINITY)),
+        ("camera", Box::new(|f| f.motion.as_mut().unwrap().camera = (0..50).map(|i| (format!("c{i}"), 0.02)).collect())),
+        ("camera share", Box::new(|f| f.motion.as_mut().unwrap().camera.insert("pan".into(), 9.0).map(drop).unwrap_or(()))),
+        ("sound", Box::new(|f| f.sound.as_mut().unwrap().integrated_lufs = Some(f64::NAN))),
+        ("share", Box::new(|f| f.sound.as_mut().unwrap().music_share = -0.5)),
+        ("sound curve", Box::new(|f| f.sound.as_mut().unwrap().loudness_curve = vec![0.0; 7])),
+    ];
+    for (what, break_it) in damaged {
+        let mut f = good.clone();
+        break_it(&mut f);
+        assert!(f.check().is_err(), "{what} should be refused");
+    }
+}

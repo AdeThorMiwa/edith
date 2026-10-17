@@ -3912,3 +3912,10 @@
 	{amount} {unit} above the target	目標より {amount} {unit} 高い
 	Measure Reference	リファレンスを測定
 	Reference Result	リファレンスの結果
+	Add Reference	リファレンスを追加
+	List References	リファレンスの一覧
+	Get Reference	リファレンスを取得
+	Rename Reference	リファレンスの名前を変更
+	Remove Reference	リファレンスを削除
+	Export Fingerprint	フィンガープリントを書き出す
+	Import Fingerprint	フィンガープリントを読み込む

@@ -3910,3 +3910,10 @@
 	{amount} {unit} above the target	{amount} {unit} por encima del objetivo
 	Measure Reference	Medir referencia
 	Reference Result	Resultado de la referencia
+	Add Reference	Añadir referencia
+	List References	Listar referencias
+	Get Reference	Obtener referencia
+	Rename Reference	Renombrar referencia
+	Remove Reference	Quitar referencia
+	Export Fingerprint	Exportar huella
+	Import Fingerprint	Importar huella

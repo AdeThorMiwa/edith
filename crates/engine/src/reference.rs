@@ -4,6 +4,15 @@
 //! |---|---|
 //! | `reference.measure {path, name?, sampleFps?, pictures?, sensitivity?, wait?}` | measure a film file into a fingerprint (`edith-analysis`), as a background job you can watch and stop; `wait: true` returns the fingerprint |
 //! | `reference.result {job}` | where a measuring job is: running, done (with the fingerprint) or failed |
+//! | `reference.add {path, rights, name?, …}` | measure a film file (as `reference.measure`) and keep its fingerprint in your library; `rights` is a short note of why you may use the file (public domain, your own export, a licence) and is required |
+//! | `reference.list`, `reference.get {id}` | the library, and one fingerprint in full |
+//! | `reference.rename {id, name}`, `reference.remove {id}` | tidy the library |
+//! | `reference.export {id, path}`, `reference.import {path}` | a fingerprint as a small JSON file, to share without sharing any footage, and back |
+//!
+//! The library is global: `edith-references.json` beside the preferences, for every project (in memory
+//! only where there is no data folder, as in tests). Everything read from it, or imported, is
+//! untrusted: a fingerprint must pass `Fingerprint::check`, names and notes are cut to their limits, and
+//! at most [`MAX_REFERENCES`] are kept.
 //!
 //! The file is read as a stream (a feature-length film is not loaded whole). The job finds the hard
 //! cuts by looking at `sampleFps` frames a second (default 8: a cut is placed to within an eighth of a
@@ -15,6 +24,7 @@
 //! job stops saying so), a file with neither picture nor sound is refused, and sizes are bounded.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +32,7 @@ use edith_analysis as an;
 use filmcraft_media::{FrameRequest, SharedSource};
 use filmcraft_render::scene::{SceneDetector, SceneOptions};
 use filmcraft_time::{TICKS_PER_SECOND, Tick};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::analysis::{frame_at, lock, motion_between, secs, to_value};
@@ -39,10 +50,112 @@ const SOUND_PIECE_SECONDS: f64 = 30.0;
 /// Longest path accepted.
 const MAX_PATH: usize = 4096;
 
-/// What the session keeps: where finished and failed measuring jobs left their answers.
+pub(crate) const FILE: &str = "edith-references.json";
+const MAX_FILE: u64 = 8 * 1024 * 1024;
+const MAX_IMPORT: u64 = 2 * 1024 * 1024;
+/// Most references kept.
+pub const MAX_REFERENCES: usize = 50;
+const MAX_NAME: usize = 120;
+const MAX_RIGHTS: usize = 300;
+
+/// One film in the library: its name, the note of why it may be used, and the numbers. Nothing of the
+/// film itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reference {
+    pub id: String,
+    pub name: String,
+    pub rights: String,
+    pub added_unix: i64,
+    pub fingerprint: an::Fingerprint,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct Library {
+    pub version: u32,
+    pub next_id: u64,
+    pub references: Vec<Reference>,
+}
+
+type SharedLibrary = Arc<Mutex<Option<Library>>>;
+
+/// What the session keeps: where finished and failed measuring jobs left their answers, and the library
+/// (read from its file the first time it is needed).
 #[derive(Clone, Default)]
 pub struct Hub {
     done: Arc<Mutex<BTreeMap<u64, std::result::Result<Value, String>>>>,
+    library: SharedLibrary,
+}
+
+fn clean_text(t: &str, max: usize) -> String {
+    t.chars().filter(|c| !c.is_control()).take(max).collect::<String>().trim().to_string()
+}
+
+fn file_path(s: &Session) -> Option<PathBuf> {
+    s.prefs_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(FILE))
+}
+
+/// The library as the file holds it: a damaged file is an empty library, a damaged entry is left out.
+fn read_library(file: Option<&Path>) -> Library {
+    let Some(p) = file else { return Library { version: 1, ..Default::default() } };
+    let empty = Library { version: 1, ..Default::default() };
+    let Ok(meta) = std::fs::metadata(p) else { return empty };
+    if meta.len() > MAX_FILE {
+        return empty;
+    }
+    let Some(mut lib) = std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Library>(&t).ok()) else { return empty };
+    let mut seen = Vec::new();
+    lib.references.retain(|r| {
+        let ok = r.id.len() <= 20 && r.id.chars().all(|c| c.is_ascii_alphanumeric()) && !seen.contains(&r.id) && r.fingerprint.check().is_ok();
+        if ok {
+            seen.push(r.id.clone());
+        }
+        ok
+    });
+    lib.references.truncate(MAX_REFERENCES);
+    for r in &mut lib.references {
+        r.name = clean_text(&r.name, MAX_NAME);
+        r.rights = clean_text(&r.rights, MAX_RIGHTS);
+    }
+    lib.version = 1;
+    lib
+}
+
+fn save_library(file: Option<&Path>, lib: &Library) {
+    let Some(p) = file else { return };
+    if let Ok(json) = serde_json::to_string_pretty(lib) {
+        let tmp = p.with_extension("json.tmp");
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, p).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// Runs `f` on the library, loading it first if need be, and keeps what `f` did (saved to the file).
+fn with_library<T>(shared: &SharedLibrary, file: Option<&Path>, f: impl FnOnce(&mut Library) -> T) -> T {
+    let mut g = lock(shared);
+    let lib = g.get_or_insert_with(|| read_library(file));
+    let out = f(lib);
+    save_library(file, lib);
+    out
+}
+
+/// A reference added to the library: the next id, the note and the numbers. `Err` when the library is full.
+fn store(lib: &mut Library, name: &str, rights: &str, fp: an::Fingerprint) -> std::result::Result<String, String> {
+    if lib.references.len() >= MAX_REFERENCES {
+        return Err(format!("the library already holds {MAX_REFERENCES} references; remove one first"));
+    }
+    lib.next_id = lib.next_id.max(lib.references.len() as u64) + 1;
+    let id = format!("r{}", lib.next_id);
+    lib.references.push(Reference {
+        id: id.clone(),
+        name: clean_text(name, MAX_NAME),
+        rights: clean_text(rights, MAX_RIGHTS),
+        added_unix: crate::autosave::unix_now(),
+        fingerprint: fp,
+    });
+    Ok(id)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -239,29 +352,40 @@ fn name_of(p: &Value, path: &str) -> String {
     given.unwrap_or_else(|| std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().chars().take(120).collect()).unwrap_or_default())
 }
 
-fn measure_command(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "reference.measure";
+/// What to keep when a measurement finishes in `reference.add`: the note, and where the library is.
+struct Keep {
+    rights: String,
+    file: Option<PathBuf>,
+    library: SharedLibrary,
+}
+
+/// Starts a measuring job; with `keep`, the fingerprint is stored in the library when it is done.
+fn start(s: &mut Session, p: &Value, cmd: &str, keep: Option<String>) -> Result<Value> {
     let path = path_param(p, cmd)?.to_string();
     let name = name_of(p, &path);
     let options = Options::from_params(p);
     let id = s.jobs.iter().map(|j| j.id).max().unwrap_or(0) + 1;
-    let job = crate::Job { id, label: format!("Measure reference {name}"), progress: Default::default(), result: Default::default() };
+    let label = if keep.is_some() { format!("Add reference {name}") } else { format!("Measure reference {name}") };
+    let job = crate::Job { id, label, progress: Default::default(), result: Default::default() };
     let (prog, res) = (job.progress.clone(), job.result.clone());
     let (media, services) = (s.media.clone(), s.services.clone());
     let done = s.reference.done.clone();
+    let keep = keep.map(|rights| Keep { rights, file: file_path(s), library: s.reference.library.clone() });
     let run = move || {
         let t0 = web_time::Instant::now();
         *lock(&prog.status) = "Opening the file".into();
         let outcome = media
             .open_file(&path, &*services)
-            .map_err(|e| {
-                format!("could not open {}: {e}", std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-            })
-            .and_then(|src| measure(&src, &name, &options, &prog));
+            .map_err(|e| format!("could not open {}: {e}", Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()))
+            .and_then(|src| measure(&src, &name, &options, &prog))
+            .and_then(|fp| match &keep {
+                Some(k) => with_library(&k.library, k.file.as_deref(), |lib| store(lib, &name, &k.rights, fp.clone())).map(|rid| (fp, Some(rid))),
+                None => Ok((fp, None)),
+            });
         let seconds = t0.elapsed().as_secs_f64();
         let r = match outcome {
-            Ok(fp) => {
-                lock(&done).insert(id, Ok(to_value(&fp)));
+            Ok((fp, reference)) => {
+                lock(&done).insert(id, Ok(json!({"fingerprint": to_value(&fp), "reference": reference})));
                 *lock(&prog.status) = format!("Measured in {seconds:.0}s");
                 Ok(filmcraft_export::Report {
                     path: String::new(),
@@ -287,7 +411,10 @@ fn measure_command(s: &mut Session, p: &Value) -> Result<Value> {
     if bool_p(p, "wait").unwrap_or(false) || cfg!(target_arch = "wasm32") {
         run();
         match lock(&s.reference.done).get(&id).cloned() {
-            Some(Ok(fp)) => out["fingerprint"] = fp,
+            Some(Ok(done)) => {
+                out["fingerprint"] = done["fingerprint"].clone();
+                out["reference"] = done["reference"].clone();
+            }
             Some(Err(e)) => return Err(EngineError::Other(e)),
             None => return Err(EngineError::Other("the measurement ended without an answer".into())),
         }
@@ -297,6 +424,25 @@ fn measure_command(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+fn measure_command(s: &mut Session, p: &Value) -> Result<Value> {
+    start(s, p, "reference.measure", None)
+}
+
+fn add_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.add";
+    let rights = str_p(p, "rights")
+        .map(|r| clean_text(r, MAX_RIGHTS + 1))
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| bad(cmd, "`rights` is required: a short note of why you may use this film (public domain, your own export, a licence)"))?;
+    if rights.chars().count() > MAX_RIGHTS {
+        return Err(bad(cmd, format!("`rights` is at most {MAX_RIGHTS} characters")));
+    }
+    if with_library(&s.reference.library, file_path(s).as_deref(), |l| l.references.len()) >= MAX_REFERENCES {
+        return Err(bad(cmd, format!("the library already holds {MAX_REFERENCES} references; remove one first")));
+    }
+    start(s, p, cmd, Some(rights))
+}
+
 fn result_command(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "reference.result";
     let id = u64_p(p, "job").ok_or_else(|| bad(cmd, "`job` is required: the number `reference.measure` returned"))?;
@@ -304,10 +450,112 @@ fn result_command(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, format!("there is no job {id}")));
     }
     Ok(match lock(&s.reference.done).get(&id) {
-        Some(Ok(fp)) => json!({"state": "done", "fingerprint": fp}),
+        Some(Ok(done)) => json!({"state": "done", "fingerprint": done["fingerprint"], "reference": done["reference"]}),
         Some(Err(e)) => json!({"state": "failed", "error": e}),
         None => json!({"state": "running"}),
     })
+}
+
+// ---------------------------------------------------------------------------- the library
+
+fn summary(r: &Reference) -> Value {
+    let f = &r.fingerprint;
+    json!({
+        "id": r.id, "name": r.name, "rights": r.rights, "addedUnix": r.added_unix,
+        "durationSeconds": f.duration_seconds,
+        "shots": {"count": f.shots.count, "meanSeconds": f.shots.mean_seconds, "medianSeconds": f.shots.median_seconds, "cutsPerMinute": f.shots.cuts_per_minute},
+        "arc": f.rhythm.arc,
+        "hasPicture": f.picture.is_some(),
+        "integratedLufs": f.sound.as_ref().and_then(|s| s.integrated_lufs),
+    })
+}
+
+fn all(s: &Session) -> Vec<Reference> {
+    with_library(&s.reference.library, file_path(s).as_deref(), |l| l.references.clone())
+}
+
+pub(crate) fn find(s: &Session, id: &str) -> Option<Reference> {
+    all(s).into_iter().find(|r| r.id == id)
+}
+
+fn id_param<'a>(p: &'a Value, cmd: &str) -> Result<&'a str> {
+    str_p(p, "id").filter(|i| !i.is_empty() && i.len() <= 20).ok_or_else(|| bad(cmd, "`id` is required: a reference's id from `reference.list`"))
+}
+
+fn list_command(s: &mut Session, _p: &Value) -> Result<Value> {
+    let refs = all(s);
+    Ok(
+        json!({"references": refs.iter().map(summary).collect::<Vec<_>>(), "folder": file_path(s).map(|p| p.to_string_lossy().into_owned()), "max": MAX_REFERENCES}),
+    )
+}
+
+fn get_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.get";
+    let id = id_param(p, cmd)?;
+    let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}; `reference.list` shows what there is")))?;
+    Ok(json!({"id": r.id, "name": r.name, "rights": r.rights, "addedUnix": r.added_unix, "fingerprint": to_value(&r.fingerprint)}))
+}
+
+fn rename_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.rename";
+    let id = id_param(p, cmd)?.to_string();
+    let name = str_p(p, "name").map(|n| clean_text(n, MAX_NAME + 1)).filter(|n| !n.is_empty() && n.chars().count() <= MAX_NAME);
+    let name = name.ok_or_else(|| bad(cmd, format!("`name` is required, at most {MAX_NAME} characters")))?;
+    let found = with_library(&s.reference.library, file_path(s).as_deref(), |l| {
+        l.references.iter_mut().find(|r| r.id == id).map(|r| {
+            r.name = name.clone();
+            r.fingerprint.name = name.clone();
+        })
+    });
+    found.map(|()| json!({"id": id, "name": name})).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}")))
+}
+
+fn remove_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.remove";
+    let id = id_param(p, cmd)?.to_string();
+    let removed = with_library(&s.reference.library, file_path(s).as_deref(), |l| {
+        let before = l.references.len();
+        l.references.retain(|r| r.id != id);
+        before != l.references.len()
+    });
+    if removed { Ok(json!({"removed": id})) } else { Err(bad(cmd, format!("there is no reference {id:?}"))) }
+}
+
+const EXPORT_FORMAT: &str = "edith-fingerprint";
+
+fn export_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.export";
+    let id = id_param(p, cmd)?;
+    let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}")))?;
+    let path = path_param(p, cmd)?;
+    let body = json!({"format": EXPORT_FORMAT, "version": 1, "name": r.name, "rights": r.rights, "fingerprint": to_value(&r.fingerprint)});
+    let text = serde_json::to_string_pretty(&body).map_err(|e| EngineError::Other(e.to_string()))?;
+    s.services.write_file(path, text.as_bytes()).map_err(|e| EngineError::Other(format!("could not write the file: {e}")))?;
+    Ok(json!({"path": path, "bytes": text.len()}))
+}
+
+fn import_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "reference.import";
+    let path = path_param(p, cmd)?;
+    if s.services.file_size(path).map_err(|e| bad(cmd, format!("could not read the file: {e}")))? > MAX_IMPORT {
+        return Err(bad(cmd, "that file is too big to be a fingerprint (the limit is 2 MB)"));
+    }
+    let bytes = s.services.read_file(path).map_err(|e| bad(cmd, format!("could not read the file: {e}")))?;
+    let v: Value = serde_json::from_slice(&bytes).map_err(|_| bad(cmd, "that file is not JSON"))?;
+    if v["format"] != EXPORT_FORMAT {
+        return Err(bad(cmd, "that is not a fingerprint file (it was not made by `reference.export`)"));
+    }
+    let fp: an::Fingerprint = serde_json::from_value(v["fingerprint"].clone())
+        .map_err(|e| bad(cmd, format!("the fingerprint in that file is damaged: {}", e.to_string().chars().take(100).collect::<String>())))?;
+    fp.check().map_err(|e| bad(cmd, e))?;
+    let name = clean_text(v["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or(&fp.name), MAX_NAME);
+    let rights = v["rights"]
+        .as_str()
+        .map(|r| clean_text(r, MAX_RIGHTS))
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| "Imported fingerprint; no note of rights came with it".to_string());
+    let id = with_library(&s.reference.library, file_path(s).as_deref(), |lib| store(lib, &name, &rights, fp)).map_err(|e| bad(cmd, e))?;
+    Ok(json!({"id": id, "name": name}))
 }
 
 pub fn commands() -> Vec<CommandSpec> {
@@ -328,6 +576,18 @@ pub fn commands() -> Vec<CommandSpec> {
             r#"{"path":str,"name":str?,"sampleFps":n=8,"pictures":n=120,"sensitivity":0..100=50,"wait":bool=false}"#,
             measure_command,
         ),
+        spec(
+            "reference.add",
+            "Add Reference",
+            r#"{"path":str,"rights":str,"name":str?,"sampleFps":n=8,"pictures":n=120,"sensitivity":0..100=50,"wait":bool=false}"#,
+            add_command,
+        ),
         spec("reference.result", "Reference Result", r#"{"job":id}"#, result_command),
+        spec("reference.list", "List References", "{}", list_command),
+        spec("reference.get", "Get Reference", r#"{"id":str}"#, get_command),
+        spec("reference.rename", "Rename Reference", r#"{"id":str,"name":str}"#, rename_command),
+        spec("reference.remove", "Remove Reference", r#"{"id":str}"#, remove_command),
+        spec("reference.export", "Export Fingerprint", r#"{"id":str,"path":str}"#, export_command),
+        spec("reference.import", "Import Fingerprint", r#"{"path":str}"#, import_command),
     ]
 }

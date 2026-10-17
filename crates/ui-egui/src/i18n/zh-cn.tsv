@@ -3888,3 +3888,10 @@
 	{amount} {unit} above the target	比目标高 {amount} {unit}
 	Measure Reference	测量参考片
 	Reference Result	参考片结果
+	Add Reference	添加参考片
+	List References	列出参考片
+	Get Reference	获取参考片
+	Rename Reference	重命名参考片
+	Remove Reference	移除参考片
+	Export Fingerprint	导出指纹
+	Import Fingerprint	导入指纹

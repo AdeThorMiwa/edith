@@ -240,3 +240,200 @@ fn a_stopped_measurement_keeps_nothing() {
     assert_eq!(r.err().as_deref(), Some("stopped"));
     let _ = PathBuf::new();
 }
+
+fn small_film(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    make_film(&path, &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48)], false);
+    path
+}
+
+fn session_in(dir: &Path) -> Session {
+    Session { prefs_path: Some(dir.join("preferences.json")), ..Default::default() }
+}
+
+fn add(s: &mut Session, path: &Path, rights: &str) -> Value {
+    s.execute("reference.add", json!({"path": path.to_string_lossy(), "rights": rights, "wait": true, "pictures": 8, "sampleFps": 8})).unwrap()
+}
+
+#[test]
+fn a_film_is_added_to_the_library_with_its_note_and_is_there_for_the_next_session() {
+    let dir = tmp_dir("ref-lib");
+    let film = small_film(&dir, "Dune Walk.mov");
+    let mut s = session_in(&dir);
+    assert!(s.execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().is_empty());
+    let r = add(&mut s, &film, "Public domain (made for this test)");
+    let id = r["reference"].as_str().unwrap().to_string();
+    assert_eq!(r["fingerprint"]["name"], "Dune Walk");
+    let list = s.execute("reference.list", json!({})).unwrap();
+    let row = &list["references"][0];
+    assert_eq!(
+        (row["id"].as_str(), row["name"].as_str(), row["rights"].as_str()),
+        (Some(id.as_str()), Some("Dune Walk"), Some("Public domain (made for this test)"))
+    );
+    assert_eq!(row["shots"]["count"], 2);
+    assert!(row["durationSeconds"].as_f64().unwrap() > 3.0 && row["arc"].is_string() && row["addedUnix"].as_i64().unwrap() > 0);
+    // the whole fingerprint comes from `get`
+    let got = s.execute("reference.get", json!({"id": id})).unwrap();
+    assert_eq!(got["fingerprint"]["shots"]["count"], 2);
+    // another session (another run of the app) finds it in the global file, and the file holds numbers only
+    let mut later = session_in(&dir);
+    assert_eq!(later.execute("reference.list", json!({})).unwrap()["references"][0]["name"], "Dune Walk");
+    let text = std::fs::read_to_string(dir.join("edith-references.json")).unwrap();
+    assert!(text.len() < 30_000 && !text.contains(&*dir.to_string_lossy()), "no path, no footage: {} bytes", text.len());
+    // a project does not need to be open: the library is not in any project
+    assert!(later.project.ext.is_empty() || !later.project.ext.contains_key("edith.references"));
+    // rename and remove, and they persist
+    later.execute("reference.rename", json!({"id": id, "name": "  A slow walk  "})).unwrap();
+    assert_eq!(session_in(&dir).execute("reference.get", json!({"id": id})).unwrap()["name"], "A slow walk");
+    later.execute("reference.remove", json!({"id": id})).unwrap();
+    assert!(session_in(&dir).execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn a_note_of_why_the_film_may_be_used_is_required_and_nothing_is_measured_without_it() {
+    let dir = tmp_dir("ref-rights");
+    let film = small_film(&dir, "film.mov");
+    let mut s = session_in(&dir);
+    for bad in [
+        json!({}),
+        json!({"rights": ""}),
+        json!({"rights": "   "}),
+        json!({"rights": 5}),
+        json!({"rights": null}),
+        json!({"rights": "x".repeat(301)}),
+        json!({"rights": "\u{7}\u{7}"}),
+    ] {
+        let mut p = json!({"path": film.to_string_lossy(), "wait": true});
+        p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        let e = s.execute("reference.add", p).unwrap_err().to_string();
+        assert!(e.contains("rights"), "{bad}: {e}");
+    }
+    assert!(s.jobs.iter().all(|j| !j.label.starts_with("Add reference")), "no job was started");
+    assert!(s.execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().is_empty());
+    // the note is cleaned of control characters and kept
+    let r = add(&mut s, &film, "CC-BY\u{7} 4.0, from the archive");
+    assert_eq!(s.execute("reference.get", json!({"id": r["reference"]})).unwrap()["rights"], "CC-BY 4.0, from the archive");
+}
+
+#[test]
+fn a_fingerprint_is_exported_without_footage_and_imported_back_and_hostile_files_are_refused() {
+    let dir = tmp_dir("ref-share");
+    let film = small_film(&dir, "film.mov");
+    let mut s = session_in(&dir);
+    let id = add(&mut s, &film, "Own export")["reference"].as_str().unwrap().to_string();
+    let out = dir.join("film.fingerprint.json");
+    let r = s.execute("reference.export", json!({"id": id, "path": out.to_string_lossy()})).unwrap();
+    assert!(r["bytes"].as_u64().unwrap() < 30_000);
+    let text = std::fs::read_to_string(&out).unwrap();
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!((v["format"].as_str(), v["rights"].as_str()), (Some("edith-fingerprint"), Some("Own export")));
+    // into another library: the same numbers, with the note that came with it
+    let other_dir = tmp_dir("ref-share-other");
+    let mut other = session_in(&other_dir);
+    let imported = other.execute("reference.import", json!({"path": out.to_string_lossy()})).unwrap();
+    let got = other.execute("reference.get", json!({"id": imported["id"]})).unwrap();
+    assert_eq!(got["fingerprint"], s.execute("reference.get", json!({"id": id})).unwrap()["fingerprint"]);
+    assert_eq!(got["rights"], "Own export");
+    // an import with no note says so
+    let mut bare = v.clone();
+    bare.as_object_mut().unwrap().remove("rights");
+    let p = dir.join("bare.json");
+    std::fs::write(&p, bare.to_string()).unwrap();
+    let r = other.execute("reference.import", json!({"path": p.to_string_lossy()})).unwrap();
+    assert!(other.execute("reference.get", json!({"id": r["id"]})).unwrap()["rights"].as_str().unwrap().contains("no note"));
+    // hostile files
+    let write = |name: &str, body: &str| {
+        let p = dir.join(name);
+        std::fs::write(&p, body).unwrap();
+        p
+    };
+    let mut nan = v.clone();
+    nan["fingerprint"]["rhythm"]["curve"] = json!([1.0, 2.0]);
+    let mut huge = v.clone();
+    huge["fingerprint"]["picture"]["palette"] = json!(vec![json!({"lab": [0.0, 0.0, 0.0], "rgb": [0.0, 0.0, 0.0], "share": 0.1}); 500]);
+    let mut wrong_version = v.clone();
+    wrong_version["fingerprint"]["version"] = json!(99);
+    let big = write("big.json", &" ".repeat(3 * 1024 * 1024));
+    for (what, path) in [
+        ("not json", write("a.json", "{ nope")),
+        ("an array", write("b.json", "[1, 2, 3]")),
+        ("other format", write("c.json", r#"{"format": "something-else"}"#)),
+        ("no fingerprint", write("d.json", r#"{"format": "edith-fingerprint"}"#)),
+        ("short curve", write("e.json", &nan.to_string())),
+        ("huge palette", write("f.json", &huge.to_string())),
+        ("another version", write("g.json", &wrong_version.to_string())),
+        ("too big", big),
+        ("missing", dir.join("missing.json")),
+    ] {
+        assert!(other.execute("reference.import", json!({"path": path.to_string_lossy()})).is_err(), "{what} should be refused");
+    }
+    let n = other.execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().len();
+    assert_eq!(n, 2, "only the two good imports are in the library");
+    // exporting what is not there, or where it cannot go
+    assert!(s.execute("reference.export", json!({"id": "nope", "path": out.to_string_lossy()})).is_err());
+    assert!(s.execute("reference.export", json!({"id": id, "path": dir.join("no/such/folder/x.json").to_string_lossy()})).is_err());
+}
+
+#[test]
+fn the_library_is_capped_and_a_damaged_file_is_an_empty_library_not_a_crash() {
+    let dir = tmp_dir("ref-cap");
+    let film = small_film(&dir, "film.mov");
+    let mut s = session_in(&dir);
+    let id = add(&mut s, &film, "Own")["reference"].as_str().unwrap().to_string();
+    let out = dir.join("fp.json");
+    s.execute("reference.export", json!({"id": id, "path": out.to_string_lossy()})).unwrap();
+    for _ in 0..49 {
+        s.execute("reference.import", json!({"path": out.to_string_lossy()})).unwrap();
+    }
+    assert_eq!(s.execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().len(), 50);
+    let e = s.execute("reference.import", json!({"path": out.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("50"), "{e}");
+    let e = s.execute("reference.add", json!({"path": film.to_string_lossy(), "rights": "Own", "wait": true})).unwrap_err().to_string();
+    assert!(e.contains("50"), "refused before anything is measured: {e}");
+    // ids are never reused, even after a removal
+    s.execute("reference.remove", json!({"id": id})).unwrap();
+    let again = s.execute("reference.import", json!({"path": out.to_string_lossy()})).unwrap();
+    assert_ne!(again["id"], json!(id));
+    // a damaged or hostile file on disk: an empty library, and a later add writes a good one
+    let bad_dir = tmp_dir("ref-damaged");
+    let file = bad_dir.join("edith-references.json");
+    for junk in ["{ not json", "[]", "null", "{\"references\": 5}", "\u{0}\u{1}", &"x".repeat(9 * 1024 * 1024)] {
+        std::fs::write(&file, junk).unwrap();
+        let mut d = session_in(&bad_dir);
+        assert!(d.execute("reference.list", json!({})).unwrap()["references"].as_array().unwrap().is_empty(), "{}", junk.chars().take(20).collect::<String>());
+    }
+    // a file with one good entry, one with a bad fingerprint, one repeated id, one with a hostile id
+    let good = s.execute("reference.get", json!({"id": "r2"})).unwrap();
+    let entry = |id: &str, fp: Value| json!({"id": id, "name": "n", "rights": "r", "addedUnix": 1, "fingerprint": fp});
+    let mut broken = good["fingerprint"].clone();
+    broken["rhythm"]["curve"] = json!([]);
+    let lib = json!({"version": 1, "nextId": 9, "references": [entry("a1", good["fingerprint"].clone()), entry("a2", broken), entry("a1", good["fingerprint"].clone()), entry("../x", good["fingerprint"].clone())]});
+    std::fs::write(&file, lib.to_string()).unwrap();
+    let mut d = session_in(&bad_dir);
+    let refs = d.execute("reference.list", json!({})).unwrap();
+    assert_eq!(refs["references"].as_array().unwrap().len(), 1, "{refs}");
+    assert_eq!(refs["references"][0]["id"], "a1");
+}
+
+#[test]
+fn hostile_library_parameters_are_refused() {
+    let mut s = Session::default();
+    for cmd in ["reference.get", "reference.remove"] {
+        for bad in [json!({}), json!({"id": ""}), json!({"id": 5}), json!({"id": "x".repeat(50)}), json!({"id": "nope"}), json!({"id": null})] {
+            assert!(s.execute(cmd, bad.clone()).is_err(), "{cmd} {bad}");
+        }
+    }
+    for bad in [
+        json!({"id": "r1"}),
+        json!({"id": "r1", "name": ""}),
+        json!({"id": "r1", "name": "x".repeat(500)}),
+        json!({"id": "r1", "name": 4}),
+        json!({"name": "ok"}),
+    ] {
+        assert!(s.execute("reference.rename", bad.clone()).is_err(), "{bad}");
+    }
+    for bad in [json!({}), json!({"path": ""}), json!({"path": "a\u{0}b"}), json!({"path": 3})] {
+        assert!(s.execute("reference.import", bad.clone()).is_err(), "{bad}");
+        assert!(s.execute("reference.export", json!({"id": "r1", "path": bad["path"].clone()})).is_err());
+    }
+}

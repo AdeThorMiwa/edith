@@ -371,10 +371,12 @@ fn camera_name(c: CameraMove) -> &'static str {
 fn motion_of(input: &ReferenceInput) -> Option<MotionShape> {
     let energy = mean(input.pictures.iter().filter_map(|p| p.motion_energy).map(f64::from))?;
     let cams: Vec<CameraMove> = input.pictures.iter().filter_map(|p| p.camera).filter(|c| *c != CameraMove::Unknown).collect();
-    let mut camera = BTreeMap::new();
+    // counted, then divided, so no share can come out a hair over 1 from adding up fractions
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for c in &cams {
-        *camera.entry(camera_name(*c).to_string()).or_insert(0.0f32) += 1.0 / cams.len() as f32;
+        *counts.entry(camera_name(*c).to_string()).or_insert(0) += 1;
     }
+    let camera = counts.into_iter().map(|(k, n)| (k, n as f32 / cams.len() as f32)).collect();
     Some(MotionShape { energy: energy as f32, camera })
 }
 
@@ -456,4 +458,75 @@ pub fn fingerprint(input: &ReferenceInput) -> Result<Fingerprint> {
         motion: motion_of(input),
         sound: input.sound.as_ref().map(|s| sound_of(s, duration)),
     })
+}
+
+impl Fingerprint {
+    /// Whether a fingerprint that came from outside (a file someone shared) is one this build can use:
+    /// every number a real number, every list the length a fingerprint makes it, every share a share.
+    /// A fingerprint made here always passes.
+    pub fn check(&self) -> std::result::Result<(), String> {
+        let bad = |what: &str| Err(format!("not a fingerprint this version can read: {what}"));
+        let fin = |v: f64| v.is_finite();
+        let fin32 = |v: f32| v.is_finite();
+        let share = |v: f32| v.is_finite() && (0.0..=1.0001).contains(&v);
+        if self.version != FINGERPRINT_VERSION {
+            return bad("its version");
+        }
+        if !(fin(self.duration_seconds) && self.duration_seconds > 0.0 && self.duration_seconds <= MAX_SECONDS)
+            || self.name.chars().count() > 120
+            || self.name.chars().any(char::is_control)
+        {
+            return bad("its name or length");
+        }
+        if self.width > 65_536 || self.height > 65_536 || !fin32(self.frame_aspect) {
+            return bad("its size");
+        }
+        let s = &self.shots;
+        if ![s.mean_seconds, s.median_seconds, s.p10_seconds, s.p90_seconds, s.min_seconds, s.max_seconds, s.cuts_per_minute]
+            .iter()
+            .all(|v| fin(*v) && *v >= 0.0)
+            || s.histogram.len() > 6
+        {
+            return bad("its shot lengths");
+        }
+        let r = &self.rhythm;
+        if r.curve.len() != CURVE_POINTS
+            || !r.curve.iter().all(|v| fin32(*v) && *v >= 0.0)
+            || ![r.opening_mean_seconds, r.middle_mean_seconds, r.closing_mean_seconds].iter().flatten().all(|v| fin(*v))
+        {
+            return bad("its rhythm");
+        }
+        if let Some(p) = &self.picture {
+            let numbers = [p.luma_mean, p.contrast, p.saturation, p.sharpness, p.grain, p.active_aspect];
+            let lb = [p.letterbox.top, p.letterbox.bottom, p.letterbox.left, p.letterbox.right];
+            if !numbers.iter().all(|v| fin32(*v)) || !lb.iter().all(|v| share(*v)) || p.colour_temperature.is_some_and(|v| !fin32(v)) {
+                return bad("its picture");
+            }
+            if p.palette.len() > 5 || !p.palette.iter().all(|c| share(c.share) && c.lab.iter().chain(&c.rgb).all(|v| fin32(*v))) {
+                return bad("its palette");
+            }
+            if p.timeline.len() > CURVE_POINTS
+                || !p
+                    .timeline
+                    .iter()
+                    .all(|t| share(t.at) && [t.luma, t.contrast, t.saturation].iter().all(|v| fin32(*v)) && t.colour_temperature.is_none_or(fin32))
+            {
+                return bad("its picture through the film");
+            }
+        }
+        if let Some(m) = &self.motion
+            && (!fin32(m.energy) || m.camera.len() > 8 || !m.camera.iter().all(|(k, v)| k.len() <= 20 && !k.chars().any(char::is_control) && share(*v)))
+        {
+            return bad("its motion");
+        }
+        if let Some(s) = &self.sound
+            && (![s.integrated_lufs, s.loudness_range_lu, s.true_peak_dbtp].iter().flatten().all(|v| fin(*v))
+                || ![s.silence_share, s.speech_share, s.music_share, s.ambience_share].iter().all(|v| share(*v))
+                || s.loudness_curve.len() != CURVE_POINTS
+                || !s.loudness_curve.iter().all(|v| fin32(*v)))
+        {
+            return bad("its sound");
+        }
+        Ok(())
+    }
 }
