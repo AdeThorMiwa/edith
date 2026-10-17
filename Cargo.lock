@@ -2109,6 +2109,7 @@ name = "filmcraft-engine"
 version = "0.7.2"
 dependencies = [
  "edith-ai",
+ "edith-analysis",
  "edith-net",
  "edith-planner",
  "edith-sources",

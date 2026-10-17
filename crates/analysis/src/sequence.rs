@@ -255,6 +255,34 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     sorted.get(rank - 1).copied().unwrap_or(0.0)
 }
 
+/// One shot as the viewer sees it: where it is and which clip is showing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotSpan {
+    /// Ticks.
+    pub start: i64,
+    pub end: i64,
+    pub clip: u64,
+}
+
+/// The shots of the timeline in order (what [`analyze_sequence`] counts), for measuring each.
+pub fn shot_spans(input: &SequenceInput) -> Result<Vec<ShotSpan>> {
+    let total: usize = input.video.iter().map(|t| t.clips.len()).sum();
+    if total > MAX_CLIPS {
+        return Err(AnalysisError::TooManyClips { clips: total });
+    }
+    let video: Vec<Vec<Span>> = input
+        .video
+        .iter()
+        .map(|t| {
+            let mut v: Vec<Span> = t.clips.iter().filter_map(normalise).collect();
+            v.sort_by_key(|c| (c.start, c.end));
+            v
+        })
+        .collect();
+    Ok(shots(&video).into_iter().map(|s| ShotSpan { start: s.start, end: s.end, clip: s.clip.id }).collect())
+}
+
 /// Measures a timeline described as spans; see the module docs for what each number is.
 pub fn analyze_sequence(input: &SequenceInput) -> Result<SequenceStats> {
     let total: usize = input.video.iter().chain(&input.audio).map(|t| t.clips.len()).sum();

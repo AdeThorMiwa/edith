@@ -2,7 +2,7 @@
 
 use filmcraft_time::TICKS_PER_SECOND;
 
-use crate::sequence::{ClipSpan, MAX_CLIPS, NarrationSpan, SequenceInput, TrackSpans, TransitionSpan, analyze_sequence};
+use crate::sequence::{ClipSpan, MAX_CLIPS, NarrationSpan, SequenceInput, ShotSpan, TrackSpans, TransitionSpan, analyze_sequence, shot_spans};
 use crate::{AnalysisError, SequenceStats};
 
 const S: i64 = TICKS_PER_SECOND;
@@ -182,4 +182,17 @@ fn a_long_timeline_of_many_short_shots_is_measured_quickly_and_the_same_every_ti
     let back: SequenceStats = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
     assert_eq!(s, back);
     assert!(serde_json::to_value(&s).unwrap().get("splitCuts").is_some());
+}
+
+#[test]
+fn the_shot_list_is_what_the_counts_count() {
+    let base = track(vec![clip(1, 0.0, 10.0, None)]);
+    let i = input(vec![base, track(vec![clip(3, 4.0, 2.0, None)])], vec![]);
+    let spans = shot_spans(&i).unwrap();
+    assert_eq!(spans.iter().map(|s| (s.clip, s.start / S, s.end / S)).collect::<Vec<_>>(), [(1, 0, 4), (3, 4, 6), (1, 6, 10)]);
+    assert_eq!(spans.len() as u32, run(&i).shots.count);
+    assert_eq!(spans[0], ShotSpan { start: 0, end: 4 * S, clip: 1 });
+    assert!(shot_spans(&SequenceInput::default()).unwrap().is_empty());
+    let many = TrackSpans { clips: vec![clip(1, 0.0, 1.0, None); MAX_CLIPS + 1], transitions: Vec::new() };
+    assert!(shot_spans(&input(vec![many], vec![])).is_err());
 }

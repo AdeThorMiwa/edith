@@ -3877,3 +3877,7 @@
 	Camera move, such as push in or still	カメラの動き(プッシュイン、固定など)
 	Length in seconds	長さ(秒)
 	Write a length in seconds, like 3 or 3.5	長さを秒で入力してください(例: 3 または 3.5)
+	Analyse	分析
+	Get Analysis	分析結果を取得
+	List Analyses	分析の一覧
+	Clear Analyses	分析結果を消去

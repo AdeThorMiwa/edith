@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
 pub mod aaf_omf;
+pub mod analysis;
 pub mod assistant;
 mod assistant_store;
 mod assistant_tools;
@@ -467,6 +468,8 @@ pub struct Session {
     pub pronounce: pronounce::Global,
     /// The saved narrator voices (fork; roadmap F06.4).
     pub narrator: narrator::Presets,
+    /// Cached analysis reports in memory (fork; roadmap F10.5).
+    pub analysis: analysis::Store,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -563,6 +566,7 @@ impl Session {
             hub: Default::default(),
             pronounce: Default::default(),
             narrator: Default::default(),
+            analysis: Default::default(),
         }
     }
 
@@ -1233,6 +1237,8 @@ const MAX_SUBCLIP_CHAIN: usize = 16;
 
 #[cfg(test)]
 mod aaf_omf_tests;
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod animated_image_tests;
 #[cfg(test)]

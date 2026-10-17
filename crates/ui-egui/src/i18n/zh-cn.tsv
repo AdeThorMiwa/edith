@@ -3853,3 +3853,7 @@
 	Camera move, such as push in or still	镜头运动,例如推近或固定
 	Length in seconds	时长(秒)
 	Write a length in seconds, like 3 or 3.5	请以秒为单位输入时长,例如 3 或 3.5
+	Analyse	分析
+	Get Analysis	获取分析结果
+	List Analyses	列出分析结果
+	Clear Analyses	清除分析结果

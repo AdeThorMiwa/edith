@@ -27,7 +27,7 @@ pub mod sequence;
 pub use audio::{AudioBuffer, AudioKind, AudioStats, analyze_audio};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
 pub use motion::{CameraMove, MotionPair, MotionSummary, analyze_motion, summarize};
-pub use sequence::{SequenceInput, SequenceStats, analyze_sequence};
+pub use sequence::{SequenceInput, SequenceStats, ShotSpan, analyze_sequence, shot_spans};
 
 /// Why a measurement could not be made.
 #[derive(Clone, Debug, PartialEq, Eq)]
