@@ -220,10 +220,24 @@ struct MixWork {
     truncated: bool,
 }
 
+/// Measuring the loudness of each lane of a sequence over time (the sound map, F13): the sequence's
+/// sound as the mixer makes it, once per lane with only that lane's clips left in.
+struct SoundWork {
+    project: Arc<Project>,
+    seq: ItemId,
+    provider: crate::media_pool::PoolProvider,
+    rate: u32,
+    frames: i64,
+    truncated: bool,
+    /// The lanes that have clips, and the clips (ids) in each.
+    lanes: Vec<(an::soundmap::Lane, Vec<u64>)>,
+}
+
 enum Work {
     Item(ItemWork),
     Sequence(SeqWork),
     Mix(MixWork),
+    Sound(SoundWork),
 }
 
 pub(crate) struct Plan {
@@ -404,10 +418,75 @@ fn plan_mix(s: &Session, id: ItemId, cmd: &str) -> Result<Plan> {
     })
 }
 
+/// What the loudness of the lanes depends on: the sound's structure, which clip is in which lane, and
+/// the media. A change to the picture leaves a measurement current; tagging a clip does not.
+fn plan_sound(s: &Session, id: ItemId, cmd: &str) -> Result<Plan> {
+    let item = s.project.item(id).ok_or_else(|| bad(cmd, format!("no sequence {}", id.0)))?;
+    let ItemKind::Sequence(q) = &item.kind else { return Err(bad(cmd, format!("“{}” is not a sequence", item.name))) };
+    let rate = q.settings.sample_rate.clamp(8_000, 384_000);
+    let clips = crate::soundmap::lane_clips(s, q);
+    let end = clips.iter().map(|c| c.end).max().unwrap_or(0);
+    let frames = Tick(end).to_units_floor(i64::from(rate));
+    if clips.is_empty() || frames <= 0 {
+        return Err(bad(cmd, format!("“{}” has nothing on its audio tracks to measure", item.name)));
+    }
+    let mut lanes: Vec<(an::soundmap::Lane, Vec<u64>)> = Vec::new();
+    for lane in an::soundmap::Lane::ALL {
+        let ids: Vec<u64> = clips.iter().filter(|c| c.lane == lane).map(|c| c.id).collect();
+        if !ids.is_empty() {
+            lanes.push((lane, ids));
+        }
+    }
+    let mut items: Vec<u64> = q.audio_tracks.iter().flat_map(|t| &t.items).map(|c| c.item.0).collect();
+    items.sort_unstable();
+    items.dedup();
+    let fingerprints: Vec<String> = items.iter().filter_map(|i| s.project.resolve_media(ItemId(*i)).map(|(_, m, _)| media_fingerprint(s, m, false))).collect();
+    let key = format!(
+        "sound-{}-{}",
+        hash128(&[
+            serde_json::to_string(&(&q.audio_tracks, &q.submix_tracks, q.master_volume_db, &q.master_effects, &q.master_mixer)).unwrap_or_default().as_bytes(),
+            serde_json::to_string(&lanes).unwrap_or_default().as_bytes(),
+            fingerprints.join(",").as_bytes(),
+            &rate.to_le_bytes(),
+            &an::soundmap::SOUNDMAP_VERSION.to_le_bytes(),
+        ]),
+        version_tag()
+    );
+    let limit = i64::from(rate) * MAX_MIX_SECONDS;
+    let provider = s.media.full_res_provider(s.project.clone(), s.services.clone());
+    Ok(Plan {
+        key,
+        kind: "sound",
+        target: id.0,
+        name: item.name.clone(),
+        params: json!({}),
+        work: Work::Sound(SoundWork { project: s.project.clone(), seq: id, provider, rate, frames: frames.min(limit), truncated: frames > limit, lanes }),
+    })
+}
+
+/// The measurement of a sequence's lanes, if one has been made and nothing it depends on has changed.
+pub(crate) fn measured_sound(s: &Session, id: ItemId) -> Option<Value> {
+    let key = plan_sound(s, id, "sound.map").ok()?.key;
+    Cache::of(s).read(&key)
+}
+
+/// What analysing a media item found, if it has been analysed with the usual number of samples.
+pub(crate) fn item_report_for(s: &Session, id: ItemId) -> Option<Value> {
+    let key = plan_item(s, id, DEFAULT_SAMPLES, "sound.map").ok()?.key;
+    Cache::of(s).read(&key)
+}
+
 /// The target of a command: `item` (a project item id) or `sequence` (`true` for the open one, or an id).
 pub(crate) fn plan(s: &Session, p: &Value, cmd: &str) -> Result<Plan> {
     if let Some(item) = u64_p(p, "item") {
         return plan_item(s, ItemId(item), samples_param(p), cmd);
+    }
+    if bool_p(p, "sound") == Some(true) {
+        let id = match p.get("sequence").and_then(Value::as_u64) {
+            Some(id) => ItemId(id),
+            None => s.state.active_sequence.ok_or(EngineError::NoSequence)?,
+        };
+        return plan_sound(s, id, cmd);
     }
     if bool_p(p, "mix") == Some(true) {
         let id = match p.get("sequence").and_then(Value::as_u64) {
@@ -707,6 +786,46 @@ fn mix_report(w: &MixWork, prog: &filmcraft_export::Progress) -> std::result::Re
     Ok(json!({"mix": to_value(&mix), "analysedSeconds": w.frames as f64 / f64::from(w.rate), "truncated": w.truncated, "sampleRate": w.rate}))
 }
 
+/// The loudness of each lane over time: one pass of the mixer per lane, with only its clips left in.
+fn sound_report(w: &SoundWork, prog: &filmcraft_export::Progress) -> std::result::Result<Value, String> {
+    let Some(q) = w.project.sequence(w.seq) else { return Err("the sequence is gone".into()) };
+    let rate = i64::from(w.rate);
+    let seconds = ((w.frames + rate - 1) / rate).max(1);
+    prog.total.store((seconds as u64).saturating_mul(w.lanes.len().max(1) as u64), Ordering::Relaxed);
+    let mut levels = serde_json::Map::new();
+    for (lane, ids) in &w.lanes {
+        let mut only = q.clone();
+        for t in &mut only.audio_tracks {
+            t.items.retain(|c| ids.contains(&c.id.0));
+        }
+        let mut meter = an::soundmap::LevelMeter::new(w.rate).map_err(|e| e.to_string())?;
+        let mut pos = 0i64;
+        let mut inter: Vec<f32> = Vec::new();
+        while pos < w.frames {
+            if prog.cancel.load(Ordering::Relaxed) {
+                return Err("stopped".into());
+            }
+            *lock(&prog.status) = format!("{}: {} of {} s", lane.label(), pos / rate, w.frames / rate);
+            let n = (w.frames - pos).min(rate) as usize;
+            let buf = filmcraft_render::audio::mix_sequence(&w.project, &only, pos, n, &w.provider);
+            inter.clear();
+            for i in 0..buf.frames() {
+                for c in 0..2 {
+                    inter.push(buf.channels.get(c).or_else(|| buf.channels.first()).and_then(|ch| ch.get(i)).copied().unwrap_or(0.0));
+                }
+            }
+            meter.push(&inter);
+            pos += n as i64;
+            prog.done.fetch_add(1, Ordering::Relaxed);
+        }
+        let readings: Vec<Value> = meter.finish().into_iter().map(|v| v.map_or(Value::Null, |x| json!((f64::from(x) * 10.0).round() / 10.0))).collect();
+        levels.insert(lane.name().to_string(), Value::Array(readings));
+    }
+    Ok(
+        json!({"levels": levels, "hopSeconds": an::soundmap::HOP_SECONDS, "analysedSeconds": w.frames as f64 / f64::from(w.rate), "truncated": w.truncated, "sampleRate": w.rate}),
+    )
+}
+
 // ---------------------------------------------------------------------------- commands
 
 fn header(plan: &Plan) -> Value {
@@ -742,6 +861,7 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             Work::Item(w) => item_report(w, &prog),
             Work::Sequence(w) => sequence_report(w, &prog),
             Work::Mix(w) => mix_report(w, &prog),
+            Work::Sound(w) => sound_report(w, &prog),
         };
         let secs = t0.elapsed().as_secs_f64();
         let done = prog.done.load(Ordering::Relaxed);
@@ -793,6 +913,7 @@ fn current_key(s: &Session, header: &Value) -> Option<String> {
     match header["kind"].as_str()? {
         "item" => plan_item(s, ItemId(id), usize::try_from(header["params"]["samples"].as_u64()?).ok()?.clamp(1, MAX_SAMPLES), cmd).ok().map(|p| p.key),
         "mix" => plan_mix(s, ItemId(id), cmd).ok().map(|p| p.key),
+        "sound" => plan_sound(s, ItemId(id), cmd).ok().map(|p| p.key),
         "sequence" => {
             let shots = header["params"]["shots"].as_bool().unwrap_or(true);
             let max = usize::try_from(header["params"]["maxShots"].as_u64().unwrap_or(DEFAULT_SHOTS as u64)).ok()?.clamp(1, MAX_SHOTS);
@@ -942,6 +1063,8 @@ pub(crate) fn coach_report(s: &Session, p: &Value) -> Result<Value> {
     let targets = coach_targets(s);
     let mix = measured_mix(s, id);
     let found = an::coach::findings(&input, &targets, mix.as_ref()).map_err(|e| bad(cmd, e.to_string()))?;
+    // what the sound map finds (a missing ambience bed, dead air…) is part of what the coach says
+    let found = an::coach::combine(found, crate::soundmap::sound_findings(s, id));
     let shots = an::shot_spans(&input).map(|v| v.len()).unwrap_or(0);
     Ok(json!({
         "sequence": {"id": id.0, "name": item.name},
@@ -969,7 +1092,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "analysis.run",
             "Analyse",
-            r#"{"item":id | "sequence":true|id | "mix":true,"samples":n=60,"shots":bool=true,"maxShots":n=300,"wait":bool=false,"force":bool=false}"#,
+            r#"{"item":id | "sequence":true|id | "mix":true | "sound":true,"samples":n=60,"shots":bool=true,"maxShots":n=300,"wait":bool=false,"force":bool=false}"#,
             run,
         ),
         spec("analysis.get", "Get Analysis", r#"{"item":id | "sequence":true|id | "key":str}"#, get),

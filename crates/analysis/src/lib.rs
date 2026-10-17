@@ -30,6 +30,7 @@ pub mod fingerprint;
 pub mod image;
 pub mod motion;
 pub mod sequence;
+pub mod soundmap;
 
 pub use audio::{AudioBuffer, AudioKind, AudioStats, Mix, MixMeter, analyze_audio};
 pub use coach::{Finding, Severity, Targets, findings};
@@ -91,5 +92,7 @@ mod fingerprint_tests;
 mod motion_tests;
 #[cfg(test)]
 mod sequence_tests;
+#[cfg(test)]
+mod soundmap_tests;
 #[cfg(test)]
 mod tests;

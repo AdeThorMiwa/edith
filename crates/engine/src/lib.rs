@@ -66,6 +66,7 @@ pub mod sequence_tools;
 pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
+pub mod soundmap;
 pub mod source_monitor;
 pub mod sync;
 pub mod transcript;
@@ -1366,6 +1367,8 @@ mod sequence_tools_tests;
 mod settings_tests;
 #[cfg(test)]
 mod shortcuts_tests;
+#[cfg(test)]
+mod soundmap_tests;
 #[cfg(test)]
 mod split_edit_ripple_trim_tests;
 #[cfg(test)]

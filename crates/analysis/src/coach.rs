@@ -37,7 +37,7 @@ use crate::audio::Mix;
 use crate::sequence::{SequenceInput, SequenceStats, ShotSpan, analyze_sequence, shot_spans};
 
 /// Bumped whenever a rule, a threshold or a wording could change a finding.
-pub const COACH_VERSION: u32 = 1;
+pub const COACH_VERSION: u32 = 2;
 /// The most findings returned.
 pub const MAX_FINDINGS: usize = 200;
 /// The most of one kind before the rest are summed up in one line.
@@ -68,6 +68,10 @@ pub enum Kind {
     FewSplitCuts,
     ManyDissolves,
     MostlySilent,
+    NoAmbience,
+    AmbienceGap,
+    DeadAir,
+    RoomToneJump,
     WideLoudness,
     LoudnessOffTarget,
     PeakTooHigh,
@@ -88,6 +92,10 @@ impl Kind {
             Kind::FewSplitCuts => "fewSplitCuts",
             Kind::ManyDissolves => "manyDissolves",
             Kind::MostlySilent => "mostlySilent",
+            Kind::NoAmbience => "noAmbience",
+            Kind::AmbienceGap => "ambienceGap",
+            Kind::DeadAir => "deadAir",
+            Kind::RoomToneJump => "roomToneJump",
             Kind::WideLoudness => "wideLoudness",
             Kind::LoudnessOffTarget => "loudnessOffTarget",
             Kind::PeakTooHigh => "peakTooHigh",
@@ -163,12 +171,12 @@ fn pace_target(v: Option<f64>) -> Option<f64> {
     within(v, 20.0, 500.0)
 }
 
-fn secs(ticks: i64) -> f64 {
+pub(crate) fn secs(ticks: i64) -> f64 {
     ticks as f64 / TICKS_PER_SECOND as f64
 }
 
 /// `0.8 s`, `6 s`, `45 s`: a length for a sentence.
-fn len_text(seconds: f64) -> String {
+pub(crate) fn len_text(seconds: f64) -> String {
     if seconds < 10.0 {
         let tenths = (seconds * 10.0).round() / 10.0;
         if tenths.fract() == 0.0 { format!("{tenths:.0} s") } else { format!("{tenths:.1} s") }
@@ -178,12 +186,21 @@ fn len_text(seconds: f64) -> String {
 }
 
 /// `2:41`, `1:05:00`: a place in the timeline for a sentence.
-fn clock(ticks: i64) -> String {
+pub(crate) fn clock(ticks: i64) -> String {
     let n = secs(ticks.max(0)).floor() as u64;
     if n >= 3600 { format!("{}:{:02}:{:02}", n / 3600, (n / 60) % 60, n % 60) } else { format!("{}:{:02}", n / 60, n % 60) }
 }
 
-fn finding(kind: Kind, severity: Severity, start: i64, end: Option<i64>, title: String, detail: String, idea: &str, numbers: &[(&str, f64)]) -> Finding {
+pub(crate) fn finding(
+    kind: Kind,
+    severity: Severity,
+    start: i64,
+    end: Option<i64>,
+    title: String,
+    detail: String,
+    idea: &str,
+    numbers: &[(&str, f64)],
+) -> Finding {
     Finding {
         id: format!("{}@{start}", kind.name()),
         kind,
@@ -535,7 +552,7 @@ fn audio_rules(a: &Mix, targets: &Targets, out: &mut Vec<Finding>) {
 }
 
 /// Keeps at most [`MAX_PER_KIND`] of a kind (the rest summed up in one line), the worst first.
-fn finish(mut all: Vec<Finding>) -> Vec<Finding> {
+pub(crate) fn finish(mut all: Vec<Finding>) -> Vec<Finding> {
     all.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.start.cmp(&b.start)).then(a.kind.cmp(&b.kind)));
     let mut seen: BTreeMap<Kind, usize> = BTreeMap::new();
     let mut omitted: BTreeMap<Kind, (usize, Severity, i64)> = BTreeMap::new();
@@ -568,6 +585,12 @@ fn finish(mut all: Vec<Finding>) -> Vec<Finding> {
     out.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.start.cmp(&b.start)).then(a.kind.cmp(&b.kind)));
     out.truncate(MAX_FINDINGS);
     out
+}
+
+/// Two lists of findings (the coach's and the sound map's, say) as one: the worst first, then in time order.
+pub fn combine(mut a: Vec<Finding>, b: Vec<Finding>) -> Vec<Finding> {
+    a.extend(b);
+    finish(a)
 }
 
 /// What is worth telling the editor about this edit, the worst first and then in time order. `audio`
