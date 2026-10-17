@@ -549,3 +549,66 @@ fn a_damaged_adoption_in_a_project_is_ignored_and_the_coach_carries_on() {
         assert!(c["targets"]["reference"].is_null(), "{junk}");
     }
 }
+
+fn tool(s: &Session, name: &str, input: Value) -> edith_ai::ToolOutput {
+    s.run_assistant_tool(name, &input)
+}
+
+#[test]
+fn the_assistant_can_read_the_library_one_reference_and_a_comparison_and_cannot_change_any_of_it() {
+    let tools = crate::assistant_tools::tools();
+    for name in ["reference_list", "reference_get", "reference_compare"] {
+        assert!(tools.iter().any(|d| d.spec.name == name && d.read_only), "{name}");
+    }
+    let dir = tmp_dir("ref-tools");
+    let (mut s, id) = with_reference(
+        &dir,
+        &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48), (DemoScene::Forest, 48)],
+        true,
+        crate::analysis_tests::edit_of(&[6.0, 6.0, 6.0, 6.0, 6.0, 6.0]),
+    );
+    let rev = s.revision;
+    // list
+    let list = tool(&s, "reference_list", json!({})).content;
+    assert!(list.contains(&id) && list.contains("“Slow film”") && list.contains("rights note: Own export") && !list.contains("adopted"), "{list}");
+    assert!(tool(&Session::default(), "reference_list", json!({})).content.contains("There are no references yet"));
+    // get: by id, and the readings that go with it
+    let got = tool(&s, "reference_get", json!({"id": id}));
+    assert!(!got.is_error, "{}", got.content);
+    for want in ["“Slow film”", "Shots: 3 in all", "Pace by thirds", "Picture: brightness", "Sound: loudness", "What the numbers suggest", "cutting"] {
+        assert!(got.content.contains(want), "{want} in {}", got.content);
+    }
+    assert!(tool(&s, "reference_get", json!({})).is_error, "nothing adopted and no id");
+    assert!(tool(&s, "reference_get", json!({"id": "nope"})).is_error);
+    // compare names what differs and what could not be compared
+    let c = tool(&s, "reference_compare", json!({"id": id}));
+    assert!(!c.is_error, "{}", c.content);
+    assert!(c.content.contains("“Coach test” against the reference “Slow film”") && c.content.contains("[higher] Average shot: yours 6.0 s"), "{}", c.content);
+    assert!(c.content.contains("Not compared:") && c.content.contains("analysis_run with sequence true"), "{}", c.content);
+    assert!(c.content.contains("What the reference's numbers suggest"), "{}", c.content);
+    // once adopted the others say so, and the default reference is the adopted one
+    s.execute("reference.adopt", json!({"id": id})).unwrap();
+    let rev_after_adopt = s.revision;
+    assert!(tool(&s, "reference_list", json!({})).content.contains("(adopted as this project's target)"));
+    assert!(tool(&s, "reference_get", json!({})).content.contains("“Slow film”"));
+    assert!(tool(&s, "reference_compare", json!({})).content.contains("adopted as this project's target"));
+    // reading changes nothing, and hostile input is an error or text, never a panic
+    assert_eq!(s.revision, rev_after_adopt);
+    assert!(rev_after_adopt >= rev);
+    for name in ["reference_list", "reference_get", "reference_compare"] {
+        for odd in [
+            json!(null),
+            json!([]),
+            json!("x"),
+            json!(7),
+            json!({"id": 5}),
+            json!({"id": ""}),
+            json!({"sequence": "x"}),
+            json!({"sequence": -1}),
+            json!({"id": "r1", "sequence": 1e30}),
+        ] {
+            let _ = tool(&s, name, odd);
+        }
+    }
+    assert!(tool(&Session::default(), "reference_compare", json!({"id": "r1"})).is_error);
+}

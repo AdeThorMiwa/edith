@@ -281,3 +281,60 @@ fn a_fingerprint_made_here_passes_the_check_and_damaged_ones_do_not() {
         assert!(f.check().is_err(), "{what} should be refused");
     }
 }
+
+#[test]
+fn readings_say_what_the_numbers_suggest_and_only_what_is_there() {
+    // a patient film: 14 s shots, mostly silent, still camera, dark and widescreen
+    let mut f = film(1200.0, every(1200.0, 14.0));
+    f.pictures = (0..30)
+        .map(|i| {
+            let mut stats = solid([40, 36, 30]);
+            stats.active_aspect = 2.39;
+            stats.grain = 0.03;
+            PictureSample { time_seconds: f64::from(i) * 40.0, stats, camera: Some(CameraMove::Static), motion_energy: Some(0.01) }
+        })
+        .collect();
+    f.sound = Some(SoundInput {
+        mix: Mix { duration_seconds: 1200.0, integrated_lufs: Some(-25.0), loudness_range_lu: Some(15.0), true_peak_dbtp: Some(-3.0), silence_share: 0.35 },
+        segments: (0..40)
+            .map(|i| SoundSegment { start_seconds: f64::from(i) * 30.0, duration_seconds: 30.0, kind: AudioKind::Ambience, loudness_lufs: Some(-25.0) })
+            .collect(),
+    });
+    let r = fingerprint(&f).unwrap().readings();
+    let all = r.join(" ");
+    for want in [
+        "a patient pace",
+        "holds steady",
+        "dark",
+        "visibly grainy",
+        "widescreen, about 2.39:1",
+        "mostly still",
+        "About 35% of it is silent",
+        "atmosphere and ambience",
+        "dynamics are wide",
+        "It is quiet",
+        "contemplative",
+    ] {
+        assert!(all.contains(want), "{want} not in {r:?}");
+    }
+    // a fast film: 1.5 s shots
+    let fast = fingerprint(&film(600.0, every(600.0, 1.5))).unwrap().readings();
+    assert!(fast[0].contains("rapid, energetic cutting"), "{fast:?}");
+    // with no picture, sound or motion, nothing is said about them
+    let bare = fingerprint(&film(600.0, every(600.0, 4.0))).unwrap().readings();
+    assert!(bare.iter().all(|s| !s.contains("picture") && !s.contains("sound") && !s.contains("silent") && !s.contains("camera")), "{bare:?}");
+    assert!(bare[0].contains("brisk cutting"), "{bare:?}");
+    // one shot has no pace to read; the readings never panic on odd fingerprints
+    let one = fingerprint(&film(10.0, vec![])).unwrap().readings();
+    assert!(one.iter().all(|s| !s.contains("Shots average")), "{one:?}");
+    // a pace that moves
+    let mut moving: Vec<f64> = (1..30).map(|i| f64::from(i) * 4.0).collect();
+    moving.extend((1..40).map(|i| 120.0 + f64::from(i) * 12.0));
+    let m = fingerprint(&film(600.0, moving)).unwrap().readings();
+    assert!(m.iter().any(|s| s.contains("slows toward the end")), "{m:?}");
+    // bursts
+    let mut burst: Vec<f64> = (1..9).map(|i| 300.0 + f64::from(i) * 2.0).collect();
+    burst.extend((1..5).map(|i| f64::from(i) * 60.0));
+    let b = fingerprint(&film(600.0, burst)).unwrap().readings();
+    assert!(b.iter().any(|s| s.contains("bursts")), "{b:?}");
+}

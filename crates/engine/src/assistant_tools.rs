@@ -41,6 +41,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     let mut all = base_tools();
     // measurements and the coach's findings (fork; roadmap F11.2b)
     all.extend(crate::analysis_tools::tools());
+    // references (fork; roadmap F12.5)
+    all.extend(crate::reference::tools());
     all
 }
 

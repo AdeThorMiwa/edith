@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "6");
+        assert_eq!(p.version, "7");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();
@@ -153,6 +153,7 @@ mod tests {
         assert!(ask.contains("analysis_get"), "Ask is told it has the measurements too");
         assert!(ask.contains("`show`") && ask.contains("never type numbers into it"), "both modes know about views");
         assert!(coach.contains("Show where it happens"));
+        assert!(ask.contains("reference_compare") && ask.contains("not something to copy"), "both modes know about references");
     }
 
     #[test]

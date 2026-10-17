@@ -315,7 +315,11 @@ fn context_blocks_are_sent_in_the_user_message() {
     let req = &model.requests()[0];
     assert!(req.messages[0].text().contains("[selection]") && req.messages[0].text().contains("#29"));
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
-    assert_eq!(req.tools.len(), 10, "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, and show");
+    assert_eq!(
+        req.tools.len(),
+        13,
+        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, and the three reference tools"
+    );
     assert_eq!(req.model, "claude-haiku-5-5");
 }
 
@@ -500,7 +504,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "6");
+    assert_eq!(trace.meta.prompt_version, "7");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));
@@ -870,7 +874,7 @@ fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool(
     // without the frame chip it works, and the tool list leaves the frame tool out
     s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
-    assert_eq!(model.requests()[0].tools.len(), 9, "every tool but frame_view");
+    assert_eq!(model.requests()[0].tools.len(), 12, "every tool but frame_view");
     // and the engine would refuse to run it anyway if asked
     let out = s.run_assistant_tool("frame_view", &json!({}));
     assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");

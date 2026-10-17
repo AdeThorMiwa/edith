@@ -530,3 +530,115 @@ impl Fingerprint {
         Ok(())
     }
 }
+
+impl Fingerprint {
+    /// What the numbers suggest, in plain sentences: how brisk or patient the cutting is, how the pace
+    /// moves, how the picture and the sound feel. Each sentence rests on numbers in the fingerprint and
+    /// is only said when they are there; the thresholds are rules of thumb, so the wording says what a
+    /// number *reads as* rather than what the film is.
+    pub fn readings(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let secs = |v: f64| if v < 10.0 { format!("{v:.1} s") } else { format!("{v:.0} s") };
+        let mean = self.shots.mean_seconds;
+        if self.shots.count >= 2 && mean.is_finite() && mean > 0.0 {
+            let feel = match mean {
+                m if m < 2.5 => "rapid, energetic cutting",
+                m if m < 5.0 => "brisk cutting",
+                m if m < 9.0 => "a moderate pace",
+                m if m < 16.0 => "a patient pace",
+                _ => "slow, contemplative cutting",
+            };
+            out.push(format!("Shots average {} (median {}): {feel}.", secs(mean), secs(self.shots.median_seconds)));
+            if self.shots.p90_seconds > 2.5 * self.shots.median_seconds.max(0.1) {
+                out.push(format!(
+                    "It holds some shots long: the longest tenth run {} or more, against a median of {}.",
+                    secs(self.shots.p90_seconds),
+                    secs(self.shots.median_seconds)
+                ));
+            }
+        }
+        let r = &self.rhythm;
+        match (r.arc, r.opening_mean_seconds, r.closing_mean_seconds) {
+            (PaceArc::Quickening, Some(o), Some(c)) => {
+                out.push(format!("The pace quickens toward the end: shots average {} in the opening third and {} in the last.", secs(o), secs(c)))
+            }
+            (PaceArc::Slowing, Some(o), Some(c)) => {
+                out.push(format!("The pace slows toward the end: shots average {} in the opening third and {} in the last.", secs(o), secs(c)))
+            }
+            (PaceArc::Steady, ..) if self.shots.count >= 6 => out.push("The pace holds steady from start to finish.".to_string()),
+            _ => {}
+        }
+        let curve_mean = r.curve.iter().map(|v| f64::from(*v)).sum::<f64>() / CURVE_POINTS as f64;
+        let curve_max = r.curve.iter().map(|v| f64::from(*v)).fold(0.0, f64::max);
+        if curve_mean > 0.5 && curve_max > 2.5 * curve_mean {
+            out.push(format!("Cutting comes in bursts: up to {curve_max:.0} cuts a minute at its fastest against {curve_mean:.0} on average."));
+        }
+        if let Some(p) = &self.picture {
+            let tone = match p.luma_mean {
+                l if l < 0.3 => "dark",
+                l if l > 0.65 => "bright",
+                _ => "mid-toned",
+            };
+            let contrast = match p.contrast {
+                c if c < 0.4 => "soft, low contrast",
+                c if c > 0.7 => "hard, high contrast",
+                _ => "moderate contrast",
+            };
+            let colour = match p.saturation {
+                s if s < 0.15 => "muted, near-monochrome colour",
+                s if s > 0.45 => "vivid colour",
+                _ => "natural colour",
+            };
+            let warmth = p.colour_temperature.map(|k| match k {
+                k if k < 4800.0 => ", warm",
+                k if k > 7500.0 => ", cool",
+                _ => ", neutral in warmth",
+            });
+            out.push(format!("The picture is {tone}, with {contrast} and {colour}{}.", warmth.unwrap_or("")));
+            if p.grain > 0.02 {
+                out.push("The picture is visibly grainy.".to_string());
+            }
+            if p.active_aspect > 2.0 {
+                out.push(format!("It is framed widescreen, about {:.2}:1.", p.active_aspect));
+            }
+        }
+        if let Some(m) = &self.motion {
+            let share = |k: &str| f64::from(m.camera.get(k).copied().unwrap_or(0.0));
+            if share("static") > 0.6 {
+                out.push("The camera is mostly still.".to_string());
+            } else if share("pan") + share("tilt") + share("handheld") + share("zoomIn") + share("zoomOut") > 0.5 {
+                out.push("The camera moves a lot.".to_string());
+            }
+        }
+        if let Some(s) = &self.sound {
+            if s.silence_share > 0.25 {
+                out.push(format!("About {:.0}% of it is silent.", f64::from(s.silence_share) * 100.0));
+            }
+            if s.speech_share > 0.6 {
+                out.push("The sound is led by speech.".to_string());
+            } else if s.music_share > 0.5 {
+                out.push("The sound is led by music.".to_string());
+            } else if s.ambience_share > 0.5 {
+                out.push("The sound is mostly atmosphere and ambience.".to_string());
+            }
+            if let Some(range) = s.loudness_range_lu {
+                if range > 12.0 {
+                    out.push(format!("The dynamics are wide ({range:.0} LU between quiet and loud)."));
+                } else if range < 6.0 {
+                    out.push(format!("The loudness is even ({range:.0} LU range)."));
+                }
+            }
+            if let Some(l) = s.integrated_lufs {
+                if l > -12.0 {
+                    out.push(format!("It is loud ({l:.0} LUFS)."));
+                } else if l < -23.0 {
+                    out.push(format!("It is quiet ({l:.0} LUFS)."));
+                }
+            }
+            if mean >= 9.0 && s.silence_share > 0.25 {
+                out.push("Long shots with a lot of silence read as contemplative.".to_string());
+            }
+        }
+        out
+    }
+}

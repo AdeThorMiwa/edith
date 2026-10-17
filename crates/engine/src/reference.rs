@@ -473,7 +473,7 @@ fn summary(r: &Reference) -> Value {
     })
 }
 
-fn all(s: &Session) -> Vec<Reference> {
+pub(crate) fn all(s: &Session) -> Vec<Reference> {
     with_library(&s.reference.library, file_path(s).as_deref(), |l| l.references.clone())
 }
 
@@ -584,7 +584,7 @@ pub(crate) fn adopted(p: &Project) -> Option<Adopted> {
     Some(Adopted { name: clean_text(&a.name, MAX_NAME), rights: clean_text(&a.rights, MAX_RIGHTS), ..a })
 }
 
-fn sequence_of(s: &Session, p: &Value, cmd: &str) -> Result<ItemId> {
+pub(crate) fn sequence_of(s: &Session, p: &Value, cmd: &str) -> Result<ItemId> {
     match p.get("sequence").filter(|v| !v.is_null() && **v != json!(true)) {
         Some(v) => v.as_u64().map(ItemId).ok_or_else(|| bad(cmd, "`sequence` must be a sequence's item id")),
         None => s.state.active_sequence.ok_or(EngineError::NoSequence),
@@ -640,7 +640,7 @@ pub(crate) fn fingerprint_of_sequence(s: &Session, id: ItemId, cmd: &str) -> Res
     .map_err(|e| bad(cmd, e.to_string()))
 }
 
-fn reference_for(s: &Session, p: &Value, cmd: &str) -> Result<(String, String, an::Fingerprint)> {
+pub(crate) fn reference_for(s: &Session, p: &Value, cmd: &str) -> Result<(String, String, an::Fingerprint)> {
     match str_p(p, "id").filter(|i| !i.is_empty()) {
         Some(id) => {
             let r = find(s, id).ok_or_else(|| bad(cmd, format!("there is no reference {id:?}; `reference.list` shows what there is")))?;
@@ -749,5 +749,175 @@ pub fn commands() -> Vec<CommandSpec> {
             run: adopt_command,
             journal: true,
         },
+    ]
+}
+
+// ---------------------------------------------------------------------------- the assistant's tools
+
+fn len_text(seconds: f64) -> String {
+    if seconds < 10.0 { format!("{seconds:.1} s") } else { format!("{seconds:.0} s") }
+}
+
+/// A fingerprint in words and numbers, with what the numbers suggest.
+pub(crate) fn fingerprint_text(name: &str, id: &str, rights: &str, f: &an::Fingerprint) -> String {
+    let sh = &f.shots;
+    let mut out = format!("“{name}” (reference {id}; rights note: {rights}), {} long, {}×{}.\n", clock(f.duration_seconds), f.width, f.height);
+    out.push_str(&format!(
+        "Shots: {} in all; mean {}, median {}, 10th to 90th percentile {} to {}, shortest {}, longest {}; {:.1} cuts a minute.\n",
+        sh.count,
+        len_text(sh.mean_seconds),
+        len_text(sh.median_seconds),
+        len_text(sh.p10_seconds),
+        len_text(sh.p90_seconds),
+        len_text(sh.min_seconds),
+        len_text(sh.max_seconds),
+        sh.cuts_per_minute
+    ));
+    let r = &f.rhythm;
+    if let (Some(o), Some(m), Some(c)) = (r.opening_mean_seconds, r.middle_mean_seconds, r.closing_mean_seconds) {
+        out.push_str(&format!("Pace by thirds (mean shot): opening {}, middle {}, closing {}.\n", len_text(o), len_text(m), len_text(c)));
+    }
+    if let Some(p) = &f.picture {
+        out.push_str(&format!(
+            "Picture: brightness {:.2}, contrast {:.2}, saturation {:.2}, grain {:.3}{}; inside the bars the frame is {:.2}:1.\n",
+            p.luma_mean,
+            p.contrast,
+            p.saturation,
+            p.grain,
+            p.colour_temperature.map_or(String::new(), |k| format!(", warmth {k:.0} K")),
+            p.active_aspect
+        ));
+    }
+    if let Some(m) = &f.motion {
+        let cams: Vec<String> = m.camera.iter().map(|(k, v)| format!("{k} {:.0}%", f64::from(*v) * 100.0)).collect();
+        out.push_str(&format!("Motion: {:.3} between frames on average; camera {}.\n", m.energy, cams.join(", ")));
+    }
+    if let Some(sd) = &f.sound {
+        out.push_str(&format!(
+            "Sound: loudness {} LUFS, range {} LU, true peak {} dBTP, {:.0}% silent; {:.0}% sounds like speech, {:.0}% music, {:.0}% ambience.\n",
+            sd.integrated_lufs.map_or("?".into(), |v| format!("{v:.1}")),
+            sd.loudness_range_lu.map_or("?".into(), |v| format!("{v:.1}")),
+            sd.true_peak_dbtp.map_or("?".into(), |v| format!("{v:.1}")),
+            f64::from(sd.silence_share) * 100.0,
+            f64::from(sd.speech_share) * 100.0,
+            f64::from(sd.music_share) * 100.0,
+            f64::from(sd.ambience_share) * 100.0
+        ));
+    }
+    let readings = f.readings();
+    if !readings.is_empty() {
+        out.push_str("What the numbers suggest (rules of thumb, not verdicts):\n");
+        for line in readings {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    out
+}
+
+fn tool_out(r: Result<String>) -> edith_ai::ToolOutput {
+    match r {
+        Ok(t) => edith_ai::ToolOutput::ok(t),
+        Err(e) => edith_ai::ToolOutput::error(e.to_string()),
+    }
+}
+
+fn reference_list_tool(s: &Session, _p: &Value) -> edith_ai::ToolOutput {
+    let refs = all(s);
+    let adopted_id = adopted(&s.project).map(|a| a.id);
+    if refs.is_empty() {
+        return edith_ai::ToolOutput::ok(
+            "There are no references yet. The person adds one from a film file they have the right to use (reference.add); nothing about its footage is kept, only numbers.",
+        );
+    }
+    let mut out = String::new();
+    for r in &refs {
+        let f = &r.fingerprint;
+        out.push_str(&format!(
+            "- {} “{}”{}: {} long, shots average {}, {:.1} cuts a minute{}; rights note: {}\n",
+            r.id,
+            r.name,
+            if adopted_id.as_deref() == Some(r.id.as_str()) { " (adopted as this project's target)" } else { "" },
+            clock(f.duration_seconds),
+            len_text(f.shots.mean_seconds),
+            f.shots.cuts_per_minute,
+            f.sound.as_ref().and_then(|s| s.integrated_lufs).map_or(String::new(), |l| format!(", {l:.0} LUFS")),
+            r.rights
+        ));
+    }
+    edith_ai::ToolOutput::ok(out)
+}
+
+fn reference_get_tool(s: &Session, p: &Value) -> edith_ai::ToolOutput {
+    let params = if p.is_object() { p.clone() } else { json!({}) };
+    tool_out(reference_for(s, &params, "reference_get").map(|(id, name, fp)| {
+        let rights = find(s, &id).map_or_else(|| adopted(&s.project).map(|a| a.rights).unwrap_or_default(), |r| r.rights);
+        fingerprint_text(&name, &id, &rights, &fp)
+    }))
+}
+
+fn reference_compare_tool(s: &Session, p: &Value) -> edith_ai::ToolOutput {
+    let params = if p.is_object() { p.clone() } else { json!({}) };
+    tool_out((|| -> Result<String> {
+        let cmd = "reference_compare";
+        let (id, name, theirs) = reference_for(s, &params, cmd)?;
+        let seq = sequence_of(s, &params, cmd)?;
+        let yours = fingerprint_of_sequence(s, seq, cmd)?;
+        let c = an::compare(&yours, &theirs);
+        let seq_name = s.project.item(seq).map(|i| i.name.clone()).unwrap_or_default();
+        let adopted_now = adopted(&s.project).is_some_and(|a| a.id == id);
+        let mut out = format!(
+            "“{seq_name}” against the reference “{name}” ({id}{}): {} of {} rows are close, {} differ.\n",
+            if adopted_now { ", adopted as this project's target" } else { "" },
+            c.close,
+            c.rows.len(),
+            c.differ
+        );
+        for r in &c.rows {
+            let mark = match r.verdict {
+                an::Verdict::Close => "close",
+                an::Verdict::Higher => "higher",
+                an::Verdict::Lower => "lower",
+                an::Verdict::Different => "different",
+            };
+            out.push_str(&format!("- [{mark}] {}\n", r.words));
+        }
+        if !c.missing.is_empty() {
+            out.push_str(&format!("Not compared: {}.\n", c.missing.join("; ")));
+            out.push_str(
+                "analysis_run with sequence true looks at each shot (for the picture rows) and with mix true measures the sound; then compare again.\n",
+            );
+        }
+        let readings = theirs.readings();
+        if !readings.is_empty() {
+            out.push_str("What the reference's numbers suggest:\n");
+            for line in readings.iter().take(8) {
+                out.push_str(&format!("- {line}\n"));
+            }
+        }
+        Ok(out)
+    })())
+}
+
+pub(crate) fn tools() -> Vec<crate::assistant_tools::ToolDef> {
+    use crate::assistant_tools::def;
+    vec![
+        def(
+            "reference_list",
+            "The films the person has measured as style references (each only as numbers, never footage): name, length, how long its shots are, its loudness, the note of why it may be used, and which one is adopted as this project's target. Empty if there are none.",
+            json!({}),
+            reference_list_tool,
+        ),
+        def(
+            "reference_get",
+            "One reference's fingerprint in words and numbers: shot lengths and how the pace moves, the picture, the camera, the sound, and what the numbers suggest (rules of thumb to explain from, not verdicts). Default: the adopted reference.",
+            json!({"id": {"type": "string", "description": "A reference id from reference_list, such as r1. Default: the adopted reference."}}),
+            reference_get_tool,
+        ),
+        def(
+            "reference_compare",
+            "The open edit against a reference, row by row with a verdict and a sentence for each (average shot, cuts a minute, how the pace moves, and, once measured, brightness, colour, loudness and silence). Rows it cannot compare are named with what to measure. Default reference: the adopted one. Explain what the differences mean for how it feels; do not tell the person to copy the reference.",
+            json!({"id": {"type": "string", "description": "A reference id from reference_list. Default: the adopted reference."}, "sequence": {"type": "integer", "description": "A sequence id. Default: the open sequence."}}),
+            reference_compare_tool,
+        ),
     ]
 }
