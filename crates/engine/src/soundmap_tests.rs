@@ -250,3 +250,100 @@ fn hostile_parameters_and_empty_timelines_are_refused_without_harm() {
     }
     assert!(s.execute("analysis.run", json!({"sound": true, "sequence": 999_999})).is_err());
 }
+
+// ---------------------------------------------------------------------------- the assistant (F13.5)
+
+fn tool(s: &Session, name: &str, input: Value) -> edith_ai::ToolOutput {
+    s.run_assistant_tool(name, &input)
+}
+
+#[test]
+fn the_sound_tools_exist_and_only_read() {
+    let tools = crate::assistant_tools::tools();
+    for name in ["sound_map", "sound_plan"] {
+        assert!(tools.iter().find(|t| t.spec.name == name).unwrap_or_else(|| panic!("{name}")).read_only, "{name}");
+    }
+    let run = tools.iter().find(|t| t.spec.name == "analysis_run").unwrap();
+    assert!(run.spec.input_schema["properties"]["sound"].is_object(), "the assistant can ask for the loudness to be measured");
+    let show = tools.iter().find(|t| t.spec.name == "show").unwrap();
+    assert!(show.spec.input_schema["properties"]["view"]["enum"].as_array().unwrap().iter().any(|v| v == "soundmap"));
+}
+
+#[test]
+fn sound_map_tells_the_model_what_is_there_and_what_is_missing_in_words() {
+    let (s, _) = edit(&[sig(1, 0.0, 30.0, -20.0, Some("dialogue")), sig(2, 0.0, 30.0, -30.0, Some("music"))]);
+    let out = tool(&s, "sound_map", json!({}));
+    assert!(!out.is_error, "{}", out.content);
+    for want in [
+        "loudness NOT measured yet",
+        "analysis_run with sound true",
+        "- Narration: 1 clip covering 30 s (100% of the video)",
+        "- Ambience: nothing",
+        "- Effects: nothing",
+        "There is no ambience or room tone",
+        "[look]",
+    ] {
+        assert!(out.content.contains(want), "{want:?} is not in\n{}", out.content);
+    }
+    assert!(!out.content.contains("noAmbience@") && !out.content.contains('@'), "no internal ids: {}", out.content);
+    // unsorted clips are named as the reason the map cannot say more
+    let (s, _) = edit(&[sig(1, 0.0, 30.0, -20.0, Some("dialogue")), sig(2, 0.0, 30.0, -30.0, None)]);
+    let out = tool(&s, "sound_map", json!({}));
+    assert!(out.content.contains("1 clip is not sorted into a lane") && out.content.contains("Essential Sound"), "{}", out.content);
+    assert!(out.content.contains("Findings: none."), "{}", out.content);
+    // measured: the levels are quoted
+    let (mut s, _) = edit(&[sig(1, 0.0, 12.0, -20.0, Some("dialogue")), sig(2, 0.0, 12.0, -44.0, Some("ambience"))]);
+    s.execute("analysis.run", json!({"sound": true, "wait": true})).unwrap();
+    let out = tool(&s, "sound_map", json!({}));
+    assert!(out.content.contains("loudness measured") && out.content.contains("typically -2"), "{}", out.content);
+    // refusals
+    assert!(tool(&Session::default(), "sound_map", json!({})).is_error);
+    assert!(tool(&s, "sound_map", json!({"sequence": 999_999})).is_error);
+    assert!(tool(&s, "sound_map", json!({"sequence": "x"})).is_error);
+    for odd in [json!(null), json!([1]), json!("x")] {
+        let _ = tool(&s, "sound_map", odd);
+    }
+}
+
+#[test]
+fn sound_plan_gives_the_spotting_sheet_and_refuses_without_a_plan() {
+    let (mut s, _) = edit(&[sig(1, 0.0, 30.0, -20.0, Some("dialogue"))]);
+    assert!(tool(&s, "sound_plan", json!({})).is_error, "no plan");
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 5})).unwrap();
+    let beat = crate::planner::get(&s.project).unwrap().beats().next().unwrap().id;
+    s.execute("planner.setSound", json!({"beat": beat, "ambience": "wind over a shore"})).unwrap();
+    let out = tool(&s, "sound_plan", json!({}));
+    assert!(!out.is_error && out.content.contains("SPOTTING SHEET") && out.content.contains("Ambience: wind over a shore"), "{}", out.content);
+    let one = tool(&s, "sound_plan", json!({"beat": beat}));
+    assert!(one.content.contains("Cold open") && !one.content.contains("The question"), "{}", one.content);
+    assert!(tool(&s, "sound_plan", json!({"beat": 999_999})).is_error);
+    assert!(tool(&s, "sound_plan", json!({"beat": "x"})).is_error);
+}
+
+#[test]
+fn the_soundmap_view_carries_the_lanes_the_silences_and_the_findings_for_the_person() {
+    let (mut s, _) = edit(&[sig(1, 0.0, 30.0, -20.0, Some("dialogue")), sig(2, 0.0, 30.0, -30.0, Some("music"))]);
+    let out = tool(&s, "show", json!({"view": "soundmap", "caption": "What the sound is missing"}));
+    assert!(!out.is_error, "{}", out.content);
+    let v = out.view.clone().expect("a view");
+    assert_eq!((v["view"].as_str(), v["caption"].as_str(), v["measured"].as_bool()), (Some("soundmap"), Some("What the sound is missing"), Some(false)));
+    let lanes: Vec<&str> = v["lanes"].as_array().unwrap().iter().map(|l| l["lane"].as_str().unwrap()).collect();
+    assert_eq!(lanes, ["narration", "music", "ambience", "effects"]);
+    assert!(v["lanes"][0]["spans"].as_array().is_some_and(|a| !a.is_empty()));
+    assert!(v["lanes"][0]["levels"].is_null(), "not measured");
+    assert_eq!(v["findings"][0]["kind"], "noAmbience");
+    assert!(out.content.contains("Shown to the person") && out.content.contains("loudness has not been measured"), "{}", out.content);
+    // measured, the readings come thinned; planned silences are carried
+    s.execute("analysis.run", json!({"sound": true, "wait": true})).unwrap();
+    s.execute("planner.create", json!({"pack": "mystery", "minutes": 1})).unwrap();
+    let beat = crate::planner::get(&s.project).unwrap().beats().next().unwrap().id;
+    s.execute("planner.addCue", json!({"beat": beat, "kind": "silence", "atSeconds": 3, "lengthSeconds": 2})).unwrap();
+    let v = tool(&s, "show", json!({"view": "soundmap"})).view.unwrap();
+    assert!(v["measured"].as_bool().unwrap());
+    assert!(v["lanes"][0]["levels"].as_array().is_some_and(|a| !a.is_empty() && a.len() <= 240));
+    assert_eq!(v["silences"].as_array().unwrap().len(), 1);
+    assert!(!v.to_string().contains("jpeg"));
+    // hostile
+    assert!(tool(&Session::default(), "show", json!({"view": "soundmap"})).is_error);
+    assert!(tool(&s, "show", json!({"view": "soundmap", "sequence": 999_999})).is_error);
+}

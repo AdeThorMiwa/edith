@@ -1168,3 +1168,34 @@ fn the_look_view_shows_the_looks_pictures_beside_your_frame_and_the_frame_jumps_
     d.frames(6);
     assert!(d.elements("assistant.view.").iter().any(|e| e["id"].as_str().is_some_and(|i| i.ends_with(".yours"))));
 }
+
+#[test]
+fn the_soundmap_view_shows_the_lanes_and_a_mark_jumps_to_what_is_missing() {
+    let _g = guard();
+    let mut session = measured_edit();
+    let ids: Vec<u64> = session.active_sequence().unwrap().audio_tracks.iter().flat_map(|t| t.items.iter().map(|c| c.id.0)).collect();
+    session.execute("essentialSound.setType", json!({"clips": ids, "type": "dialogue"})).unwrap();
+    session.set_playhead(filmcraft_time::Tick(20 * filmcraft_time::TICKS_PER_SECOND));
+    let mut d = Driver::with(session);
+    coach_asks(
+        &mut d,
+        vec![
+            says_then_shows("Here is where each kind of sound is.", "s1", "show", json!({"view": "soundmap", "caption": "The sound of the edit"})),
+            text_reply("There is no room tone under any of it, so every pause drops to silence."),
+        ],
+        "every pause drops to silence",
+    );
+    let ids: Vec<String> = d.elements("assistant.view.").into_iter().filter_map(|e| e["id"].as_str().map(str::to_string)).collect();
+    for lane in ["narration", "music", "ambience", "effects"] {
+        assert!(ids.iter().any(|i| i.ends_with(&format!(".lane.{lane}"))), "{lane}: {ids:?}");
+    }
+    let mark = ids.iter().find(|i| i.contains(".mark.")).cloned().unwrap_or_else(|| panic!("a mark for the missing ambience: {ids:?}"));
+    d.snapshot("assistant-view-soundmap");
+    assert!(playhead_seconds(&mut d) > 19.0);
+    d.click(&mark);
+    assert!(playhead_seconds(&mut d) < 0.5, "the finding is at the start: {}", playhead_seconds(&mut d));
+    let lane = ids.iter().find(|i| i.ends_with(".lane.narration")).cloned().unwrap();
+    d.click(&lane);
+    let p = playhead_seconds(&mut d);
+    assert!((p - 30.0).abs() < 12.0, "the middle of a 60 s edit: {p}");
+}

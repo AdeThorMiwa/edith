@@ -80,7 +80,7 @@ fn beat_json(p: &Place) -> Value {
 }
 
 /// The spotting sheet as plain text.
-fn sheet_text(title: &str, places: &[&Place]) -> String {
+pub(crate) fn sheet_text(title: &str, places: &[&Place]) -> String {
     let mut out = String::new();
     out.push_str(&format!("SPOTTING SHEET{}\n", if title.trim().is_empty() { String::new() } else { format!(": {}", title.trim()) }));
     out.push_str("Times are from the start of the video.\n");

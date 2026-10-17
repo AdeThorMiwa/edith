@@ -35,6 +35,7 @@ pub(crate) fn tools() -> Vec<ToolDef> {
             "item": {"type": "integer", "description": "A media item id (from project_overview or sequence_view): footage, a still or a sound."},
             "sequence": {"type": "boolean", "description": "true: the open sequence (the edit's own numbers, and a look at each shot)."},
             "mix": {"type": "boolean", "description": "true: the sound of the whole open sequence (loudness, loudness range, peaks, silence)."},
+            "sound": {"type": "boolean", "description": "true: how loud each lane of the sound map (narration, music, ambience, effects) is over time."},
         });
         if let (Some(o), Some(e)) = (p.as_object_mut(), extra.as_object()) {
             o.extend(e.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -62,9 +63,9 @@ pub(crate) fn tools() -> Vec<ToolDef> {
         ),
         def(
             "show",
-            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence), compare (your numbers beside a reference's, row by row), rhythm (your cutting against the planned intensity and a reference's rhythm), look (a look's pictures with its colours and numbers, and the Program frame beside it with what differs). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
+            "Put a view in your answer, right where you call it, so the person reads one continuous reply instead of looking elsewhere. You choose which view and what to point at; the numbers in it are drawn from the measurements, you do not supply them. Views: findings (a card of the coach's findings: severity, a timecode they can click, the title), timeline (the edit as its shots in proportion, with findings marked, plan sections behind, click to jump the playhead), histogram (how many shots are short, medium, long, with the plan's target), pace (cuts a minute along the edit, against the plan), gauge (one number set against its target: narration pace, average shot, loudness, cuts a minute), palette (the colours of a measured media item), pie (screen time by shot length, narration, or silence), compare (your numbers beside a reference's, row by row), rhythm (your cutting against the planned intensity and a reference's rhythm), look (a look's pictures with its colours and numbers, and the Program frame beside it with what differs), soundmap (the sound in lanes: narration, music, ambience, effects, with loudness once measured, planned silences and the sound findings marked). Call show after the sentence that introduces the view, then carry on in words; do not read out what the view already shows, say what it means. One or two views per answer, and a view never replaces the explanation. It needs the measurements to exist: for the findings and the timeline they come from the open edit.",
             json!({
-                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look"], "description": "Which view."},
+                "view": {"type": "string", "enum": ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look", "soundmap"], "description": "Which view."},
                 "reference": {"type": "string", "description": "compare and rhythm views: a reference id from reference_list. Default: the adopted reference."},
                 "rows": {"type": "array", "items": {"type": "string"}, "description": "compare view: which rows, by name as reference_compare lists them (meanShot, cutsPerMinute, loudness…). Default: what differs most."},
                 "metric": {"type": "string", "enum": ["narrationPace", "averageShot", "loudness", "cutsPerMinute"], "description": "gauge view: which number to set against its target."},
@@ -579,7 +580,7 @@ pub(crate) fn coach_context(s: &Session) -> Option<String> {
 // ---------------------------------------------------------------------------- views
 
 /// The views `show` can draw.
-const VIEWS: [&str; 10] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look"];
+const VIEWS: [&str; 11] = ["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look", "soundmap"];
 /// Shots drawn in one timeline view.
 const MAX_SHOTS_DRAWN: usize = 1200;
 /// Findings marked on one timeline view.
@@ -635,6 +636,9 @@ fn show_view(s: &Session, p: &Value) -> Result<ToolOutput, String> {
     }
     if view == "look" {
         return crate::look::view(s, o, caption_of(o));
+    }
+    if view == "soundmap" {
+        return crate::soundmap::view(s, o, caption_of(o));
     }
     let report = crate::analysis::coach_report(s, &json!({})).map_err(|e| e.to_string())?;
     let all: Vec<Value> = report["findings"].as_array().cloned().unwrap_or_default();

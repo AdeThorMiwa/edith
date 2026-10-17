@@ -262,7 +262,7 @@ fn show_hands_the_person_a_view_of_the_real_numbers_and_the_model_only_a_note() 
     assert!(d.read_only);
     assert_eq!(
         d.spec.input_schema["properties"]["view"]["enum"],
-        json!(["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look"])
+        json!(["findings", "timeline", "histogram", "pace", "gauge", "palette", "pie", "compare", "rhythm", "look", "soundmap"])
     );
 
     // findings: a card of what the rules found, by id

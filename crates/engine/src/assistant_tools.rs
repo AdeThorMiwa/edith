@@ -45,6 +45,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::reference::tools());
     // looks (fork; roadmap F12.7b)
     all.extend(crate::look::tools());
+    // the sound map and the sound plan (fork; roadmap F13.5)
+    all.extend(crate::soundmap::tools());
     all
 }
 

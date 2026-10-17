@@ -43,7 +43,7 @@ struct State {
 
 type Shared = Arc<Mutex<State>>;
 
-fn lane_color(name: &str) -> Color32 {
+pub(crate) fn lane_color(name: &str) -> Color32 {
     match name {
         "narration" => Color32::from_rgb(0x4f, 0x8c, 0xff),
         "music" => Color32::from_rgb(0xa0, 0x70, 0xd8),
@@ -53,7 +53,7 @@ fn lane_color(name: &str) -> Color32 {
     }
 }
 
-fn lane_label(name: &str) -> &'static str {
+pub(crate) fn lane_label(name: &str) -> &'static str {
     match name {
         "narration" => tl!("Narration"),
         "music" => tl!("Music"),

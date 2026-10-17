@@ -15,6 +15,9 @@
 //! - **compare**: your numbers beside a reference film's, one row each, with a verdict.
 //! - **rhythm**: how fast the edit cuts along its length, beside the plan's intended intensity and a
 //!   reference's rhythm (cutting is a rough stand-in for intensity).
+//! - **soundmap**: the sound in lanes (narration, music, ambience, effects) where each sounds, with its
+//!   loudness once measured, the planned silences shaded and the findings marked on the ruler; a click on
+//!   a lane or a mark jumps the playhead there.
 //! - **look**: a look's pictures (drawn from the library by id), its colours and numbers, and the Program
 //!   frame beside it with what differs; click the frame to jump the playhead to it.
 //!
@@ -87,6 +90,7 @@ pub fn draw(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems, 
             Some("compare") => compare(ui, view, n, t, elems),
             Some("rhythm") => rhythm(ui, view, n, t, elems),
             Some("look") => seek = look(ui, view, n, t, elems, pics),
+            Some("soundmap") => seek = soundmap(ui, view, n, t, elems),
             _ => {
                 ui.label(RichText::new(tl!("This view cannot be shown.")).size(11.5).color(t.text_faint));
             }
@@ -704,6 +708,87 @@ fn look(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems, pics
     if yours["rows"].as_array().is_some_and(|r| !r.is_empty()) {
         ui.add_space(4.0);
         compare(ui, &serde_json::json!({"reference": name, "rows": yours["rows"], "missing": []}), n, t, elems);
+    }
+    seek
+}
+
+/// Lanes drawn in one sound map view, and its marks.
+const MAX_LANES: usize = 5;
+const MAP_LANE_H: f32 = 26.0;
+const MAP_LABEL_W: f32 = 84.0;
+
+fn soundmap(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) -> Option<i64> {
+    let duration = ticks(&view["duration"]).filter(|d| *d > 0)?;
+    let lanes: Vec<&Value> = view["lanes"].as_array().map_or(Vec::new(), |a| a.iter().take(MAX_LANES).collect());
+    if lanes.is_empty() {
+        return None;
+    }
+    let mut seek = None;
+    let width = (ui.available_width() - MAP_LABEL_W - 4.0).max(100.0);
+    let top_pad = 16.0;
+    let height = top_pad + lanes.len() as f32 * (MAP_LANE_H + 3.0);
+    let (area, _) = ui.allocate_exact_size(vec2(MAP_LABEL_W + width + 4.0, height), Sense::hover());
+    let painter = ui.painter_at(area);
+    let left = area.min.x + MAP_LABEL_W;
+    let x_of = |tk: i64| left + (tk as f64 / duration as f64).clamp(0.0, 1.0) as f32 * width;
+    painter.text(pos2(left, area.min.y), Align2::LEFT_TOP, clock(0), Tokens::ui(9.5), t.text_faint);
+    painter.text(pos2(left + width, area.min.y), Align2::RIGHT_TOP, clock(duration), Tokens::ui(9.5), t.text_faint);
+    let lanes_top = area.min.y + top_pad;
+    let lanes_bottom = lanes_top + lanes.len() as f32 * (MAP_LANE_H + 3.0) - 3.0;
+    for (i, lane) in lanes.iter().enumerate() {
+        let name = lane["lane"].as_str().unwrap_or("other");
+        let col = super::sound_map::lane_color(name);
+        let top = lanes_top + i as f32 * (MAP_LANE_H + 3.0);
+        let row = Rect::from_min_size(pos2(left, top), vec2(width, MAP_LANE_H));
+        painter.rect_filled(row, 3.0, t.field_bg);
+        painter.text(pos2(area.min.x, top + 6.0), Align2::LEFT_TOP, super::sound_map::lane_label(name), Tokens::semibold(11.0), col);
+        let levels = lane["levels"].as_array().filter(|a| !a.is_empty());
+        for s in lane["spans"].as_array().into_iter().flatten().take(MAX_ROWS * 10) {
+            let (Some(a), Some(b)) = (ticks(&s[0]), ticks(&s[1])) else { continue };
+            let r = Rect::from_min_max(pos2(x_of(a), top + 2.0), pos2(x_of(b).max(x_of(a) + 1.0), top + MAP_LANE_H - 2.0));
+            painter.rect_filled(r, 2.0, col.gamma_multiply(if levels.is_some() { 0.22 } else { 0.7 }));
+        }
+        if let Some(levels) = levels {
+            let hop = finite(&lane["hopSeconds"]).unwrap_or(0.5).max(0.01);
+            let y_of = |l: f64| top + MAP_LANE_H - 3.0 - (((l.clamp(-60.0, -10.0) + 60.0) / 50.0) as f32) * (MAP_LANE_H - 6.0);
+            let mut prev: Option<egui::Pos2> = None;
+            for (k, v) in levels.iter().take(1000).enumerate() {
+                let x = x_of(((k as f64 + 0.5) * hop * TICKS_PER_SECOND as f64) as i64);
+                match finite(v) {
+                    Some(l) => {
+                        let p = pos2(x, y_of(l));
+                        if let Some(q) = prev {
+                            painter.line_segment([q, p], Stroke::new(1.2, col));
+                        }
+                        prev = Some(p);
+                    }
+                    None => prev = None,
+                }
+            }
+        }
+        let resp = ui.interact(row, egui::Id::new(("assistant-view-soundlane", n, i)), Sense::click());
+        if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked()) {
+            seek = Some((((p.x - left) / width).clamp(0.0, 1.0) as f64 * duration as f64) as i64);
+        }
+        elems.push((format!("assistant.view.{n}.lane.{name}"), resp, super::sound_map::lane_label(name).to_string()));
+    }
+    for s in view["silences"].as_array().into_iter().flatten().take(MAX_ROWS * 10) {
+        let (Some(a), Some(b)) = (ticks(&s[0]), ticks(&s[1])) else { continue };
+        let r = Rect::from_min_max(pos2(x_of(a), lanes_top), pos2(x_of(b).max(x_of(a) + 2.0), lanes_bottom));
+        painter.rect_filled(r, 0.0, Color32::from_rgb(0xd9, 0x6a, 0x8a).gamma_multiply(0.22));
+    }
+    for (i, f) in view["findings"].as_array().into_iter().flatten().take(MAX_ROWS).enumerate() {
+        let Some(start) = ticks(&f["start"]) else { continue };
+        let col = severity_color(&f["severity"]);
+        let c = pos2(x_of(start), area.min.y + top_pad - 4.0);
+        painter.add(Shape::convex_polygon(vec![pos2(c.x, c.y + 4.0), pos2(c.x - 4.5, c.y - 4.0), pos2(c.x + 4.5, c.y - 4.0)], col, Stroke::NONE));
+        let r = ui
+            .interact(Rect::from_center_size(c, vec2(14.0, 14.0)), egui::Id::new(("assistant-view-soundmark", n, i)), Sense::click())
+            .on_hover_text(text(&f["title"]));
+        if r.clicked() {
+            seek = Some(start);
+        }
+        elems.push((format!("assistant.view.{n}.mark.{i}"), r, text(&f["title"])));
     }
     seek
 }
