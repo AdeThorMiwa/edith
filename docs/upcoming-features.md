@@ -537,7 +537,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Done when.** A sequence with a deliberately jarring 0.8 s shot between two 6 s shots produces a finding at that timecode with a correct explanation.
 
-### F12 ★ Reference analysis and look bible · Must · L · yours · ⬜
+### F12 ★ Reference analysis and look bible · Must · L · yours · 🟡
 
 **Needs:** F10 (F08 for targets).
 
@@ -550,6 +550,14 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 - **Look bible**: reference stills, the palette, and your grain, aspect and LUT choices on one board. "Match to look" uses `lumetri.applyMatch` against a reference frame.
 - **Rhythm map**: a strip showing cuts and a rough intensity proxy (cut density, loudness, motion) beside the planner's intended intensity curve. Experimental.
 - **Mentor**: the assistant explains what the numbers suggest ("long shots, a third of the film silent: contemplative pacing").
+
+**Steps** (planned 2026-10-17).
+- F12.1 ✅ (2026-10-17) **The fingerprint**: `fingerprint(input)` in `edith-analysis` turns what a measuring job found in a film (hard cuts, pictures measured across it, sound in pieces plus the whole programme's loudness) into a `Fingerprint` of a few hundred numbers: **shots** (how many, mean, median, 10th and 90th percentile, shortest, longest, histogram, cuts a minute), **rhythm** (cuts a minute in each twentieth of the runtime, mean shot length in the opening, middle and closing thirds, and whether the pace is quickening, steady or slowing), **picture** (brightness, contrast, saturation, sharpness, grain, warmth, the black bars and the aspect inside them, a merged five-colour palette, and four of those through the film in twenty points), **motion** (frame-to-frame change and the share of the film with each camera movement) and **sound** (loudness, range, true peak, silence, the shares that sound like speech, music and ambience, and loudness through the film). No footage, stills or sound in it: a feature-length film comes to under 12 KB of JSON. Hard cuts only: a dissolve is not counted and the fingerprint says nothing about transitions rather than guess. Tested on synthetic films with known answers (60 shots of 10 s, quickening and slowing arcs, ramps of brightness), hostile cuts (not numbers, out of range, repeated), films too long or with too much, and pieces that are not numbers.
+- F12.2 **Measuring a reference file**: a background job that finds the cuts (sampled every few frames, so a feature is practical), samples pictures across the film, measures sound in 30 s pieces and the whole programme's loudness by streaming, and keeps only numbers.
+- F12.3 **The reference library**: `reference.add|list|get|remove|rename|export|import`, global (every project can use it), with a note of the right to use each file.
+- F12.4 **Compare and adopt**: `reference.compare` in plain words; `reference.adopt` makes it the coach's targets (kept in the project as numbers).
+- F12.5 **The assistant**: tools to read references, a compare view and a rhythm view, mentor guidance.
+- F12.6 **The look bible**: the board of stills, palette, grain, aspect and LUT, and Match to Look (to be agreed first: it is the one part that stores pictures).
 
 **Done when.** Analyze a public-domain feature (for example the films the README's screenshots use), see a fingerprint, and watch the coach adopt it as targets.
 

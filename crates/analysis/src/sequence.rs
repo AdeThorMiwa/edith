@@ -247,7 +247,7 @@ fn shots(video: &[Vec<Span>]) -> Vec<Shot> {
     out
 }
 
-fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+pub(crate) fn percentile_of(sorted: &[f64], fraction: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }
@@ -334,9 +334,9 @@ pub fn analyze_sequence(input: &SequenceInput) -> Result<SequenceStats> {
     let shot_stats = ShotStats {
         count: lengths.len() as u32,
         mean_seconds: if lengths.is_empty() { 0.0 } else { lengths.iter().sum::<f64>() / lengths.len() as f64 },
-        median_seconds: percentile(&lengths, 0.5),
-        p10_seconds: percentile(&lengths, 0.1),
-        p90_seconds: percentile(&lengths, 0.9),
+        median_seconds: percentile_of(&lengths, 0.5),
+        p10_seconds: percentile_of(&lengths, 0.1),
+        p90_seconds: percentile_of(&lengths, 0.9),
         min_seconds: lengths.first().copied().unwrap_or(0.0),
         max_seconds: lengths.last().copied().unwrap_or(0.0),
         histogram,
