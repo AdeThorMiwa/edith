@@ -2,6 +2,8 @@
 //! features (the editing coach, reference analysis, the consistency checker) can talk in numbers.
 //!
 //! - [`color`]: sRGB to CIE Lab, colour distance and correlated colour temperature.
+//! - [`audio`]: [`AudioStats`] for a stretch of audio: EBU R128 loudness (from `filmcraft-audio-dsp`),
+//!   silence share, spectral balance, a rough speech/music/ambience guess and a beat grid.
 //! - [`image`]: [`FrameStats`] for one picture: luma, contrast, saturation, a five-colour palette in
 //!   Lab, colour temperature, sharpness, grain and letterbox/aspect.
 //!
@@ -12,9 +14,11 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 
+pub mod audio;
 pub mod color;
 pub mod image;
 
+pub use audio::{AudioBuffer, AudioKind, AudioStats, analyze_audio};
 pub use image::{Frame, FrameStats, Letterbox, PaletteColor, analyze_rgba};
 
 /// Why a measurement could not be made.
@@ -26,6 +30,8 @@ pub enum AnalysisError {
     TooLarge { width: u32, height: u32 },
     /// The buffer holds fewer bytes than the stated size needs.
     ShortBuffer { need: usize, have: usize },
+    /// A sample rate outside 8 kHz to 384 kHz, or no channels, or more than 16.
+    BadAudioFormat { sample_rate: u32, channels: u16 },
 }
 
 impl std::fmt::Display for AnalysisError {
@@ -34,6 +40,7 @@ impl std::fmt::Display for AnalysisError {
             AnalysisError::Empty => write!(f, "there is nothing to measure"),
             AnalysisError::TooLarge { width, height } => write!(f, "a {width}x{height} picture is larger than can be analysed"),
             AnalysisError::ShortBuffer { need, have } => write!(f, "the picture needs {need} bytes but has {have}"),
+            AnalysisError::BadAudioFormat { sample_rate, channels } => write!(f, "audio of {channels} channels at {sample_rate} Hz cannot be analysed"),
         }
     }
 }
@@ -42,5 +49,7 @@ impl std::error::Error for AnalysisError {}
 
 pub type Result<T> = std::result::Result<T, AnalysisError>;
 
+#[cfg(test)]
+mod audio_tests;
 #[cfg(test)]
 mod tests;
