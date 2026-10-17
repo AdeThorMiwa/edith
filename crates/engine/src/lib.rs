@@ -67,6 +67,7 @@ pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
 pub mod soundmap;
+pub mod soundplan;
 pub mod source_monitor;
 pub mod sync;
 pub mod transcript;
@@ -1369,6 +1370,8 @@ mod settings_tests;
 mod shortcuts_tests;
 #[cfg(test)]
 mod soundmap_tests;
+#[cfg(test)]
+mod soundplan_tests;
 #[cfg(test)]
 mod split_edit_ripple_trim_tests;
 #[cfg(test)]

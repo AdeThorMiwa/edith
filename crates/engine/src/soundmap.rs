@@ -70,13 +70,10 @@ fn programme_end(q: &Sequence) -> i64 {
 /// The silences the sound plan asks for, on the timeline: where each beat is (its marker, else the plan
 /// laid end to end) plus the silence's time in the beat.
 pub(crate) fn planned_silences(s: &Session) -> Vec<(i64, i64)> {
-    let Some(plan) = crate::planner::get(&s.project) else { return Vec::new() };
-    let laid = edith_planner::ranges(&plan, filmcraft_time::Tick::ZERO);
     let mut out = Vec::new();
-    for (b, r) in plan.beats().zip(laid) {
-        let start = b.link.map_or(r.start.0, |l| l.start.0);
-        for c in b.sound.cues.iter().filter(|c| c.kind == edith_planner::CueKind::Silence) {
-            let from = start.saturating_add(c.at.0);
+    for p in crate::soundplan::places(s) {
+        for c in p.beat.sound.cues.iter().filter(|c| c.kind == edith_planner::CueKind::Silence) {
+            let from = p.start.saturating_add(c.at.0);
             out.push((from, from.saturating_add(c.length.0)));
         }
     }
