@@ -33,7 +33,7 @@ fn new_look(s: &mut Session, name: &str) -> String {
 }
 
 fn add_file(s: &mut Session, look: &str, path: &Path) -> Value {
-    s.execute("look.addStill", json!({"look": look, "path": path.to_string_lossy(), "rights": "my own picture"})).unwrap()
+    s.execute("look.addStill", json!({"wait": true, "look": look, "path": path.to_string_lossy(), "rights": "my own picture"})).unwrap()
 }
 
 fn pick_clip(s: &mut Session) -> filmcraft_project::ClipId {
@@ -123,17 +123,17 @@ fn a_file_needs_a_note_of_rights_and_must_be_a_picture() {
     let ok = png(&dir, "a.png", 64, 64, [10, 10, 10]);
     let mut s = Session::default();
     let l = new_look(&mut s, "L");
-    let no_note = s.execute("look.addStill", json!({"look": l, "path": ok.to_string_lossy()}));
+    let no_note = s.execute("look.addStill", json!({"wait": true, "look": l, "path": ok.to_string_lossy()}));
     assert!(no_note.unwrap_err().to_string().contains("rights"));
-    assert!(s.execute("look.addStill", json!({"look": l, "path": ok.to_string_lossy(), "rights": "  "})).is_err());
+    assert!(s.execute("look.addStill", json!({"wait": true, "look": l, "path": ok.to_string_lossy(), "rights": "  "})).is_err());
     let text = dir.join("notes.png");
     std::fs::write(&text, "this is not a picture").unwrap();
     for path in [text, dir.join("missing.png"), dir.clone()] {
-        let e = s.execute("look.addStill", json!({"look": l, "path": path.to_string_lossy(), "rights": "x"}));
+        let e = s.execute("look.addStill", json!({"wait": true, "look": l, "path": path.to_string_lossy(), "rights": "x"}));
         assert!(e.is_err(), "{}", path.display());
     }
-    assert!(s.execute("look.addStill", json!({"look": l, "path": "bad\u{0}path", "rights": "x"})).is_err());
-    assert!(s.execute("look.addStill", json!({"look": "nope", "path": ok.to_string_lossy(), "rights": "x"})).is_err());
+    assert!(s.execute("look.addStill", json!({"wait": true, "look": l, "path": "bad\u{0}path", "rights": "x"})).is_err());
+    assert!(s.execute("look.addStill", json!({"wait": true, "look": "nope", "path": ok.to_string_lossy(), "rights": "x"})).is_err());
     assert_eq!(s.execute("look.get", json!({"id": l})).unwrap()["pictures"].as_array().unwrap().len(), 0, "nothing was kept");
 }
 
@@ -161,16 +161,20 @@ fn a_frame_of_a_film_is_taken_at_the_time_asked() {
     make_film(&film, &[(DemoScene::Dunes, 48), (DemoScene::Plasma, 48)], false);
     let mut s = Session::default();
     let l = new_look(&mut s, "Film");
-    let early = s.execute("look.addStill", json!({"look": l, "path": film.to_string_lossy(), "rights": "my own", "seconds": 0.5})).unwrap()["still"]
+    let early =
+        s.execute("look.addStill", json!({"wait": true, "look": l, "path": film.to_string_lossy(), "rights": "my own", "seconds": 0.5})).unwrap()["still"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let late =
+        s.execute("look.addStill", json!({"wait": true, "look": l, "path": film.to_string_lossy(), "rights": "my own", "seconds": 3.0})).unwrap()["still"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let middle = s.execute("look.addStill", json!({"wait": true, "look": l, "path": film.to_string_lossy(), "rights": "my own"})).unwrap()["still"]
         .as_str()
         .unwrap()
         .to_string();
-    let late = s.execute("look.addStill", json!({"look": l, "path": film.to_string_lossy(), "rights": "my own", "seconds": 3.0})).unwrap()["still"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let middle =
-        s.execute("look.addStill", json!({"look": l, "path": film.to_string_lossy(), "rights": "my own"})).unwrap()["still"].as_str().unwrap().to_string();
     let get = s.execute("look.get", json!({"id": l})).unwrap();
     let by = |id: &str| get["pictures"].as_array().unwrap().iter().find(|p| p["id"] == json!(id)).cloned().unwrap();
     assert_eq!(by(&early)["source"], "film.mov");
@@ -178,9 +182,9 @@ fn a_frame_of_a_film_is_taken_at_the_time_asked() {
     assert!((by(&late)["timeSeconds"].as_f64().unwrap() - 3.0).abs() < 0.1);
     assert!((by(&middle)["timeSeconds"].as_f64().unwrap() - 2.0).abs() < 0.1, "the middle of a 4 s film");
     assert_ne!(by(&early)["brightness"], by(&late)["brightness"], "two different scenes");
-    assert!(s.execute("look.addStill", json!({"look": l, "path": film.to_string_lossy(), "rights": "x", "seconds": -1})).is_err());
+    assert!(s.execute("look.addStill", json!({"wait": true, "look": l, "path": film.to_string_lossy(), "rights": "x", "seconds": -1})).is_err());
     // past the end is held to the last frame, not an error
-    assert!(s.execute("look.addStill", json!({"look": l, "path": film.to_string_lossy(), "rights": "x", "seconds": 9999.0})).is_ok());
+    assert!(s.execute("look.addStill", json!({"wait": true, "look": l, "path": film.to_string_lossy(), "rights": "x", "seconds": 9999.0})).is_ok());
 }
 
 #[test]
@@ -266,7 +270,7 @@ fn counts_are_held_to_their_limits() {
     for _ in 0..crate::look::MAX_STILLS {
         add_file(&mut s, &l, &dot);
     }
-    let e = s.execute("look.addStill", json!({"look": l, "path": dot.to_string_lossy(), "rights": "x"})).unwrap_err().to_string();
+    let e = s.execute("look.addStill", json!({"wait": true, "look": l, "path": dot.to_string_lossy(), "rights": "x"})).unwrap_err().to_string();
     assert!(e.contains("at most"), "{e}");
     for i in 1..crate::look::MAX_LOOKS {
         s.execute("look.create", json!({"name": format!("L{i}")})).unwrap();
@@ -384,7 +388,7 @@ fn look_with_two(s: &mut Session, dir: &Path) -> (String, String, String) {
     let a = s
         .execute(
             "look.addStill",
-            json!({"look": l, "path": png(dir, "teal.png", 320, 180, [20, 90, 110]).to_string_lossy(), "rights": "mine", "caption": "the harbour"}),
+            json!({"wait": true, "look": l, "path": png(dir, "teal.png", 320, 180, [20, 90, 110]).to_string_lossy(), "rights": "mine", "caption": "the harbour"}),
         )
         .unwrap()["still"]
         .as_str()
@@ -517,4 +521,76 @@ fn the_look_view_shows_pictures_numbers_and_the_frame_beside_them() {
     let v = tool(&closed, "show", json!({"view": "look", "look": cl})).view.unwrap();
     assert!(v["yours"].is_null());
     assert_eq!(v["pictures"].as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------- the background job
+
+/// Waits for a `look.addStill` job to end; its answer.
+fn job_result(s: &mut Session, job: u64) -> Value {
+    let t0 = std::time::Instant::now();
+    loop {
+        let v = s.execute("look.result", json!({"job": job})).unwrap();
+        if v["state"] != "running" {
+            return v;
+        }
+        assert!(t0.elapsed().as_secs() < 60, "the job never finished");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_file_picture_is_read_in_the_background_and_its_answer_is_asked_for_by_number() {
+    let dir = tmp_dir("look-job");
+    let big = png(&dir, "big.png", 1920, 1080, [200, 120, 60]);
+    let mut s = Session::default();
+    let l = new_look(&mut s, "Dusk");
+    let r = s.execute("look.addStill", json!({"look": l, "path": big.to_string_lossy(), "rights": "mine"})).unwrap();
+    let job = r["job"].as_u64().expect("a job number");
+    assert!(r.get("still").is_none(), "it came back before the picture was kept: the app did not wait for the file");
+    let done = job_result(&mut s, job);
+    assert_eq!(done["state"], "done", "{done}");
+    let sid = done["still"].as_str().unwrap();
+    let got = s.execute("look.get", json!({"id": l})).unwrap();
+    assert_eq!(got["pictures"][0]["id"], json!(sid));
+    assert_eq!(got["pictures"][0]["source"], "big.png");
+    // the job is in the job list like any other, and it finished
+    let jobs = s.execute("jobs.list", json!({})).unwrap();
+    let j = jobs.as_array().unwrap().iter().find(|x| x["id"] == json!(job)).cloned().unwrap();
+    assert_eq!(j["finished"], true);
+    assert!(j["label"].as_str().unwrap().starts_with("Add picture big.png"), "{j}");
+    // asking for a job there never was is refused
+    assert!(s.execute("look.result", json!({"job": 9999})).is_err());
+    assert!(s.execute("look.result", json!({})).is_err());
+}
+
+#[test]
+fn a_file_that_cannot_be_read_fails_the_job_with_the_reason_and_keeps_nothing() {
+    let dir = tmp_dir("look-job-bad");
+    let junk = dir.join("junk.png");
+    std::fs::write(&junk, "not a picture").unwrap();
+    let mut s = Session::default();
+    let l = new_look(&mut s, "L");
+    let r = s.execute("look.addStill", json!({"look": l, "path": junk.to_string_lossy(), "rights": "x"})).unwrap();
+    let done = job_result(&mut s, r["job"].as_u64().unwrap());
+    assert_eq!(done["state"], "failed", "{done}");
+    assert!(done["error"].as_str().unwrap().contains("junk.png"), "{done}");
+    assert_eq!(s.execute("look.get", json!({"id": l})).unwrap()["pictures"].as_array().unwrap().len(), 0);
+    let missing = s.execute("look.addStill", json!({"look": l, "path": dir.join("nope.png").to_string_lossy(), "rights": "x"})).unwrap();
+    assert_eq!(job_result(&mut s, missing["job"].as_u64().unwrap())["state"], "failed");
+    // a look removed while its picture was being read: the job fails and says so
+    let gone = new_look(&mut s, "Gone");
+    let ok = png(&dir, "ok.png", 64, 64, [10, 20, 30]);
+    let r = s.execute("look.addStill", json!({"look": gone, "path": ok.to_string_lossy(), "rights": "x"})).unwrap();
+    s.execute("look.remove", json!({"id": gone})).unwrap();
+    let done = job_result(&mut s, r["job"].as_u64().unwrap());
+    assert!(done["state"] == "failed" || done["state"] == "done", "either the picture was kept before the look went, or it was refused: {done}");
+    assert!(s.execute("look.get", json!({"id": gone})).is_err());
+}
+
+#[test]
+fn the_program_frame_is_kept_at_once_with_no_job() {
+    let mut s = demo();
+    let l = new_look(&mut s, "Mine");
+    let r = s.execute("look.addStill", json!({"look": l})).unwrap();
+    assert!(r["still"].is_string() && r.get("job").is_none(), "{r}");
 }

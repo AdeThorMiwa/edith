@@ -97,6 +97,23 @@ fn png(dir: &std::path::Path, name: &str, rgb: [u8; 3]) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn wait_for(d: &mut Driver, what: &str, mut done: impl FnMut(&mut Driver) -> bool) {
+    let t0 = std::time::Instant::now();
+    while !done(d) {
+        assert!(t0.elapsed().as_secs() < 60, "{what}: never happened");
+        d.frames(2);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn error_text(d: &mut Driver) -> String {
+    let e = d.ok("ui.elements", json!({"prefix": "looks.error"}));
+    e.as_array()
+        .and_then(|a| a.iter().find(|x| x["id"] == json!("looks.error")).cloned())
+        .map(|x| x["label"].as_str().unwrap_or("").to_string())
+        .unwrap_or_default()
+}
+
 fn open_looks(d: &mut Driver) {
     d.ok("ui.panel.show", json!({"panel": "LookBible"}));
     d.exec("window.floatPanel", json!({"panel": "LookBible", "rect": [40.0, 40.0, 900.0, 920.0]}));
@@ -172,7 +189,11 @@ fn pictures_are_added_measured_captioned_compared_matched_and_removed() {
     assert!(enabled(&mut d, "looks.addFile"));
     d.click("looks.addFile");
     let pics = |d: &mut Driver| d.exec("look.get", json!({"id": look}))["pictures"].as_array().cloned().unwrap_or_default();
-    assert_eq!(pics(&mut d).len(), 1);
+    // the file is read in the background: the form holds until the picture arrives
+    wait_for(&mut d, "the picture", |d| pics(d).len() == 1);
+    d.frames(4);
+    assert!(!d.has("looks.progress"), "the job is over");
+    assert!(!enabled(&mut d, "looks.addFile"), "the form was cleared, so there is nothing to add now");
     let first = pics(&mut d)[0]["id"].as_str().unwrap().to_string();
     assert_eq!(pics(&mut d)[0]["caption"], "the harbour");
     assert_eq!(pics(&mut d)[0]["rights"], "made for this test");
@@ -197,12 +218,13 @@ fn pictures_are_added_measured_captioned_compared_matched_and_removed() {
     d.type_into("looks.path", &junk.to_string_lossy());
     d.type_into("looks.rights", "x");
     d.click("looks.addFile");
-    assert!(d.has("looks.error"));
+    wait_for(&mut d, "the complaint", |d| d.has("looks.error"));
+    assert!(error_text(&mut d).contains("junk.png"), "{}", error_text(&mut d));
     assert_eq!(pics(&mut d).len(), 2);
     d.type_into("looks.path", &teal);
     d.type_into("looks.seconds", "soon");
     d.click("looks.addFile");
-    assert!(d.has("looks.error"), "a moment that is not a number");
+    assert!(error_text(&mut d).contains("seconds"), "a moment that is not a number: {}", error_text(&mut d));
     assert_eq!(pics(&mut d).len(), 2);
     // compare with the frame at the playhead
     d.click("looks.compare");
@@ -243,9 +265,10 @@ fn pictures_are_added_measured_captioned_compared_matched_and_removed() {
     assert!(looks(&mut d).is_empty());
     d.frames(3);
     assert!(d.has("looks.empty"));
-    // the only error logged is the bad file added on purpose; nothing is polled that can fail
+    // the only error logged is the bad file added on purpose (as a failed job); nothing is polled that can fail
     let events = d.exec("events.list", json!({}));
     assert_eq!(events["counts"]["error"], json!(1), "{events}");
-    assert!(events["entries"][0]["message"].as_str().unwrap_or("").contains("junk.png"), "{events}");
+    let failed: Vec<&Value> = events["entries"].as_array().unwrap().iter().filter(|e| e["level"] == "error").collect();
+    assert!(failed[0]["message"].as_str().unwrap_or("").contains("junk.png"), "{events}");
     let _ = std::fs::remove_dir_all(&dir);
 }

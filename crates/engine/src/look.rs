@@ -7,7 +7,8 @@
 //! | `look.list`, `look.get {id}` | the looks, and one in full (its pictures' numbers, not the pictures) |
 //! | `look.set {id, name?, notes?, aspect?, grain?, lut?}` | rename it and write down what you want: the picture shape, the grain, the LUT |
 //! | `look.remove {id}` | delete a look and its pictures |
-//! | `look.addStill {look, path?, seconds?, rights?, caption?, time?}` | keep a picture: a frame of an image or film file (`path`, a note of `rights` is required), or the Program frame (the playhead, or `time`) |
+//! | `look.addStill {look, path?, seconds?, rights?, caption?, wait?, time?}` | keep a picture: a frame of an image or film file (`path`, a note of `rights` is required), or the Program frame (the playhead, or `time`). A file is read as a background job (watch it in `jobs.list`, stop it with `jobs.cancel`, ask for its answer with `look.result {job}`); `wait: true` returns the picture's id instead |
+//! | `look.result {job}` | where a file picture's job is: running, done (with the picture's id) or failed |
 //! | `look.setStill {look, still, caption}`, `look.removeStill {look, still}` | tidy a look's pictures |
 //! | `look.picture {look, still}` | one picture as a JPEG in base64, for drawing |
 //! | `look.compare {look, time?}` | the Program frame against the look's numbers, in plain words |
@@ -19,6 +20,7 @@
 //! name, never its folder). Everything read back from the file is untrusted: sizes, counts and text are
 //! held to their limits, and a damaged file is an empty library.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -97,6 +99,8 @@ type SharedLibrary = Arc<Mutex<Option<Library>>>;
 #[derive(Clone, Default)]
 pub struct Hub {
     library: SharedLibrary,
+    /// Where finished and failed `look.addStill` jobs left their answers.
+    done: Arc<Mutex<BTreeMap<u64, std::result::Result<Value, String>>>>,
 }
 
 fn clean(t: &str, max: usize) -> String {
@@ -189,12 +193,16 @@ fn read_only<T>(s: &Session, f: impl FnOnce(&Library) -> T) -> T {
 
 /// Runs `f` on the library and keeps what it did (saved to the file when `f` says it changed something).
 fn write<T>(s: &Session, f: impl FnOnce(&mut Library) -> (T, bool)) -> T {
-    let file = file_path(s);
-    let mut g = lock(&s.look.library);
-    let lib = g.get_or_insert_with(|| read_library(file.as_deref()));
+    write_to(&s.look.library, file_path(s).as_deref(), f)
+}
+
+/// [`write`] without a session, for the worker thread of a job.
+fn write_to<T>(shared: &SharedLibrary, file: Option<&Path>, f: impl FnOnce(&mut Library) -> (T, bool)) -> T {
+    let mut g = lock(shared);
+    let lib = g.get_or_insert_with(|| read_library(file));
     let (out, changed) = f(lib);
     if changed {
-        save_library(file.as_deref(), lib);
+        save_library(file, lib);
     }
     out
 }
@@ -429,45 +437,119 @@ fn file_name_of(path: &str) -> String {
     Path::new(path).file_name().map(|n| clean(&n.to_string_lossy(), MAX_SHORT)).unwrap_or_default()
 }
 
-/// The picture a `look.addStill` is asked for: its pixels, where it came from, and when in it.
-fn source_picture(s: &Session, p: &Value, cmd: &str) -> Result<(u32, u32, Vec<u8>, String, Option<f64>, String)> {
-    match str_p(p, "path").map(str::trim).filter(|t| !t.is_empty()) {
-        Some(path) => {
-            if path.len() > MAX_PATH || path.contains('\0') {
-                return Err(bad(cmd, "`path` is not a usable file path"));
-            }
-            let rights = str_p(p, "rights").map(|r| clean(r, MAX_RIGHTS + 1)).filter(|r| !r.is_empty()).ok_or_else(|| {
-                bad(cmd, "`rights` is required for a file: a short note of why you may use this picture (public domain, your own, a licence)")
-            })?;
-            if rights.chars().count() > MAX_RIGHTS {
-                return Err(bad(cmd, format!("`rights` is at most {MAX_RIGHTS} characters")));
-            }
-            let src = s.media.open_file(path, &*s.services).map_err(|e| bad(cmd, format!("could not open {}: {e}", file_name_of(path))))?;
-            let info = src.info().clone();
-            let video = info.video.clone().ok_or_else(|| bad(cmd, "that file has no picture"))?;
-            let duration = secs(info.duration);
-            let at = match crate::commands::f64_p(p, "seconds") {
-                Some(v) if v.is_finite() && v >= 0.0 => v.min((duration - 0.04).max(0.0)),
-                Some(_) => return Err(bad(cmd, "`seconds` must be a time in the file, 0 or more")),
-                None if duration > 1.0 => duration / 2.0,
-                None => 0.0,
-            };
-            // a still image has one frame; a film is read at the moment asked for
-            let moment = (duration > 0.0 && info.duration > Tick::ZERO).then_some(at);
-            let scale = (f64::from(STILL_SIDE) / f64::from(video.width.max(video.height).max(1))).min(1.0) as f32;
-            let f = src
-                .video_frame(FrameRequest { time: Tick::from_seconds_f64(moment.unwrap_or(0.0)), scale })
-                .map_err(|e| bad(cmd, format!("could not read a picture from {}: {e}", file_name_of(path))))?;
-            Ok((f.width, f.height, f.to_rgba8(), file_name_of(path), moment.filter(|_| info.duration > Tick(TICKS_PER_SECOND / 10)), rights))
-        }
-        None => {
-            let t = time_p(s, p, "").unwrap_or_else(|| s.playhead());
-            let (w, h, rgba) = program_rgba(s, t).map_err(|e| bad(cmd, e))?;
-            let rights = str_p(p, "rights").map(|r| clean(r, MAX_RIGHTS)).filter(|r| !r.is_empty()).unwrap_or_else(|| "A frame of my own edit".to_string());
-            Ok((w, h, rgba, "Program frame".to_string(), Some(secs(t)), rights))
-        }
-    }
+/// A picture on its way to being kept: its pixels, where it came from, and when in it.
+struct Picture {
+    w: u32,
+    h: u32,
+    rgba: Vec<u8>,
+    source: String,
+    time_seconds: Option<f64>,
+    rights: String,
 }
+
+/// A file picture as asked for, checked before any work starts.
+struct FileRequest {
+    path: String,
+    rights: String,
+    seconds: Option<f64>,
+}
+
+fn file_request(p: &Value, path: &str, cmd: &str) -> Result<FileRequest> {
+    if path.len() > MAX_PATH || path.contains('\0') {
+        return Err(bad(cmd, "`path` is not a usable file path"));
+    }
+    let rights = str_p(p, "rights")
+        .map(|r| clean(r, MAX_RIGHTS + 1))
+        .filter(|r| !r.is_empty())
+        .ok_or_else(|| bad(cmd, "`rights` is required for a file: a short note of why you may use this picture (public domain, your own, a licence)"))?;
+    if rights.chars().count() > MAX_RIGHTS {
+        return Err(bad(cmd, format!("`rights` is at most {MAX_RIGHTS} characters")));
+    }
+    let seconds = match p.get("seconds").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_f64().filter(|f| f.is_finite() && *f >= 0.0) {
+            Some(f) => Some(f),
+            None => return Err(bad(cmd, "`seconds` must be a time in the file, 0 or more")),
+        },
+    };
+    Ok(FileRequest { path: path.to_string(), rights, seconds })
+}
+
+/// Opens the file and reads one picture from it: the frame at the moment asked for (the middle of a
+/// film by default; a still image has one). This is the slow part, so it runs on a worker thread.
+fn read_file_picture(media: &crate::media_pool::MediaPool, services: &dyn crate::Services, req: &FileRequest) -> std::result::Result<Picture, String> {
+    let name = file_name_of(&req.path);
+    let src = media.open_file(&req.path, services).map_err(|e| format!("could not open {name}: {e}"))?;
+    let info = src.info().clone();
+    let video = info.video.clone().ok_or("that file has no picture")?;
+    let duration = secs(info.duration);
+    let at = match req.seconds {
+        Some(v) => v.min((duration - 0.04).max(0.0)),
+        None if duration > 1.0 => duration / 2.0,
+        None => 0.0,
+    };
+    // a still image has one frame; a film is read at the moment asked for
+    let moment = (duration > 0.0 && info.duration > Tick::ZERO).then_some(at);
+    let scale = (f64::from(STILL_SIDE) / f64::from(video.width.max(video.height).max(1))).min(1.0) as f32;
+    let f = src
+        .video_frame(FrameRequest { time: Tick::from_seconds_f64(moment.unwrap_or(0.0)), scale })
+        .map_err(|e| format!("could not read a picture from {name}: {e}"))?;
+    Ok(Picture {
+        w: f.width,
+        h: f.height,
+        rgba: f.to_rgba8(),
+        source: name,
+        time_seconds: moment.filter(|_| info.duration > Tick(TICKS_PER_SECOND / 10)),
+        rights: req.rights.clone(),
+    })
+}
+
+/// A picture made small, measured and encoded: a [`Still`] with no id yet.
+fn make_still(pic: Picture, caption: String) -> std::result::Result<Still, String> {
+    let (w, h, rgba) = shrink(pic.w, pic.h, &pic.rgba)?;
+    let stats = an::analyze_rgba(w, h, &rgba).map_err(|e| e.to_string())?;
+    let jpeg = base64_encode(&encode_jpeg(w, h, &rgba)?);
+    if jpeg.len() > MAX_JPEG_B64 {
+        return Err("that picture is too detailed to keep at this size".into());
+    }
+    Ok(Still {
+        id: String::new(),
+        caption,
+        rights: pic.rights,
+        source: pic.source,
+        time_seconds: pic.time_seconds,
+        width: w,
+        height: h,
+        jpeg,
+        stats,
+        added_unix: crate::autosave::unix_now(),
+    })
+}
+
+/// Puts a picture on a look and gives it its id. The limits are checked again here: the look may have
+/// changed while a job was reading the file.
+fn store_still(shared: &SharedLibrary, file: Option<&Path>, look: &str, mut still: Still) -> std::result::Result<String, String> {
+    write_to(shared, file, |lib| {
+        let total: usize = lib.looks.iter().map(|l| l.stills.len()).sum();
+        if total >= MAX_STILLS_TOTAL {
+            return (Err(format!("the library already holds {MAX_STILLS_TOTAL} pictures; remove some first")), false);
+        }
+        lib.next_id = lib.next_id.max(lib.looks.len() as u64 + total as u64) + 1;
+        let sid = format!("s{}", lib.next_id);
+        match lib.looks.iter_mut().find(|l| l.id == look) {
+            Some(l) if l.stills.len() < MAX_STILLS => {
+                still.id = sid.clone();
+                l.stills.push(still);
+                (Ok(sid), true)
+            }
+            Some(_) => (Err(format!("a look holds at most {MAX_STILLS} pictures; remove one first")), false),
+            None => (Err("that look was removed".to_string()), false),
+        }
+    })
+}
+
+/// Most finished jobs' answers kept.
+const MAX_DONE: usize = 50;
 
 fn add_still_command(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "look.addStill";
@@ -481,39 +563,113 @@ fn add_still_command(s: &mut Session, p: &Value) -> Result<Value> {
     if total >= MAX_STILLS_TOTAL {
         return Err(bad(cmd, format!("the library already holds {MAX_STILLS_TOTAL} pictures; remove some first")));
     }
-    let (w, h, rgba, source, time_seconds, rights) = source_picture(s, p, cmd)?;
-    let (w, h, rgba) = shrink(w, h, &rgba).map_err(|e| bad(cmd, e))?;
-    let stats = an::analyze_rgba(w, h, &rgba).map_err(|e| bad(cmd, e.to_string()))?;
-    let jpeg = base64_encode(&encode_jpeg(w, h, &rgba).map_err(|e| bad(cmd, e))?);
-    if jpeg.len() > MAX_JPEG_B64 {
-        return Err(bad(cmd, "that picture is too detailed to keep at this size"));
-    }
     let caption = str_p(p, "caption").map(|c| clean(c, MAX_SHORT)).unwrap_or_default();
-    let added = write(s, |lib| {
-        let total: usize = lib.looks.iter().map(|l| l.stills.len()).sum();
-        lib.next_id = lib.next_id.max(lib.looks.len() as u64 + total as u64) + 1;
-        let sid = format!("s{}", lib.next_id);
-        match lib.looks.iter_mut().find(|l| l.id == id) {
-            Some(l) if l.stills.len() < MAX_STILLS => {
-                l.stills.push(Still {
-                    id: sid.clone(),
-                    caption,
-                    rights,
-                    source,
-                    time_seconds,
-                    width: w,
-                    height: h,
-                    jpeg,
-                    stats,
-                    added_unix: crate::autosave::unix_now(),
-                });
-                (Some(sid), true)
-            }
-            _ => (None, false),
+    let file = file_path(s);
+    match str_p(p, "path").map(str::trim).filter(|t| !t.is_empty()) {
+        // the Program frame is quick and needs the session: done here
+        None => {
+            let t = time_p(s, p, "").unwrap_or_else(|| s.playhead());
+            let (w, h, rgba) = program_rgba(s, t).map_err(|e| bad(cmd, e))?;
+            let rights = str_p(p, "rights").map(|r| clean(r, MAX_RIGHTS)).filter(|r| !r.is_empty()).unwrap_or_else(|| "A frame of my own edit".to_string());
+            let still = make_still(Picture { w, h, rgba, source: "Program frame".to_string(), time_seconds: Some(secs(t)), rights }, caption)
+                .map_err(|e| bad(cmd, e))?;
+            let sid = store_still(&s.look.library, file.as_deref(), &id, still).map_err(|e| bad(cmd, e))?;
+            Ok(json!({"look": id, "still": sid}))
         }
-    });
-    let sid = added.ok_or_else(|| bad(cmd, "the look could not take another picture"))?;
-    Ok(json!({"look": id, "still": sid}))
+        // a file is opened and read on a worker thread, so the app never waits for it
+        Some(path) => {
+            let req = file_request(p, path, cmd)?;
+            start_file_job(s, p, id, req, caption, file)
+        }
+    }
+}
+
+/// Starts the job that reads a file picture and keeps it. With `wait: true` (and on the web, which has
+/// no threads) it runs here and returns the picture's id.
+fn start_file_job(s: &mut Session, p: &Value, look: String, req: FileRequest, caption: String, file: Option<PathBuf>) -> Result<Value> {
+    let cmd = "look.addStill";
+    let job_id = s.jobs.iter().map(|j| j.id).max().unwrap_or(0) + 1;
+    let job = crate::Job { id: job_id, label: format!("Add picture {}", file_name_of(&req.path)), progress: Default::default(), result: Default::default() };
+    let (prog, res) = (job.progress.clone(), job.result.clone());
+    let (media, services) = (s.media.clone(), s.services.clone());
+    let (done, library) = (s.look.done.clone(), s.look.library.clone());
+    prog.total.store(3, std::sync::atomic::Ordering::Relaxed);
+    let run = move || {
+        use std::sync::atomic::Ordering::Relaxed;
+        let stopped = || prog.cancel.load(Relaxed);
+        let step = |text: &str| {
+            *lock(&prog.status) = text.to_string();
+        };
+        let t0 = web_time::Instant::now();
+        step("Opening the file");
+        let outcome = read_file_picture(&media, &*services, &req).and_then(|pic| {
+            prog.done.fetch_add(2, Relaxed);
+            if stopped() {
+                return Err("stopped".to_string());
+            }
+            step("Measuring the picture");
+            let still = make_still(pic, caption.clone())?;
+            if stopped() {
+                return Err("stopped".to_string());
+            }
+            store_still(&library, file.as_deref(), &look, still)
+        });
+        let r = match outcome {
+            Ok(sid) => {
+                prog.done.store(3, Relaxed);
+                step("Added");
+                lock(&done).insert(job_id, Ok(json!({"look": look, "still": sid})));
+                Ok(filmcraft_export::Report {
+                    path: String::new(),
+                    frames: 1,
+                    seconds: t0.elapsed().as_secs_f64(),
+                    bytes: 0,
+                    render_fps: 0.0,
+                    extra_files: Vec::new(),
+                })
+            }
+            Err(e) => {
+                step(if e == "stopped" { "Stopped: nothing was kept" } else { &e });
+                lock(&done).insert(job_id, Err(e.clone()));
+                Err(e)
+            }
+        };
+        {
+            let mut d = lock(&done);
+            while d.len() > MAX_DONE {
+                let Some(first) = d.keys().next().copied() else { break };
+                d.remove(&first);
+            }
+        }
+        *lock(&res) = Some(r);
+        prog.finished.store(true, Relaxed);
+    };
+    let run = crate::export_tools::guard_job(job.progress.clone(), job.result.clone(), run);
+    s.jobs.push(job);
+    if crate::commands::bool_p(p, "wait").unwrap_or(false) || cfg!(target_arch = "wasm32") {
+        run();
+        return match lock(&s.look.done).get(&job_id).cloned() {
+            Some(Ok(v)) => Ok(json!({"job": job_id, "look": v["look"], "still": v["still"]})),
+            Some(Err(e)) => Err(bad(cmd, e)),
+            None => Err(bad(cmd, "the job ended without an answer")),
+        };
+    }
+    std::thread::Builder::new().name("edith-look".into()).spawn(run).map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok(json!({"job": job_id}))
+}
+
+/// Where a `look.addStill` job is: running, done (with the picture's id) or failed.
+fn result_command(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "look.result";
+    let id = crate::commands::u64_p(p, "job").ok_or_else(|| bad(cmd, "`job` is required: the number `look.addStill` returned"))?;
+    if !s.jobs.iter().any(|j| j.id == id) && !lock(&s.look.done).contains_key(&id) {
+        return Err(bad(cmd, format!("there is no job {id}")));
+    }
+    Ok(match lock(&s.look.done).get(&id) {
+        Some(Ok(v)) => json!({"state": "done", "look": v["look"], "still": v["still"]}),
+        Some(Err(e)) => json!({"state": "failed", "error": e}),
+        None => json!({"state": "running"}),
+    })
 }
 
 fn set_still_command(s: &mut Session, p: &Value) -> Result<Value> {
@@ -632,9 +788,10 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "look.addStill",
             "Add Picture to Look",
-            r#"{"look":str,"path":str?,"seconds":n?,"rights":str?,"caption":str?,"time":ticks?|"frame":n?|"seconds":n?|"timecode":str?}"#,
+            r#"{"look":str,"path":str?,"seconds":n?,"rights":str?,"caption":str?,"wait":bool=false,"time":ticks?|"frame":n?|"timecode":str?}"#,
             add_still_command,
         ),
+        spec("look.result", "Look Picture Job Result", r#"{"job":id}"#, result_command),
         spec("look.setStill", "Caption Look Picture", r#"{"look":str,"still":str,"caption":str}"#, set_still_command),
         spec("look.removeStill", "Remove Look Picture", r#"{"look":str,"still":str}"#, remove_still_command),
         spec("look.picture", "Look Picture", r#"{"look":str,"still":str}"#, picture_command),

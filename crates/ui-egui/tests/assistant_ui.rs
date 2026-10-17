@@ -1133,7 +1133,7 @@ fn the_look_view_shows_the_looks_pictures_beside_your_frame_and_the_frame_jumps_
         .unwrap()
         .to_string();
     for (name, rgb) in [("a.png", [30, 70, 90]), ("b.png", [90, 110, 120])] {
-        session.execute("look.addStill", json!({"look": look, "path": look_png(&dir, name, rgb), "rights": "made for this test"})).unwrap();
+        session.execute("look.addStill", json!({"wait": true, "look": look, "path": look_png(&dir, name, rgb), "rights": "made for this test"})).unwrap();
     }
     session.set_playhead(filmcraft_time::Tick(3 * filmcraft_time::TICKS_PER_SECOND));
     let mut d = Driver::with(session);

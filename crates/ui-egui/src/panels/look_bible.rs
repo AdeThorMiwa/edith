@@ -14,7 +14,7 @@
 //! `looks.notes`, `looks.aspect`, `looks.grain`, `looks.lut`, `looks.remove`, `looks.pic.<id>`,
 //! `looks.pic.<id>.caption`, `looks.pic.<id>.remove`, `looks.path`, `looks.browse`, `looks.seconds`,
 //! `looks.rights`, `looks.caption`, `looks.addFile`, `looks.addFrame`, `looks.compare`,
-//! `looks.row.<metric>`, `looks.match`, `looks.swatch.<i>`, `looks.numbers`, `looks.error`.
+//! `looks.row.<metric>`, `looks.match`, `looks.progress`, `looks.cancel`, `looks.swatch.<i>`, `looks.numbers`, `looks.error`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -46,6 +46,8 @@ struct State {
     rights: String,
     caption: String,
     error: Option<String>,
+    /// The job that is reading a file picture.
+    job: Option<u64>,
     comparing: bool,
     confirm_remove: Option<String>,
     confirm_remove_pic: Option<String>,
@@ -103,6 +105,34 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
             }
         }
         st.loaded_for = sel.clone();
+    }
+    // a picture being read from a file: its progress, and what it left when it ended
+    let mut progress: Option<(f32, String)> = None;
+    if let Some(job) = st.job {
+        match app.session.execute("look.result", json!({"job": job})) {
+            Ok(v) if v["state"] == "done" => {
+                st.job = None;
+                st.path.clear();
+                st.seconds.clear();
+                st.caption.clear();
+                st.compare_cache = None;
+                if v["look"].as_str() == st.selected.as_deref() {
+                    st.selected_still = v["still"].as_str().map(str::to_string);
+                }
+                app.ui.status = tl!("Picture added to the look.").to_string();
+            }
+            Ok(v) if v["state"] == "failed" => {
+                st.job = None;
+                st.error = Some(text_of(&v["error"]));
+            }
+            Ok(_) => {
+                progress = app.session.jobs.iter().find(|j| j.id == job).map(|j| {
+                    let v = j.to_json();
+                    (v["progress"].as_f64().unwrap_or(0.0) as f32, text_of(&v["status"]))
+                });
+            }
+            Err(_) => st.job = None,
+        }
     }
     let revision = app.session.revision;
     let playhead = app.session.playhead().0;
@@ -310,7 +340,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
         focus |= r.has_focus();
         elems.push(("looks.caption".into(), r, "Caption for the new picture".into()));
         ui.horizontal(|ui| {
-            let can = !st.path.trim().is_empty() && !st.rights.trim().is_empty();
+            let can = st.job.is_none() && !st.path.trim().is_empty() && !st.rights.trim().is_empty();
             let b = ui.add_enabled(can, egui::Button::new(tl!("Add from file")));
             elems.push(("looks.addFile".into(), b.clone(), "Add the picture from the file".into()));
             if b.clicked() {
@@ -338,6 +368,17 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
                 commands.push(("look.addStill", p));
             }
         });
+        if let Some((fraction, status)) = &progress {
+            ui.add(egui::ProgressBar::new(*fraction).text(status.as_str()));
+            let c = ui.button(tl!("Stop"));
+            elems.push(("looks.progress".into(), c.clone(), format!("{status} ({:.0}%)", fraction * 100.0)));
+            elems.push(("looks.cancel".into(), c.clone(), "Stop adding the picture".into()));
+            if c.clicked()
+                && let Some(job) = st.job
+            {
+                commands.push(("jobs.cancel", json!({"job": job})));
+            }
+        }
         if let Some(e) = st.error.clone() {
             let r = ui.add(egui::Label::new(RichText::new(&e).size(11.5).color(LOOK)).wrap());
             elems.push(("looks.error".into(), r, e));
@@ -480,13 +521,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
                         s.selected_still = None;
                         s.new_name.clear();
                     }
-                    "look.addStill" => {
-                        s.path.clear();
-                        s.seconds.clear();
-                        s.caption.clear();
-                        s.selected_still = r["still"].as_str().map(str::to_string);
-                        s.compare_cache = None;
-                    }
+                    "look.addStill" => match r["job"].as_u64() {
+                        // a file is being read in the background: the form stays until it is done
+                        Some(job) => s.job = Some(job),
+                        None => {
+                            s.caption.clear();
+                            s.selected_still = r["still"].as_str().map(str::to_string);
+                            s.compare_cache = None;
+                        }
+                    },
                     "look.match" => app.ui.status = tl!("Matched the clip to the look.").to_string(),
                     _ => {}
                 }
