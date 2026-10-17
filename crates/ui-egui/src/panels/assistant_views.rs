@@ -293,47 +293,90 @@ fn pace(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
     }
 }
 
+/// The words at the two ends of a gauge, so the bar says which way is which.
+fn gauge_ends(metric: &str) -> Option<(&'static str, &'static str)> {
+    Some(match metric {
+        "loudness" => (tl!("quieter"), tl!("louder")),
+        "narrationPace" => (tl!("slower"), tl!("faster")),
+        "averageShot" => (tl!("shorter shots"), tl!("longer shots")),
+        "cutsPerMinute" => (tl!("slower cutting"), tl!("faster cutting")),
+        _ => return None,
+    })
+}
+
+/// What the gauge says in a sentence: where the number is against the usual range, and by how much it
+/// is off the target. `None` when there is no target to compare with.
+fn gauge_verdict(metric: &str, value: f64, target: Option<f64>, low: Option<f64>, high: Option<f64>, unit: &str) -> Option<(String, bool)> {
+    let target = target?;
+    let (lo, hi) = (low.unwrap_or(target), high.unwrap_or(target));
+    // differences in loudness are in LU, not LUFS
+    let unit = if metric == "loudness" { "LU" } else { unit };
+    if value >= lo && value <= hi {
+        return Some((tl!("within the usual range").to_string(), true));
+    }
+    let amount = format!("{:.1}", (value - target).abs());
+    let text = if value < target {
+        tlf!("{amount} {unit} below the target", amount = amount, unit = unit)
+    } else {
+        tlf!("{amount} {unit} above the target", amount = amount, unit = unit)
+    };
+    Some((text, false))
+}
+
 fn gauge(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
     let (Some(value), Some(lo), Some(hi)) = (finite(&view["value"]), finite(&view["scaleMin"]), finite(&view["scaleMax"])) else { return };
     if hi <= lo {
         return;
     }
-    let unit = text(&view["unit"]);
-    let label = text(&view["label"]);
-    let target = finite(&view["target"]);
-    ui.horizontal(|ui| {
+    let (unit, label, metric) = (text(&view["unit"]), text(&view["label"]), text(&view["metric"]));
+    let (target, band_lo, band_hi) = (finite(&view["target"]), finite(&view["low"]), finite(&view["high"]));
+    let verdict = gauge_verdict(&metric, value, target, band_lo, band_hi, &unit);
+    // the headline: what it is, the number, and what that means
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(&label).size(12.0).color(t.text_dim));
-        ui.label(RichText::new(format!("{value:.1} {unit}")).size(14.0).strong().color(t.text));
-        if let Some(tg) = target {
-            ui.label(RichText::new(tlf!("target {value}", value = format!("{tg:.1}"))).size(11.5).color(t.text_faint));
+        ui.label(RichText::new(format!("{value:.1} {unit}")).size(15.0).strong().color(t.text));
+        if let Some((words, fine)) = &verdict {
+            ui.label(RichText::new(words).size(12.0).strong().color(if *fine { Color32::from_rgb(0x6f, 0xb8, 0x8a) } else { LOOK }));
         }
     });
     let w = ui.available_width().max(60.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 54.0), Sense::hover());
     let painter = ui.painter_at(rect);
     let x_of = |v: f64| rect.min.x + (((v - lo) / (hi - lo)).clamp(0.0, 1.0) as f32) * rect.width();
-    let track = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 8.0), pos2(rect.max.x, rect.min.y + 20.0));
-    painter.rect_filled(track, 4.0, t.panel_bg);
-    // the band that is fine
-    if let (Some(a), Some(b)) = (finite(&view["low"]), finite(&view["high"])) {
-        painter.rect_filled(
-            Rect::from_min_max(pos2(x_of(a), track.min.y), pos2(x_of(b), track.max.y)),
-            3.0,
-            Color32::from_rgb(0x4f, 0x8f, 0x6a).gamma_multiply(0.7),
-        );
+    let track = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 20.0), pos2(rect.max.x, rect.min.y + 34.0));
+    painter.rect_filled(track, 5.0, t.panel_bg);
+    // the stretch that is fine, named
+    if let (Some(a), Some(b)) = (band_lo, band_hi) {
+        let band = Rect::from_min_max(pos2(x_of(a), track.min.y), pos2(x_of(b), track.max.y));
+        painter.rect_filled(band, 4.0, Color32::from_rgb(0x4f, 0x8f, 0x6a).gamma_multiply(0.75));
+        // the name goes on whichever side of the target tick has room for it
+        let word = tl!("usual range");
+        let width = painter.layout_no_wrap(word.to_string(), Tokens::ui(10.0), Color32::WHITE).size().x;
+        let tick = target.map_or(band.center().x, x_of);
+        if tick - band.min.x - 4.0 > width + 4.0 {
+            painter.text(pos2(band.min.x + 4.0, band.center().y), Align2::LEFT_CENTER, word, Tokens::ui(10.0), Color32::from_white_alpha(200));
+        } else if band.max.x - tick - 4.0 > width + 4.0 {
+            painter.text(pos2(band.max.x - 4.0, band.center().y), Align2::RIGHT_CENTER, word, Tokens::ui(10.0), Color32::from_white_alpha(200));
+        }
     }
     if let Some(tg) = target {
         painter.line_segment([pos2(x_of(tg), track.min.y - 3.0), pos2(x_of(tg), track.max.y + 3.0)], Stroke::new(1.5, t.text));
+        painter.text(pos2(x_of(tg), track.max.y + 5.0), Align2::CENTER_TOP, tlf!("target {value}", value = format!("{tg:.1}")), Tokens::ui(10.0), t.text_dim);
     }
+    // where it is: a marker with the number over it
     let x = x_of(value);
     painter.add(Shape::convex_polygon(
-        vec![pos2(x, track.min.y - 1.0), pos2(x - 5.0, track.min.y - 8.0), pos2(x + 5.0, track.min.y - 8.0)],
+        vec![pos2(x, track.min.y - 1.0), pos2(x - 6.0, track.min.y - 8.0), pos2(x + 6.0, track.min.y - 8.0)],
         t.accent,
         Stroke::NONE,
     ));
-    painter.text(pos2(rect.min.x, rect.max.y), Align2::LEFT_BOTTOM, format!("{lo:.0}"), Tokens::ui(9.5), t.text_faint);
-    painter.text(pos2(rect.max.x, rect.max.y), Align2::RIGHT_BOTTOM, format!("{hi:.0}"), Tokens::ui(9.5), t.text_faint);
-    elems.push((format!("assistant.view.{n}.gauge"), resp, format!("{label} {value:.1} {unit}")));
+    painter.text(pos2(x.clamp(rect.min.x + 18.0, rect.max.x - 18.0), rect.min.y), Align2::CENTER_TOP, format!("{value:.1}"), Tokens::ui(10.5), t.accent);
+    if let Some((low_end, high_end)) = gauge_ends(&metric) {
+        painter.text(pos2(rect.min.x, rect.max.y), Align2::LEFT_BOTTOM, format!("← {low_end}"), Tokens::ui(10.5), t.text_faint);
+        painter.text(pos2(rect.max.x, rect.max.y), Align2::RIGHT_BOTTOM, format!("{high_end} →"), Tokens::ui(10.5), t.text_faint);
+    }
+    let said = verdict.map_or(String::new(), |(w, _)| format!(": {w}"));
+    elems.push((format!("assistant.view.{n}.gauge"), resp, format!("{label} {value:.1} {unit}{said}")));
 }
 
 fn palette(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
@@ -425,4 +468,39 @@ fn pie(ui: &mut Ui, view: &Value, n: usize, t: &Tokens, elems: &mut Elems) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_gauge_says_in_words_where_the_number_is_against_the_target() {
+        // the case from real use: -20 LUFS against -14, the usual range being 3 either side
+        let (text, fine) = gauge_verdict("loudness", -20.0, Some(-14.0), Some(-17.0), Some(-11.0), "LUFS").unwrap();
+        assert_eq!((text.as_str(), fine), ("6.0 LU below the target", false), "a loudness difference is in LU, not LUFS");
+        let (text, fine) = gauge_verdict("loudness", -8.5, Some(-14.0), Some(-17.0), Some(-11.0), "LUFS").unwrap();
+        assert_eq!((text.as_str(), fine), ("5.5 LU above the target", false));
+        let (text, fine) = gauge_verdict("loudness", -15.0, Some(-14.0), Some(-17.0), Some(-11.0), "LUFS").unwrap();
+        assert_eq!((text.as_str(), fine), ("within the usual range", true));
+        let (text, _) = gauge_verdict("narrationPace", 187.0, Some(140.0), Some(112.0), Some(161.0), "words a minute").unwrap();
+        assert_eq!(text, "47.0 words a minute above the target");
+        // the edges of the range count as inside, and with no target there is nothing to say
+        assert!(gauge_verdict("averageShot", 4.55, Some(7.0), Some(4.55), Some(9.45), "s").unwrap().1);
+        assert_eq!(gauge_verdict("averageShot", 5.0, None, None, None, "s"), None);
+        // a target with no band: only exactly on it is fine
+        assert!(!gauge_verdict("averageShot", 5.0, Some(7.0), None, None, "s").unwrap().1);
+        // hostile numbers do not panic
+        let _ = gauge_verdict("loudness", f64::NAN, Some(f64::INFINITY), Some(f64::NAN), None, "");
+    }
+
+    #[test]
+    fn each_metric_names_the_two_ends_of_its_bar_and_an_unknown_one_none() {
+        for m in ["loudness", "narrationPace", "averageShot", "cutsPerMinute"] {
+            let (a, b) = gauge_ends(m).unwrap();
+            assert!(!a.is_empty() && !b.is_empty() && a != b, "{m}");
+        }
+        assert_eq!(gauge_ends("mood"), None);
+        assert_eq!(gauge_ends(""), None);
+    }
 }

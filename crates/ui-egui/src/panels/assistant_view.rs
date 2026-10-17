@@ -143,6 +143,82 @@ pub struct Span {
     pub code: bool,
 }
 
+/// A time written in text, such as `0:38`, `1:05:00` or `00:00:38:23`: where it is (byte range) and its
+/// numbers (minutes and seconds; hours, minutes and seconds; or hours, minutes, seconds and frames).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimeRef {
+    pub start: usize,
+    pub end: usize,
+    pub parts: Vec<u32>,
+}
+
+/// The times written in `text`, in order. A time is two to four numbers joined by colons that are not
+/// part of a longer word or number: the first up to three digits, the others two; minutes and seconds
+/// under 60 and frames under 120. So `0:38` and `00:00:38:23` count, and `16:9`, `10:30am` and `v1.2:03`
+/// do not.
+pub fn timecodes(text: &str) -> Vec<TimeRef> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        let before_ok = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || matches!(b[i - 1], b'.' | b':' | b'#' | b'_'));
+        if !b[i].is_ascii_digit() || !before_ok {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        let mut parts: Vec<(usize, usize)> = Vec::new();
+        loop {
+            let s = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            parts.push((s, j));
+            if j + 1 < b.len() && b[j] == b':' && b[j + 1].is_ascii_digit() && parts.len() < 5 {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        let after_ok = j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b':');
+        let widths_ok = parts.iter().enumerate().all(|(k, (s, e))| if k == 0 { (1..=3).contains(&(e - s)) } else { e - s == 2 });
+        let nums: Vec<u32> = parts.iter().filter_map(|(s, e)| text.get(*s..*e).and_then(|t| t.parse().ok())).collect();
+        let valid = nums.len() == parts.len()
+            && match nums.as_slice() {
+                [_, s] => *s < 60,
+                [_, m, s] => *m < 60 && *s < 60,
+                [_, m, s, f] => *m < 60 && *s < 60 && *f < 120,
+                _ => false,
+            };
+        if after_ok && widths_ok && valid {
+            out.push(TimeRef { start: i, end: j, parts: nums });
+        }
+        i = j.max(i + 1);
+    }
+    out
+}
+
+/// A written time as the text it came from (`0:38`, `00:00:38:23`), for labels.
+pub fn timecode_label(parts: &[u32]) -> String {
+    match parts {
+        [m, s] => format!("{m}:{s:02}"),
+        [h, m, s] => format!("{h}:{m:02}:{s:02}"),
+        [h, m, s, f] => format!("{h:02}:{m:02}:{s:02}:{f:02}"),
+        _ => String::new(),
+    }
+}
+
+/// The timeline position of a written time, in ticks: `m:ss`, `h:mm:ss`, or `h:mm:ss:ff` (frames at `rate`).
+pub fn timecode_ticks(parts: &[u32], rate: filmcraft_time::FrameRate) -> Option<i64> {
+    let secs = |h: u32, m: u32, s: u32| (i64::from(h) * 3600 + i64::from(m) * 60 + i64::from(s)).checked_mul(filmcraft_time::TICKS_PER_SECOND);
+    match parts {
+        [m, s] => secs(0, *m, *s),
+        [h, m, s] => secs(*h, *m, *s),
+        [h, m, s, f] => secs(*h, *m, *s)?.checked_add(rate.tick_of(i64::from(*f)).0),
+        _ => None,
+    }
+}
+
 /// The light markdown assistants use, as lines of spans: `**bold**`, `` `code` ``, and `-`, `*` or
 /// `1.` list items (shown with a bullet). Headings lose their `#`s and are bold. Nothing else is
 /// interpreted, and an unclosed marker is shown as it was written.
@@ -547,5 +623,49 @@ mod tests {
             }
         }
         assert!(blocks("").is_empty());
+    }
+
+    #[test]
+    fn times_in_text_are_found_whole_and_other_colons_are_left_alone() {
+        let t = "The gap runs 0:38 to 0:48 and the clip ends at 00:00:38:23, then 1:05:00 later.";
+        let found: Vec<&str> = timecodes(t).iter().map(|r| &t[r.start..r.end]).collect();
+        assert_eq!(found, ["0:38", "0:48", "00:00:38:23", "1:05:00"]);
+        assert_eq!(timecodes("(0:06)")[0].parts, [0, 6]);
+        assert_eq!(timecodes("at 12:34.")[0].parts, [12, 34], "a full stop after it is not part of it");
+        for plain in [
+            "a 16:9 frame",
+            "4:3",
+            "10:30am",
+            "v1.2:03",
+            "#29:12",
+            "12:5",
+            "0:61",
+            "00:00:61:00",
+            "1:2:3",
+            "x:12",
+            "5:30:",
+            "12:345",
+            "0:38x",
+            "1234:56",
+            "99:99:99:99:99",
+        ] {
+            assert!(timecodes(plain).is_empty(), "{plain}: {:?}", timecodes(plain));
+        }
+        assert!(timecodes("").is_empty());
+        // non-ASCII text next to a time does not break the byte ranges
+        let u = "é 0:38 ünï 0:40";
+        let f: Vec<&str> = timecodes(u).iter().map(|r| &u[r.start..r.end]).collect();
+        assert_eq!(f, ["0:38", "0:40"]);
+    }
+
+    #[test]
+    fn a_written_time_becomes_a_timeline_position() {
+        let r = filmcraft_time::FrameRate::FPS_24;
+        let s = filmcraft_time::TICKS_PER_SECOND;
+        assert_eq!(timecode_ticks(&[0, 38], r), Some(38 * s));
+        assert_eq!(timecode_ticks(&[1, 5, 0], r), Some(3900 * s));
+        assert_eq!(timecode_ticks(&[0, 0, 38, 12], r), Some(38 * s + r.tick_of(12).0));
+        assert_eq!(timecode_ticks(&[5], r), None);
+        let _ = timecode_ticks(&[u32::MAX, 59], r); // huge numbers do not panic
     }
 }

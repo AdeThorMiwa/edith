@@ -259,6 +259,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
     let mut elems: Vec<(String, egui::Response, String)> = Vec::new();
     let mut actions: Vec<Action> = Vec::new();
+    // places in the timeline the person clicked in the text of an answer (ticks)
+    let mut seeks: Vec<i64> = Vec::new();
     let ready = chat.ready();
     let running = chat.running;
     let models = chat.models.clone();
@@ -528,7 +530,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         elems.push((format!("assistant.entry.{i}"), r.response, text.clone()));
                     }
                     Entry::Assistant(text) => {
-                        let r = ui.scope(|ui| super::assistant_widgets::answer(ui, (thread, i), &super::assistant_view::blocks(text), &t)).response;
+                        let rate = app.session.active_sequence().map_or(filmcraft_time::FrameRate::FPS_24, |q| q.settings.frame_rate);
+                        let mut links = super::assistant_widgets::Links { elems: &mut elems, seek: &mut seeks, rate, entry: i, next: 0 };
+                        let r = ui.scope(|ui| super::assistant_widgets::answer(ui, (thread, i), &super::assistant_view::blocks(text), &t, &mut links)).response;
                         let shown = !running && (last_answer == Some(i) || chat.hover_entry == Some(i));
                         let (row, links) =
                             super::assistant_widgets::action_row(ui, shown, &[(ActionIcon::Copy, tl!("Copy")), (ActionIcon::Retry, tl!("Retry"))], &t);
@@ -821,6 +825,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     for (id, r, label) in &elems {
         app.auto.add_response(id, r, label);
     }
+    actions.extend(seeks.into_iter().map(Action::Seek));
     let ctx = ui.ctx().clone();
     for a in actions {
         let mut chat = lock(&shared);

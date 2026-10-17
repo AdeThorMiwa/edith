@@ -1035,3 +1035,34 @@ fn the_palette_and_the_pie_are_drawn_from_the_measurements() {
     assert!(slices >= 2, "{slices}");
     d.snapshot("assistant-view-palette-pie");
 }
+
+#[test]
+fn times_written_in_an_answer_are_links_that_move_the_playhead_and_other_colons_are_not() {
+    let _g = guard();
+    let mut d = Driver::with(edit_of(&[30.0, 30.0, 10.0]));
+    d.app().session.assistant.use_model(scripted(vec![text_reply(
+        "There is a gap from 0:38 to 0:48, and the next clip starts at 00:00:47:22. In a 16:9 frame at 10:30am nothing here is a time, but (0:06) is.",
+    )]));
+    d.open_assistant();
+    d.exec("window.floatPanel", json!({"panel": "Assistant", "rect": [40.0, 40.0, 700.0, 900.0]}));
+    d.frames(6);
+    d.type_into_input("where are the problems?");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("a gap from")));
+    d.frames(4);
+    let links: Vec<(String, String)> = d
+        .elements("assistant.time.")
+        .into_iter()
+        .map(|e| (e["id"].as_str().unwrap_or("").to_string(), e["label"].as_str().unwrap_or("").to_string()))
+        .collect();
+    let labels: Vec<&str> = links.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, ["0:38", "0:48", "00:00:47:22", "0:06"], "16:9 and 10:30am are not times: {links:?}");
+    d.click(&links[0].0);
+    assert!((playhead_seconds(&mut d) - 38.0).abs() < 0.1, "{}", playhead_seconds(&mut d));
+    d.click(&links[2].0);
+    let p = playhead_seconds(&mut d);
+    assert!((p - (47.0 + 22.0 / 24.0)).abs() < 0.1, "47 s and 22 frames at 24 fps: {p}");
+    d.click(&links[3].0);
+    assert!((playhead_seconds(&mut d) - 6.0).abs() < 0.1);
+    d.snapshot("assistant-time-links");
+}

@@ -125,6 +125,7 @@
       "graders": [
         {"check": "calls_tools", "all": ["analysis_get"]},
         {"check": "numbers_from_tools", "min_numbers": 3},
+        {"check": "avoids", "phrases": ["@"]},
         {"check": "times_within", "max_seconds": 26.75, "fps": 24},
         {"check": "project_unchanged"},
         {"check": "budget", "max_steps": 8, "max_tokens": 80000}
@@ -140,6 +141,7 @@
       "graders": [
         {"check": "mentions", "groups": [["not measured", "haven't measured", "have not measured", "not been measured"]]},
         {"check": "numbers_from_tools"},
+        {"check": "avoids", "phrases": ["@"]},
         {"check": "project_unchanged"},
         {"check": "budget", "max_steps": 8, "max_tokens": 80000}
       ]

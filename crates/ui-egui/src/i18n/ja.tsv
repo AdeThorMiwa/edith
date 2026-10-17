@@ -3898,3 +3898,15 @@
 	overall {rate} cuts a minute	全体で1分あたり {rate} カット
 	plan: about {rate} (dashed)	計画: 約 {rate}(破線)
 	target {value}	目標 {value}
+	quieter	より小さい
+	louder	より大きい
+	slower	より遅い
+	faster	より速い
+	shorter shots	より短いショット
+	longer shots	より長いショット
+	slower cutting	よりゆっくりしたカット
+	faster cutting	より速いカット
+	within the usual range	通常の範囲内
+	usual range	通常の範囲
+	{amount} {unit} below the target	目標より {amount} {unit} 低い
+	{amount} {unit} above the target	目標より {amount} {unit} 高い

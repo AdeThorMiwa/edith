@@ -3,7 +3,7 @@
 //! (paragraphs with a steady line height, lists with a hanging indent, code, tables).
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align, Color32, FontFamily, FontId, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align, Color32, FontFamily, FontId, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::panels::assistant_view::{Block, Span};
 use crate::theme::Tokens;
@@ -107,17 +107,90 @@ fn round_inner(ui: &mut Ui, stop: bool, enabled: bool, t: &Tokens) -> Response {
     resp
 }
 
-/// An answer, drawn block by block with even spacing.
-pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Tokens) {
+/// What an answer needs to turn the times in its text into links: somewhere to register them for
+/// automation and to leave the places clicked, and the frame rate that gives `00:00:38:23` its frames.
+pub struct Links<'a> {
+    pub elems: &'a mut Vec<(String, Response, String)>,
+    /// Timeline positions (ticks) the person clicked.
+    pub seek: &'a mut Vec<i64>,
+    pub rate: filmcraft_time::FrameRate,
+    /// Which message these belong to, and how many links it has so far (for their ids).
+    pub entry: usize,
+    pub next: usize,
+}
+
+/// Spans as wrapping text in which every written time (`0:38`, `00:00:38:23`) is a link that moves the
+/// playhead there. The text is laid out once, and each time gets a clickable rectangle over its glyphs.
+pub fn linked_text(ui: &mut Ui, spans: &[Span], color: Color32, size: f32, all_bold: bool, t: &Tokens, links: &mut Links) {
+    let mut job = LayoutJob::default();
+    job.wrap.max_width = ui.available_width();
+    // each time: where it starts and ends in the text (in characters), and its numbers
+    let mut found: Vec<(usize, usize, Vec<u32>)> = Vec::new();
+    let mut chars = 0usize;
+    for span in spans {
+        let font = if span.code {
+            FontId::new(size - 1.0, FontFamily::Monospace)
+        } else if span.bold || all_bold {
+            Tokens::semibold(size)
+        } else {
+            Tokens::ui(size)
+        };
+        let mut plain = format(font.clone(), color, size);
+        if span.code {
+            plain.background = Color32::from_white_alpha(14);
+        }
+        let mut at = 0usize;
+        for r in crate::panels::assistant_view::timecodes(&span.text) {
+            if span.code {
+                break;
+            }
+            let (before, time) = (span.text.get(at..r.start).unwrap_or(""), span.text.get(r.start..r.end).unwrap_or(""));
+            job.append(before, 0.0, plain.clone());
+            chars += before.chars().count();
+            let mut link = format(font.clone(), t.accent, size);
+            link.underline = Stroke::new(1.0, t.accent.gamma_multiply(0.7));
+            job.append(time, 0.0, link);
+            let n = time.chars().count();
+            found.push((chars, chars + n, r.parts));
+            chars += n;
+            at = r.end;
+        }
+        let rest = span.text.get(at..).unwrap_or("");
+        job.append(rest, 0.0, plain);
+        chars += rest.chars().count();
+    }
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+    ui.painter().galley(rect.min, galley.clone(), color);
+    for (from, to, parts) in found {
+        let (a, b) = (galley.pos_from_cursor(egui::text::CCursor::new(from)), galley.pos_from_cursor(egui::text::CCursor::new(to)));
+        // a time that wraps onto a second line is clickable on its first line
+        let right = if (b.min.y - a.min.y).abs() < 1.0 { b.min.x } else { galley.size().x };
+        let r = Rect::from_min_max(rect.min + vec2(a.min.x, a.min.y), rect.min + vec2(right.max(a.min.x + 4.0), a.max.y));
+        let id = format!("assistant.time.{}.{}", links.entry, links.next);
+        let resp = ui.interact(r, egui::Id::new((id.as_str(), "time-link")), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let label = crate::panels::assistant_view::timecode_label(&parts);
+        links.elems.push((id, resp.clone(), label));
+        links.next += 1;
+        if resp.clicked()
+            && let Some(ticks) = crate::panels::assistant_view::timecode_ticks(&parts, links.rate)
+        {
+            links.seek.push(ticks);
+        }
+    }
+}
+
+/// An answer, drawn block by block with even spacing. The times in it are links (see [`linked_text`]).
+pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Tokens, links: &mut Links) {
     ui.spacing_mut().item_spacing.y = 6.0;
     for (n, b) in blocks.iter().enumerate() {
         match b {
             Block::Paragraph(spans) => {
-                ui.add(egui::Label::new(spans_job(ui, spans, t.text, BODY, false)).wrap());
+                linked_text(ui, spans, t.text, BODY, false, t, links);
             }
             Block::Heading(spans) => {
                 ui.add_space(2.0);
-                ui.add(egui::Label::new(spans_job(ui, spans, t.text, BODY + 1.0, true)).wrap());
+                linked_text(ui, spans, t.text, BODY + 1.0, true, t, links);
             }
             Block::Item { depth, marker, spans } => {
                 ui.horizontal_top(|ui| {
@@ -130,7 +203,7 @@ pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Token
                     let width = if marker == "\u{2022}" { 10.0 } else { 20.0 };
                     let (r, _) = ui.allocate_exact_size(vec2(width, line_height(BODY)), Sense::hover());
                     ui.painter().galley(pos2(r.max.x - galley.size().x, r.min.y), galley, t.text_dim);
-                    ui.add(egui::Label::new(spans_job(ui, spans, t.text, BODY, false)).wrap());
+                    linked_text(ui, spans, t.text, BODY, false, t, links);
                 });
             }
             Block::Code(code) => {
@@ -154,7 +227,7 @@ pub fn answer(ui: &mut Ui, id: (Option<u64>, usize), blocks: &[Block], t: &Token
                         ui.end_row();
                         for row in rows {
                             for cell in row {
-                                ui.add(egui::Label::new(spans_job(ui, cell, t.text, SMALL + 1.0, false)));
+                                linked_text(ui, cell, t.text, SMALL + 1.0, false, t, links);
                             }
                             ui.end_row();
                         }

@@ -3896,3 +3896,15 @@
 	overall {rate} cuts a minute	en total {rate} cortes por minuto
 	plan: about {rate} (dashed)	plan: unos {rate} (línea discontinua)
 	target {value}	objetivo {value}
+	quieter	más bajo
+	louder	más fuerte
+	slower	más lento
+	faster	más rápido
+	shorter shots	planos más cortos
+	longer shots	planos más largos
+	slower cutting	cortes más lentos
+	faster cutting	cortes más rápidos
+	within the usual range	dentro del rango habitual
+	usual range	rango habitual
+	{amount} {unit} below the target	{amount} {unit} por debajo del objetivo
+	{amount} {unit} above the target	{amount} {unit} por encima del objetivo

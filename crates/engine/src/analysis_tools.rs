@@ -286,12 +286,12 @@ pub(crate) fn coach_text(r: &Value) -> String {
     }
     for (i, f) in findings.iter().take(MAX_LINES).enumerate() {
         out.push_str(&format!(
-            "{}. [{}] {} (id {}, at {})\n   {}\n",
+            "{}. [{}] {} (at {}; ref {}, for `show` only: never say a ref to the person)\n   {}\n",
             i + 1,
             if f["severity"] == "problem" { "problem" } else { "look" },
             f["title"].as_str().unwrap_or(""),
-            f["id"].as_str().unwrap_or(""),
             ticks_clock(&f["start"]),
+            f["id"].as_str().unwrap_or(""),
             f["detail"].as_str().unwrap_or("")
         ));
         let numbers: Vec<String> = f["numbers"]

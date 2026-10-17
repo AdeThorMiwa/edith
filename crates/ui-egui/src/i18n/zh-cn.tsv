@@ -3874,3 +3874,15 @@
 	overall {rate} cuts a minute	整体每分钟 {rate} 次剪辑
 	plan: about {rate} (dashed)	计划:约 {rate}(虚线)
 	target {value}	目标 {value}
+	quieter	更轻
+	louder	更响
+	slower	更慢
+	faster	更快
+	shorter shots	更短的镜头
+	longer shots	更长的镜头
+	slower cutting	更慢的剪辑节奏
+	faster cutting	更快的剪辑节奏
+	within the usual range	在常见范围内
+	usual range	常见范围
+	{amount} {unit} below the target	比目标低 {amount} {unit}
+	{amount} {unit} above the target	比目标高 {amount} {unit}
