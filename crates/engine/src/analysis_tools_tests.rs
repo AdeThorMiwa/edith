@@ -186,3 +186,70 @@ fn analysis_run_with_bad_input_answers_with_the_error_in_the_turn() {
     }
     assert!(s.jobs.iter().all(|j| !j.label.starts_with("Analyse")), "no job was started");
 }
+
+#[test]
+fn the_mode_is_a_setting_that_only_accepts_ask_or_coach() {
+    let mut s = Session::default();
+    assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "ask", "Ask is the starting mode");
+    let modes = s.execute("assistant.status", json!({})).unwrap()["modes"].clone();
+    assert_eq!(modes, json!([{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}]));
+    s.execute("assistant.settings", json!({"mode": "coach"})).unwrap();
+    assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "coach");
+    for bad in [json!("propose"), json!("Coach"), json!(""), json!(7), json!(null), json!(["coach"]), json!("coach; drop")] {
+        assert!(s.execute("assistant.settings", json!({"mode": bad.clone()})).is_err(), "{bad}");
+    }
+    assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "coach", "a refused change changes nothing");
+}
+
+#[test]
+fn a_thread_follows_the_mode_chosen_for_each_message_and_coach_gets_its_prompt_and_starting_numbers() {
+    let mut s = edit_of(&[6.0, 0.8, 6.0]);
+    let model = Arc::new(ScriptedModel::new());
+    for t in ["Ask answer.", "Coach answer.", "Ask again."] {
+        let (e, r) = text_reply(t);
+        model.push_reply(e, r);
+    }
+    s.assistant.use_model(model.clone());
+    let r = s.execute("assistant.send", json!({"text": "how is my pacing?", "wait": true})).unwrap();
+    let thread = r["thread"].as_u64().unwrap();
+    s.execute("assistant.settings", json!({"mode": "coach"})).unwrap();
+    s.execute("assistant.send", json!({"text": "coach me", "thread": thread, "wait": true})).unwrap();
+    s.execute("assistant.settings", json!({"mode": "ask"})).unwrap();
+    s.execute("assistant.send", json!({"text": "and now?", "thread": thread, "wait": true})).unwrap();
+    let reqs = model.requests();
+    let system = |i: usize| reqs[i].system.iter().map(|p| p.text.clone()).collect::<String>();
+    let user_text = |i: usize| reqs[i].messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.text()).unwrap_or_default();
+    // Ask: the shared prompt, no coach section, no starting numbers
+    assert!(!system(0).contains("## coach mode") && !user_text(0).contains("[coach]"), "{}", user_text(0));
+    // Coach: its section, and the edit's numbers and findings ahead of the question
+    assert!(system(1).contains("## coach mode") && system(1).contains("Coach mode and read-only"));
+    let u = user_text(1);
+    assert!(
+        u.contains("[coach]")
+            && u.contains("3 shots")
+            && u.contains("shortBetweenLong@")
+            && u.contains("The mix has not been measured")
+            && u.contains("coach me"),
+        "{u}"
+    );
+    // the thread goes back to Ask on the next message
+    assert!(!system(2).contains("## coach mode") && !user_text(2).contains("[coach]"));
+    // the same tools in both: Coach is not given an editing tool
+    let names = |i: usize| reqs[i].tools.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(0), names(1));
+    assert!(names(1).contains(&"coach_findings".to_string()) && names(1).contains(&"analysis_get".to_string()));
+}
+
+#[test]
+fn coach_mode_with_nothing_open_asks_without_a_starting_block() {
+    let mut s = Session::default();
+    s.execute("assistant.settings", json!({"mode": "coach"})).unwrap();
+    let model = Arc::new(ScriptedModel::new());
+    let (e, r) = text_reply("Open something first.");
+    model.push_reply(e, r);
+    s.assistant.use_model(model.clone());
+    let r = s.execute("assistant.send", json!({"text": "help", "wait": true})).unwrap();
+    assert_eq!(r["finish"]["kind"], "done", "{r}");
+    let u = model.requests()[0].messages[0].text();
+    assert!(!u.contains("[coach]") && u.contains("help"), "{u}");
+}

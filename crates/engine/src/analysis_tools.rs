@@ -504,3 +504,51 @@ fn item_text(name: &str, r: &Value) -> String {
     }
     out
 }
+
+/// The coach's starting point, attached to each question in Coach mode: the edit's headline numbers
+/// and what the rules found, short, so the model knows where to look. `None` with no sequence open.
+pub(crate) fn coach_context(s: &Session) -> Option<String> {
+    let report = crate::analysis::coach_report(s, &json!({})).ok()?;
+    let id = filmcraft_project::ItemId(report["sequence"]["id"].as_u64()?);
+    let filmcraft_project::ItemKind::Sequence(q) = &s.project.item(id)?.kind else { return None };
+    let stats = edith_analysis::analyze_sequence(&crate::analysis::sequence_input(s, q)).ok()?;
+    let stats = serde_json::to_value(&stats).ok()?;
+    let findings = report["findings"].as_array().cloned().unwrap_or_default();
+    let problems = findings.iter().filter(|f| f["severity"] == "problem").count();
+    let ids: Vec<&str> = findings.iter().take(12).filter_map(|f| f["id"].as_str()).collect();
+    let mut out = format!(
+        "The open edit “{}” as it is now: {} long, {} shots, mean {}, median {}; {:.1} cuts a minute",
+        report["sequence"]["name"].as_str().unwrap_or("?"),
+        clock(num(&stats["durationSeconds"]).unwrap_or(0.0)),
+        stats["shots"]["count"],
+        len(num(&stats["shots"]["meanSeconds"]).unwrap_or(0.0)),
+        len(num(&stats["shots"]["medianSeconds"]).unwrap_or(0.0)),
+        num(&stats["cuts"]["perMinute"]).unwrap_or(0.0)
+    );
+    if let Some(w) = num(&stats["narration"]["wordsPerMinute"]) {
+        out.push_str(&format!("; narration {w:.0} words a minute"));
+    }
+    out.push_str(".\n");
+    let t = &report["targets"];
+    let mut targets = Vec::new();
+    if let Some(v) = num(&t["averageShotSeconds"]) {
+        targets.push(format!("about {} a shot", len(v)));
+    }
+    if let Some(v) = num(&t["wordsPerMinute"]) {
+        targets.push(format!("{v:.0} words a minute"));
+    }
+    out.push_str(&if targets.is_empty() {
+        "The plan sets no targets (or there is no plan).\n".to_string()
+    } else {
+        format!("The plan's targets: {}.\n", targets.join(", "))
+    });
+    out.push_str(&format!(
+        "The rules found {} thing{} ({problems} probably a problem){}. {}\n",
+        findings.len(),
+        if findings.len() == 1 { "" } else { "s" },
+        if ids.is_empty() { String::new() } else { format!(": {}", ids.join(", ")) },
+        if report["mixMeasured"] == true { "The mix has been measured." } else { "The mix has not been measured." }
+    ));
+    out.push_str("Pull coach_findings for the explanations and numbers before you say anything about them.");
+    Some(out)
+}

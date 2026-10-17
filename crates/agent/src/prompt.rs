@@ -21,6 +21,9 @@ pub struct Command {
 pub struct PromptPack {
     pub version: String,
     pub sections: Vec<(String, String)>,
+    /// Sections that belong to one mode only, `(mode, text)`: `## mode:coach` in the file. They come
+    /// after the shared sections, only for that profile.
+    pub mode_sections: Vec<(Profile, String)>,
     pub commands: Vec<Command>,
 }
 
@@ -46,6 +49,7 @@ impl PromptPack {
             }
         }
         let mut system = Vec::new();
+        let mut mode_sections = Vec::new();
         let mut commands = Vec::new();
         for (name, body) in sections {
             let body = body.trim().to_string();
@@ -55,11 +59,20 @@ impl PromptPack {
             if let Some(rest) = name.strip_prefix('/') {
                 let (cmd, description) = rest.split_once('|').map_or((rest, ""), |(a, b)| (a, b));
                 commands.push(Command { name: cmd.trim().to_ascii_lowercase(), description: description.trim().to_string(), template: body });
+            } else if let Some(mode) = name.strip_prefix("mode:") {
+                // an unknown mode name is ignored: a pack from a newer build still loads
+                if let Some(profile) = match mode.trim() {
+                    "coach" => Some(Profile::Coach),
+                    "propose" => Some(Profile::Propose),
+                    _ => None,
+                } {
+                    mode_sections.push((profile, body));
+                }
             } else {
                 system.push((name, body));
             }
         }
-        Self { version, sections: system, commands }
+        Self { version, sections: system, mode_sections, commands }
     }
 
     /// The system prompt as parts, in a fixed order so the cached prefix stays cached: every
@@ -69,6 +82,11 @@ impl PromptPack {
         let mut text = String::new();
         for (name, body) in &self.sections {
             text.push_str(&format!("## {name}\n{body}\n\n"));
+        }
+        for (mode, body) in &self.mode_sections {
+            if *mode == profile {
+                text.push_str(&format!("## {} mode\n{body}\n\n", if profile == Profile::Coach { "coach" } else { "propose" }));
+            }
         }
         text.push_str(profile.note());
         vec![SystemPart { text, cache: true }]
@@ -105,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "2");
+        assert_eq!(p.version, "3");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();
@@ -124,10 +142,26 @@ mod tests {
     }
 
     #[test]
+    fn the_coach_mode_adds_its_own_section_and_nothing_else_changes() {
+        let p = PromptPack::builtin();
+        let ask = p.system_parts(Profile::ReadOnly)[0].text.clone();
+        let coach = p.system_parts(Profile::Coach)[0].text.clone();
+        assert!(!ask.contains("coach mode") && coach.contains("## coach mode"));
+        assert!(coach.contains("coach_findings") && coach.contains("Never state a number"), "{coach}");
+        assert!(coach.starts_with(ask.split("This thread is read-only").next().unwrap_or("")), "the shared sections come first and are identical");
+        assert!(coach.contains("Coach mode and read-only") && !coach.contains("This thread is read-only"));
+        assert!(ask.contains("analysis_get"), "Ask is told it has the measurements too");
+    }
+
+    #[test]
     fn parsing_tolerates_odd_files() {
         let p = PromptPack::parse("preamble\n# version: 7\n## a\nx\n\n## empty\n\n## b\n  y  \n");
         assert_eq!(p.version, "7");
         assert_eq!(p.sections, vec![("a".to_string(), "x".to_string()), ("b".to_string(), "y".to_string())]);
+        // a mode section for a mode this build does not know is dropped, not an error
+        let p = PromptPack::parse("# version: 1\n## a\nx\n## mode:coach\nc\n## mode:warp\nw\n");
+        assert_eq!(p.mode_sections, vec![(Profile::Coach, "c".to_string())]);
+        assert!(p.system_parts(Profile::Coach)[0].text.contains("## coach mode\nc") && !p.system_parts(Profile::ReadOnly)[0].text.contains("coach mode\nc"));
         let p = PromptPack::parse("");
         assert!(p.sections.is_empty() && p.commands.is_empty() && p.version == "0");
     }

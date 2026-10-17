@@ -416,11 +416,13 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
         "restoreNote": s.assistant.restore_note,
         "model": info.as_ref().map(model_json),
         "threads": threads,
+        // How the assistant can work (the Mode picker): the same tools, a different way of teaching.
+        "modes": [{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}],
     }))
 }
 
 fn settings_json(st: &AiSettings) -> Value {
-    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "autoTitle": st.auto_title, "chips": st.chips, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens})
+    json!({"service": st.service, "model": st.model, "effort": st.effort, "showThinking": st.show_thinking, "autoTitle": st.auto_title, "chips": st.chips, "maxSteps": st.max_steps, "maxCostUsd": st.max_cost_usd, "maxOutputTokens": st.max_output_tokens, "mode": st.mode})
 }
 
 fn model_json(m: &ModelInfo) -> Value {
@@ -466,6 +468,12 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("effort") {
         next.effort = effort_from(v, cmd)?;
+    }
+    if let Some(v) = p.get("mode") {
+        next.mode = match v.as_str() {
+            Some(m @ ("ask" | "coach")) => m.to_string(),
+            _ => return Err(bad(cmd, "`mode` must be \"ask\" or \"coach\"")),
+        };
     }
     if let Some(v) = p.get("showThinking") {
         next.show_thinking = v.as_bool().ok_or_else(|| bad(cmd, "`showThinking` must be true or false"))?;
@@ -611,6 +619,11 @@ fn models(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
+/// The profile for a `mode` setting.
+pub(crate) fn profile_of(mode: &str) -> Profile {
+    if mode == "coach" { Profile::Coach } else { Profile::ReadOnly }
+}
+
 fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
     if s.assistant.threads.len() >= MAX_THREADS {
         return Err(EngineError::Other(format!("there are already {MAX_THREADS} threads; delete one first")));
@@ -620,7 +633,7 @@ fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
     let meta = TraceMeta {
         prompt_version: s.assistant.pack().version,
         model: s.assistant.settings.model.clone(),
-        profile: Profile::ReadOnly,
+        profile: profile_of(&s.assistant.settings.mode),
         started_unix: crate::autosave::unix_now().max(0) as u64,
     };
     let state = ThreadState {
@@ -631,7 +644,7 @@ fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
         finish: None,
         trace: Trace::new(meta),
         usage: Usage::default(),
-        profile: Profile::ReadOnly,
+        profile: profile_of(&s.assistant.settings.mode),
     };
     s.assistant.threads.push(ThreadSlot { id, shared: ThreadShared::new(state, title, true), progress: None });
     Ok(id)
@@ -859,7 +872,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A model that cannot see pictures is neither offered the frame tool nor sent a frame.
     let can_see = s.model_info().is_none_or(|i| i.capabilities.images);
-    let ctx = context_blocks(s, p, cmd, can_see)?;
+    let mut ctx = context_blocks(s, p, cmd, can_see)?;
     // A slash command is expanded now, before any thread exists, so a mistyped one leaves nothing behind.
     let ask = match s.assistant.pack().expand(text) {
         Ok(Some(expanded)) => expanded,
@@ -877,7 +890,15 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     let model = s.assistant_provider()?;
     let info = s.model_info();
     let settings = s.assistant.settings.clone();
-    let profile = lock(&shared.state).profile;
+    // the mode is read now, so it can change in the middle of a thread
+    let profile = profile_of(&settings.mode);
+    lock(&shared.state).profile = profile;
+    if profile == Profile::Coach
+        && let Some(text) = crate::analysis_tools::coach_context(s)
+    {
+        // what the coach needs to know before it looks: the edit's headline numbers and what the rules found
+        ctx.insert(0, ContextBlock::text("coach", text));
+    }
     let defs = assistant_tools::tools();
     let env = Arc::new(ChannelEnvironment {
         specs: defs.iter().filter(|d| can_see || d.spec.name != "frame_view").map(|d| (d.spec.clone(), d.read_only)).collect(),

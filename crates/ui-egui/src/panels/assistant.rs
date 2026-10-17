@@ -8,7 +8,7 @@
 //! can change it.
 //!
 //! Automation ids: `assistant.input`, `assistant.send`, `assistant.stop`, `assistant.new`,
-//! `assistant.model` (and `assistant.model.<id>` for each choice), `assistant.thread` (and
+//! `assistant.model` (and `assistant.model.<id>` for each choice), `assistant.mode` (and `assistant.mode.ask|coach`), `assistant.thread` (and
 //! `assistant.thread.<id>`), `assistant.settings.chip.<name>` (what is sent with each question, in Settings),
 //! `assistant.draft` (the text being typed, as its label), `assistant.copy.<n>` / `assistant.retry.<n>` / `assistant.edit.<n>` (links under a message), `assistant.edit.cancel`, `assistant.continue`, `assistant.rename` / `assistant.rename.field`, `assistant.starter.<n>`, `assistant.connect`, `assistant.cost`, `assistant.entry.<n>` (the text
 //! of each message), `assistant.tool.<n>` (each tool card), `assistant.settings.thinking`,
@@ -732,7 +732,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 .and_then(|m| m["name"].as_str())
                 .map_or(current_model.clone(), str::to_string);
             let shown_model = if current_model.is_empty() { tl!("Choose a model").to_string() } else { short(&name, 24) };
-            let mw = chip_w(&shown_model).min((ui.available_width() - 40.0).max(80.0));
+            // the mode picker follows the model picker, so leave it room
+            let mode_id = chat.setting("mode").as_str().unwrap_or("ask").to_string();
+            let mode_label = |id: &str| if id == "coach" { tl!("Coach") } else { tl!("Ask") };
+            let mode_w = chip_w(mode_label(&mode_id));
+            let mw = chip_w(&shown_model).min((ui.available_width() - 40.0 - mode_w - 4.0).max(80.0));
             let (mrect, _) = ui.allocate_exact_size(vec2(mw, 24.0), egui::Sense::hover());
             let mresp = crate::widgets::dropdown_text(ui, mrect, &shown_model, &t, egui::Id::new("assistant-model-dd"));
             elems.push(("assistant.model".into(), mresp.clone(), format!("Model {shown_model}")));
@@ -753,6 +757,24 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         }
                     }
                 });
+            });
+            // mode
+            let (drect, _) = ui.allocate_exact_size(vec2(mode_w, 24.0), egui::Sense::hover());
+            let dresp = crate::widgets::dropdown_text(ui, drect, mode_label(&mode_id), &t, egui::Id::new("assistant-mode-dd"))
+                .on_hover_text(tl!("How Edith works with you: Ask answers questions about your edit; Coach teaches from its measurements."));
+            elems.push(("assistant.mode".into(), dresp.clone(), format!("Mode {}", mode_label(&mode_id))));
+            egui::Popup::menu(&dresp).show(|ui| {
+                ui.set_min_width(220.0);
+                for (id, hint) in [
+                    ("ask", tl!("Look at your edit and answer your questions, using its measurements when they help.")),
+                    ("coach", tl!("Teach from the measurements: what they mean, why it matters, and one thing to try.")),
+                ] {
+                    let r = ui.selectable_label(id == mode_id, mode_label(id)).on_hover_text(hint);
+                    elems.push((format!("assistant.mode.{id}"), r.clone(), mode_label(id).to_string()));
+                    if r.clicked() {
+                        actions.push(Action::Settings(json!({"mode": id})));
+                    }
+                }
             });
             // Send, or Stop while a turn runs
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -768,3 +768,39 @@ fn a_model_that_cannot_see_has_the_frame_chip_disabled() {
     assert_eq!(chip["label"], "Frame off");
     assert_eq!(chip["enabled"], json!(false), "{chip}");
 }
+
+fn left_of(d: &mut Driver, id: &str) -> f64 {
+    d.elements(id).iter().find(|e| e["id"] == json!(id)).and_then(|e| e["rect"][0].as_f64()).unwrap_or(f64::NAN)
+}
+
+#[test]
+fn the_mode_is_chosen_beside_the_model_and_changes_the_next_message() {
+    let _g = guard();
+    let mut d = Driver::new();
+    let model = Arc::new(ScriptedModel::new());
+    d.app().session.assistant.use_model(model.clone());
+    d.open_assistant();
+    // [provider] [model] [mode], left to right
+    let (p, m, mode) = (left_of(&mut d, "assistant.provider"), left_of(&mut d, "assistant.model"), left_of(&mut d, "assistant.mode"));
+    assert!(p < m && m < mode, "provider {p}, model {m}, mode {mode}");
+    assert!(d.label("assistant.mode").contains("Ask"), "{}", d.label("assistant.mode"));
+    assert_eq!(d.exec("assistant.settings", json!({}))["settings"]["mode"], "ask");
+    d.click("assistant.mode");
+    assert!(d.has("assistant.mode.ask") && d.has("assistant.mode.coach"));
+    d.click("assistant.mode.coach");
+    d.wait("the setting to change", |d| d.exec("assistant.settings", json!({}))["settings"]["mode"] == "coach");
+    assert!(d.label("assistant.mode").contains("Coach"), "{}", d.label("assistant.mode"));
+    d.snapshot("assistant-mode-coach");
+    // and it reaches the model: the next message carries the coach's prompt
+    model.push_reply(
+        vec![StreamEvent::Text("Here is what I see.".into())],
+        Response { message: Message::assistant_text("Here is what I see."), stop_reason: StopReason::EndTurn, usage: Usage::default(), model: "m".into() },
+    );
+    d.exec("assistant.send", json!({"text": "coach me", "wait": true}));
+    let system: String = model.requests()[0].system.iter().map(|p| p.text.clone()).collect();
+    assert!(system.contains("## coach mode"), "{system}");
+    // choosing Ask again
+    d.click("assistant.mode");
+    d.click("assistant.mode.ask");
+    d.wait("the setting to change back", |d| d.exec("assistant.settings", json!({}))["settings"]["mode"] == "ask");
+}

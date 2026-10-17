@@ -35,6 +35,9 @@ impl ToolOutput {
 pub enum Profile {
     /// Look and explain. No tool that changes the project is offered or run.
     ReadOnly,
+    /// Read-only like [`Profile::ReadOnly`], as a coach: it pulls the measurements and the findings
+    /// and teaches from them (the coach section of the prompt pack is added).
+    Coach,
     /// May also propose edits (they change nothing until the person accepts).
     Propose,
 }
@@ -48,6 +51,7 @@ impl Profile {
     pub fn note(self) -> &'static str {
         match self {
             Profile::ReadOnly => "This thread is read-only: you can look at the project but you cannot change it.",
+            Profile::Coach => "This thread is in Coach mode and read-only: you can look at the project and its measurements but you cannot change it.",
             Profile::Propose => "You may propose edits with the propose tools. Nothing changes until the person accepts a proposal.",
         }
     }

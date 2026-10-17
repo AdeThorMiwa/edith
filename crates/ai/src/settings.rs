@@ -50,6 +50,10 @@ pub struct AiSettings {
     /// Stop a turn once a thread's estimated cost reaches this many US dollars (`None`: no limit).
     pub max_cost_usd: Option<f64>,
     pub max_output_tokens: u32,
+    /// How the assistant works in the next message: `ask` (look and explain) or `coach` (the same,
+    /// with the coach's way of teaching). It is read when a message is sent, so it can change in
+    /// the middle of a thread.
+    pub mode: String,
 }
 
 impl Default for AiSettings {
@@ -65,6 +69,7 @@ impl Default for AiSettings {
             max_steps: 12,
             max_cost_usd: Some(1.0),
             max_output_tokens: 8192,
+            mode: "ask".into(),
         }
     }
 }
@@ -86,6 +91,9 @@ impl AiSettings {
         self.model_by_service.retain(|k, v| word_ok(k) && word_ok(v));
         while self.model_by_service.len() > 16 {
             self.model_by_service.pop_last();
+        }
+        if !matches!(self.mode.as_str(), "ask" | "coach") {
+            self.mode = d.mode;
         }
         self.max_steps = self.max_steps.clamp(1, 40);
         self.max_output_tokens = self.max_output_tokens.clamp(256, 64_000);
