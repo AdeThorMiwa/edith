@@ -18,6 +18,7 @@ use edith_llm::{Price, Usage};
 use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../suites/core.json");
+const ROUGH_CUT: &str = include_str!("../suites/rough_cut.json");
 /// Most characters of an answer kept in a report.
 const MAX_ANSWER: usize = 4000;
 
@@ -57,8 +58,12 @@ pub enum Grader {
         #[serde(default)]
         max_cost_usd: Option<f64>,
     },
-    /// The project is exactly as it was (the runner measures this).
+    /// The project is exactly as it was (the runner measures this). For a task in Edit mode it is the person's
+    /// own edit that must be as it was: the assistant's work is in a version, which only the person can commit.
     ProjectUnchanged,
+    /// What the assistant built passes every must-pass check of the edit (`edit.checks`): the runner runs the checks
+    /// on the finished project (the version, in Edit mode). Fails when nothing was built to check.
+    MustPassChecks,
     /// Every number the answer states was in a tool result (within rounding): the model reports the
     /// measurements and does not invent them. Whole numbers up to 10 are free (counting, list
     /// numbers, "two seconds" as advice); `min_numbers` says how many numbers an answer must carry at
@@ -105,6 +110,16 @@ impl Suite {
     pub fn builtin() -> Suite {
         // The shipped file is checked by a test; an unreadable one would be an empty suite.
         Self::parse(BUILTIN).unwrap_or(Suite { name: "builtin".into(), version: 0, tasks: Vec::new() })
+    }
+
+    /// A suite that ships with the app, by name: `core` (questions about a project) or `rough-cut` (the rough-cut
+    /// workflow: finding media, asking, cutting on word edges, checking, recording progress).
+    pub fn named(name: &str) -> Option<Suite> {
+        match name {
+            "core" => Some(Self::builtin()),
+            "rough-cut" => Self::parse(ROUGH_CUT).ok(),
+            _ => None,
+        }
     }
 
     /// Reads a suite. Ids must be unique and short, and a task needs a question and a grader.
@@ -162,6 +177,9 @@ pub struct GradeContext<'a> {
     pub price: Option<&'a Price>,
     /// `Some(true)` when the runner saw the project unchanged; `None` when it did not measure.
     pub project_unchanged: Option<bool>,
+    /// How many must-pass checks of the finished edit failed; `None` when there was nothing to check or the runner
+    /// did not measure.
+    pub must_fail: Option<u32>,
     pub seconds: f64,
 }
 
@@ -360,6 +378,11 @@ fn grade_one(g: &Grader, events: &[AgentEvent], answer: &str, usage: &Usage, ste
             };
             ("numbers_from_tools", invented.is_empty() && enough, detail)
         }
+        Grader::MustPassChecks => match cx.must_fail {
+            Some(0) => ("must_pass_checks", true, "every must-pass check passes on what was built".to_string()),
+            Some(n) => ("must_pass_checks", false, format!("{n} must-pass check{} fail", if n == 1 { "" } else { "s" })),
+            None => ("must_pass_checks", false, "nothing was built to check, or the runner did not measure it".to_string()),
+        },
         Grader::ProjectUnchanged => match cx.project_unchanged {
             Some(true) => ("project_unchanged", true, "the project is exactly as it was".to_string()),
             Some(false) => ("project_unchanged", false, "the project was changed".to_string()),
@@ -394,7 +417,13 @@ pub fn grade(task: &Task, trace: &Trace, cx: &GradeContext<'_>) -> TaskResult {
             None => "the run never finished".to_string(),
         },
     }];
-    let editing: Vec<&str> = tools.iter().filter(|t| (cx.read_only)(t) != Some(true)).map(String::as_str).collect();
+    // in Edit mode the tools that work inside a version are expected; anything else that changes the project is not
+    const EDIT_MODE_TOOLS: [&str; 5] = ["begin_version", "edit", "undo_steps", "redo_step", "workflow_progress"];
+    let editing: Vec<&str> = tools
+        .iter()
+        .filter(|t| (cx.read_only)(t) != Some(true) && !(task.mode == "edit" && EDIT_MODE_TOOLS.contains(&t.as_str())))
+        .map(String::as_str)
+        .collect();
     grades.push(Grade {
         check: "read_only".into(),
         passed: editing.is_empty(),
@@ -588,7 +617,7 @@ mod tests {
     }
 
     fn cx(unchanged: Option<bool>) -> GradeContext<'static> {
-        GradeContext { read_only: &|n| Some(n != "delete_clip"), price: None, project_unchanged: unchanged, seconds: 1.5 }
+        GradeContext { read_only: &|n| Some(n != "delete_clip"), price: None, project_unchanged: unchanged, must_fail: None, seconds: 1.5 }
     }
 
     fn task(graders: Vec<Grader>) -> Task {
@@ -749,7 +778,7 @@ mod tests {
                 AgentEvent::ToolResult { id: "t".into(), name: "coach_findings".into(), content: tool.into(), is_error: false, pictures: 0, view: None },
                 AgentEvent::Text { text: answer.into() },
             ];
-            let cx = GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: Some(true), seconds: 1.0 };
+            let cx = GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: Some(true), must_fail: None, seconds: 1.0 };
             let usage = Usage::default();
             grade_one(&Grader::NumbersFromTools { min_numbers: min }, &events, answer, &usage, 1, None, &cx)
         };

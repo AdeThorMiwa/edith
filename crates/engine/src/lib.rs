@@ -1415,6 +1415,8 @@ mod ripple_delete_tests;
 #[cfg(test)]
 mod roll_linked_tests;
 #[cfg(test)]
+mod rough_cut_eval_tests;
+#[cfg(test)]
 mod scopes_tests;
 #[cfg(test)]
 mod sequence_inspect_tests;
