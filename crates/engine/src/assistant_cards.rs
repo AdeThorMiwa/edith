@@ -385,7 +385,7 @@ fn thread_of(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     if p.get("thread").is_some_and(|v| !v.is_null()) {
         return thread_arg(s, p, cmd);
     }
-    s.assistant.threads.last().map(|t| t.id).ok_or_else(|| bad(cmd, "there is no conversation yet"))
+    s.scoped_threads().last().map(|t| t.id).ok_or_else(|| bad(cmd, "there is no conversation yet"))
 }
 
 fn download_state(s: &Session, card: &Value) -> Option<Value> {

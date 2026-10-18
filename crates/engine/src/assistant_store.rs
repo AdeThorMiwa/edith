@@ -30,6 +30,10 @@ pub(crate) struct SavedThread {
     pub usage: Usage,
     pub meta: TraceMeta,
     pub replies: Vec<Response>,
+    /// The project this conversation belongs to (its identity, `assistant::project_key`). Files from before
+    /// conversations belonged to projects have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 pub(crate) fn path(dir: &Path, id: u64) -> PathBuf {

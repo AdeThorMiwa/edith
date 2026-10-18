@@ -673,6 +673,9 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Notes.** It assists; you choose the footage, and the commit is yours. The taste layer cannot be tested by machine, so it is judged by the architect on the spike and on real footage. Placing music and ambience themselves is F17.
 
+### F16.6 Conversations belong to projects · ✅ (2026-10-18)
+The first real use found that a new project still showed the conversations of the old one. Now each project has an **identity** (stored in the project file, so it survives moving or renaming the file, and a copy of the file carries on the same conversations); each conversation records the identity of the project it was started in; the Assistant panel shows only the open project's conversations, and starts empty when another project is opened or created (a project gets its identity the first time the assistant is used in it, which marks the project as changed so it asks to be saved: the file is what remembers its conversations). Undo and redo never take the identity away. Conversations made **before** this change belong to no project: they are listed under "Earlier conversations" in the thread menu, and clicking one moves it into the project that is open (`assistant.adoptThread`). A conversation of another project cannot be read, continued, renamed or deleted from this one. If a project file is saved by an older version of the app, or opened without being saved after first use, its conversations are not found again (they stay on disk and appear under "Earlier conversations").
+
 ### F17 ★ Sound design suggestions · Must · L · yours · ⬜
 
 **Needs:** F13, F14, F05 (audio sources).

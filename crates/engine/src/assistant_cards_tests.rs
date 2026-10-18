@@ -210,6 +210,7 @@ fn the_cards_are_saved_with_the_conversation_and_open_again_in_a_later_run() {
     let thread = a.execute("assistant.send", json!({"text": "start", "wait": true})).unwrap()["thread"].as_u64().unwrap();
     a.execute("assistant.card", json!({"thread": thread, "card": "c1", "option": 1})).unwrap();
     let mut b = demo();
+    crate::assistant_tests::same_project(&a, &mut b);
     b.assistant.set_dir(&dir);
     let open = cards(&mut b, thread);
     assert_eq!(open["cards"].as_array().unwrap().len(), 1, "{open}");

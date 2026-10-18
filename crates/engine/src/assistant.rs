@@ -119,6 +119,8 @@ pub(crate) struct ThreadState {
     trace: Trace,
     usage: Usage,
     profile: Profile,
+    /// The project this conversation belongs to; `None` for one made before conversations belonged to projects.
+    pub(crate) project: Option<String>,
 }
 
 pub(crate) struct ThreadShared {
@@ -200,6 +202,7 @@ fn slot_from_saved(rec: SavedThread) -> ThreadSlot {
         trace,
         usage: rec.usage,
         profile: Profile::ReadOnly,
+        project: rec.project.filter(|k| valid_key(k)),
     };
     // A restored thread keeps the title it had: it is not renamed again.
     ThreadSlot { id: rec.id, shared: ThreadShared::new(state, &rec.title, false), progress: None }
@@ -217,6 +220,75 @@ fn saved_from_state(id: u64, title: &str, st: &ThreadState) -> SavedThread {
         usage: st.usage,
         meta: st.trace.meta.clone(),
         replies: st.trace.replies.clone(),
+        project: st.project.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// which project a conversation belongs to (fork roadmap F16.6)
+// ---------------------------------------------------------------------------------------------
+
+/// Where a project keeps its identity (`Project::ext`). It is saved in the project file, so the conversations
+/// follow the project when the file is moved or renamed, and a copy of the file carries on the same ones.
+pub(crate) const PROJECT_KEY: &str = "edith.project";
+
+fn valid_key(k: &str) -> bool {
+    (8..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// The identity of a project, if it has one yet (it gets one the first time the assistant is used in it).
+pub(crate) fn project_key(p: &filmcraft_project::Project) -> Option<String> {
+    p.ext.get(PROJECT_KEY)?.get("id")?.as_str().filter(|k| valid_key(k)).map(str::to_string)
+}
+
+fn new_key() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_i64(crate::autosave::unix_now());
+    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    h.write_u32(std::process::id());
+    let a = h.finish();
+    h.write_u64(a);
+    format!("{a:016x}{:016x}", h.finish())
+}
+
+impl Session {
+    /// The identity of the open project, if the assistant has been used in it: what the Assistant panel watches
+    /// to start empty in a new project and to find a project's own conversations again.
+    pub fn assistant_scope(&self) -> Option<String> {
+        project_key(&self.project)
+    }
+
+    /// The identity of the open project, giving it one (and marking it changed, so it is saved) if it has none.
+    pub(crate) fn ensure_project_key(&mut self) -> String {
+        if let Some(k) = project_key(&self.project) {
+            return k;
+        }
+        let key = new_key();
+        Arc::make_mut(&mut self.project).ext.insert(PROJECT_KEY.to_string(), json!({"id": key}));
+        self.bump();
+        key
+    }
+
+    /// After undo, redo or a revert, the project it came from still has its identity: an older snapshot
+    /// from before the assistant was first used must not take it away.
+    pub(crate) fn carry_project_key(&mut self, from: &filmcraft_project::Project) {
+        if project_key(&self.project).is_none()
+            && let Some(k) = project_key(from)
+        {
+            Arc::make_mut(&mut self.project).ext.insert(PROJECT_KEY.to_string(), json!({"id": k}));
+        }
+    }
+
+    /// Whether the conversation belongs to the open project.
+    pub(crate) fn thread_in_scope(&self, t: &ThreadSlot) -> bool {
+        project_key(&self.project).is_some_and(|k| lock(&t.shared.state).project.as_deref() == Some(k.as_str()))
+    }
+
+    /// The conversations of the open project, oldest first.
+    pub(crate) fn scoped_threads(&self) -> impl Iterator<Item = &ThreadSlot> {
+        self.assistant.threads.iter().filter(|t| self.thread_in_scope(t))
     }
 }
 
@@ -396,7 +468,11 @@ impl Session {
 
 pub(crate) fn thread_arg(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     let id = p.get("thread").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`thread` must be a thread id (a whole number)"))?;
-    s.assistant.slot(id).map(|t| t.id).ok_or_else(|| bad(cmd, format!("there is no thread {id}")))
+    let slot = s.assistant.slot(id).ok_or_else(|| bad(cmd, format!("there is no thread {id}")))?;
+    if !s.thread_in_scope(slot) {
+        return Err(bad(cmd, "that conversation belongs to another project (assistant.adoptThread brings one from before projects into this one)"));
+    }
+    Ok(slot.id)
 }
 
 fn thread_summary(t: &ThreadSlot, settings: &AiSettings, price: Option<&edith_ai::Price>) -> Value {
@@ -409,7 +485,8 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
     let info = s.model_info();
     let price = info.as_ref().and_then(|i| i.price.clone());
     let available = s.assistant.model_override.is_some() || cfg!(feature = "net");
-    let threads: Vec<Value> = s.assistant.threads.iter().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect();
+    let threads: Vec<Value> = s.scoped_threads().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect();
+    let older = older_summaries(s, price.as_ref());
     let service = s.assistant.settings.service.clone();
     let local = edith_ai::endpoints::is_local(&service);
     let connected = if local { None } else { crate::net_commands::connected(&service) };
@@ -438,6 +515,10 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
         "restoreNote": s.assistant.restore_note,
         "model": info.as_ref().map(model_json),
         "threads": threads,
+        // conversations from before they belonged to projects: adopt one to move it into the open project
+        "older": older,
+        // which project the threads above belong to (null until the assistant is first used in it)
+        "scope": {"project": project_key(&s.project)},
         // How the assistant can work (the Mode picker): the same tools, a different way of teaching.
         "modes": [{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}, {"id": "edit", "label": "Edit"}],
     }))
@@ -671,6 +752,7 @@ fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
         trace: Trace::new(meta),
         usage: Usage::default(),
         profile: profile_of(&s.assistant.settings.mode),
+        project: Some(s.ensure_project_key()),
     };
     s.assistant.threads.push(ThreadSlot { id, shared: ThreadShared::new(state, title, true), progress: None });
     Ok(id)
@@ -692,7 +774,37 @@ fn new_thread(s: &mut Session, p: &Value) -> Result<Value> {
 fn threads(s: &mut Session, _p: &Value) -> Result<Value> {
     s.pump_assistant();
     let price = s.model_info().and_then(|i| i.price);
-    Ok(json!({"threads": s.assistant.threads.iter().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect::<Vec<_>>()}))
+    Ok(json!({
+        "threads": s.scoped_threads().map(|t| thread_summary(t, &s.assistant.settings, price.as_ref())).collect::<Vec<_>>(),
+        "older": older_summaries(s, price.as_ref()),
+        "scope": {"project": project_key(&s.project)},
+    }))
+}
+
+/// Conversations made before they belonged to projects, newest last.
+fn older_summaries(s: &Session, price: Option<&edith_ai::Price>) -> Vec<Value> {
+    s.assistant.threads.iter().filter(|t| lock(&t.shared.state).project.is_none()).map(|t| thread_summary(t, &s.assistant.settings, price)).collect()
+}
+
+/// Moves a conversation from before projects into the open project.
+fn adopt_thread(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "assistant.adoptThread";
+    let id = p.get("thread").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`thread` must be a thread id (a whole number)"))?;
+    let slot = s.assistant.slot(id).ok_or_else(|| bad(cmd, format!("there is no thread {id}")))?;
+    if lock(&slot.shared.state).project.is_some() {
+        return Err(bad(cmd, "that conversation already belongs to a project"));
+    }
+    if lock(&slot.shared.state).running {
+        return Err(bad(cmd, "the conversation is running; stop it first"));
+    }
+    let key = s.ensure_project_key();
+    let Some(slot) = s.assistant.slot(id) else { return Err(bad(cmd, "no such thread")) };
+    lock(&slot.shared.state).project = Some(key.clone());
+    let mut saved = true;
+    if let Some(dir) = &s.assistant.dir {
+        saved = assistant_store::save(dir, &saved_from_state(id, &slot.shared.title(), &lock(&slot.shared.state))).is_ok();
+    }
+    Ok(json!({"thread": id, "project": key, "saved": saved}))
 }
 
 fn rename_thread(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1127,6 +1239,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("assistant.models", "Assistant Models", r#"{"refresh":bool?}"#, models),
         spec("assistant.newThread", "New Assistant Thread", r#"{"title":str?}"#, new_thread),
         spec("assistant.threads", "Assistant Threads", "{}", threads),
+        spec("assistant.adoptThread", "Move an Older Conversation Here", r#"{"thread":id}"#, adopt_thread),
         spec("assistant.renameThread", "Rename Assistant Thread", r#"{"thread":id,"title":str}"#, rename_thread),
         spec("assistant.branch", "Branch Assistant Thread", r#"{"thread":id,"turn":u64,"text":str?,"context":[...]?,"wait":bool?}"#, branch),
         spec("assistant.deleteThread", "Delete Assistant Thread", r#"{"thread":id}"#, delete_thread),

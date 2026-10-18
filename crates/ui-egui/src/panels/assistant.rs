@@ -67,6 +67,9 @@ struct Chat {
     /// the person), and when it was read (fork roadmap F16.1).
     cards: Value,
     cards_at: f64,
+    /// The project the conversations on show belong to (`Session::assistant_scope`): when it changes, the panel
+    /// starts over with that project's own conversations (fork roadmap F16.6).
+    scope: Option<String>,
     /// Where the project is in a workflow (`workflow.state`) and the workflows there are (`workflow.list`), with when
     /// each was read (fork roadmap F16.4).
     workflow: Value,
@@ -106,6 +109,7 @@ impl Chat {
             hover_entry: None,
             cards: Value::Null,
             cards_at: f64::NEG_INFINITY,
+            scope: None,
             workflow: Value::Null,
             workflow_at: f64::NEG_INFINITY,
             workflows: Value::Null,
@@ -174,6 +178,8 @@ enum Action {
     CardsSend,
     /// Forget which workflow the project is in (`workflow.clear`).
     ClearWorkflow,
+    /// Move a conversation from before projects into this one (`assistant.adoptThread`).
+    AdoptThread(u64),
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -182,12 +188,25 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
     if chat.delete_armed.is_some() && chat.delete_armed != chat.thread {
         chat.delete_armed = None;
     }
-    if now - chat.status_at >= STATUS_EVERY || chat.status.is_none() {
+    // another project is open (a new one, or one opened): its conversations are the ones to show
+    let scope = app.session.assistant_scope();
+    let moved = chat.picked_initial && scope != chat.scope;
+    if now - chat.status_at >= STATUS_EVERY || chat.status.is_none() || moved {
         chat.status_at = now;
         if let Ok(v) = app.session.execute("assistant.status", json!({})) {
-            if !chat.picked_initial {
+            if !chat.picked_initial || moved {
                 chat.picked_initial = true;
+                chat.scope = scope;
                 chat.thread = v["threads"].as_array().and_then(|t| t.last()).and_then(|t| t["id"].as_u64());
+                chat.running = false;
+                chat.finish_kind.clear();
+                chat.usage_text.clear();
+                chat.cards = Value::Null;
+                chat.input.clear();
+                chat.attached.clear();
+                chat.error = None;
+                chat.editing = None;
+                chat.polled_at = f64::NEG_INFINITY;
             }
             chat.status = Some(v);
         }
@@ -364,6 +383,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         .and_then(|s| s["threads"].as_array())
         .map(|a| a.iter().filter_map(|t| Some((t["id"].as_u64()?, t["title"].as_str()?.to_string()))).collect())
         .unwrap_or_default();
+    // conversations from before they belonged to projects
+    let older: Vec<(u64, String)> = chat
+        .status
+        .as_ref()
+        .and_then(|s| s["older"].as_array())
+        .map(|a| a.iter().filter_map(|t| Some((t["id"].as_u64()?, t["title"].as_str()?.to_string()))).collect())
+        .unwrap_or_default();
     let sees = models
         .as_ref()
         .and_then(|m| m["models"].as_array())
@@ -404,6 +430,20 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 elems.push((format!("assistant.thread.{id}"), r.clone(), title.clone()));
                 if r.clicked() {
                     actions.push(Action::SelectThread(*id));
+                }
+            }
+            if threads.is_empty() {
+                ui.label(RichText::new(tl!("No conversations in this project yet.")).size(11.5).color(t.text_faint));
+            }
+            if !older.is_empty() {
+                ui.separator();
+                ui.label(RichText::new(tl!("Earlier conversations (click to move one into this project)")).size(11.0).color(t.text_faint));
+                for (id, title) in older.iter().rev().take(30) {
+                    let r = ui.selectable_label(false, short(title, 40));
+                    elems.push((format!("assistant.older.{id}"), r.clone(), title.clone()));
+                    if r.clicked() {
+                        actions.push(Action::AdoptThread(*id));
+                    }
                 }
             }
             if chat.thread.is_some_and(|id| threads.iter().any(|t| t.0 == id)) {
@@ -1068,6 +1108,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 match app.session.execute("assistant.send", params) {
                     Ok(v) => {
                         chat.thread = v["thread"].as_u64();
+                        // the project has an identity now (the first message gives it one): not a change of project
+                        chat.scope = app.session.assistant_scope();
                         chat.running = true;
                         chat.input.clear();
                         chat.attached.clear();
@@ -1135,6 +1177,18 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
                 chat.cards_at = f64::NEG_INFINITY;
             }
+            Action::AdoptThread(id) => {
+                match app.session.execute("assistant.adoptThread", json!({"thread": id})) {
+                    Ok(_) => {
+                        chat.thread = Some(id);
+                        chat.polled_at = f64::NEG_INFINITY;
+                        chat.scope = app.session.assistant_scope();
+                        chat.error = None;
+                    }
+                    Err(e) => chat.error = Some(e.to_string()),
+                }
+                chat.status_at = f64::NEG_INFINITY;
+            }
             Action::ClearWorkflow => {
                 if let Err(e) = app.session.execute("workflow.clear", json!({})) {
                     chat.error = Some(e.to_string());
@@ -1164,6 +1218,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 match app.session.execute("assistant.branch", params) {
                     Ok(v) => {
                         chat.thread = v["thread"].as_u64();
+                        chat.scope = app.session.assistant_scope();
                         chat.running = true;
                         chat.attached.clear();
                         chat.editing = None;

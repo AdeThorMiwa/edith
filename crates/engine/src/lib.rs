@@ -1006,7 +1006,8 @@ impl Session {
             n += 1;
         }
         if let Some(prev) = earliest {
-            self.project = prev;
+            let was = std::mem::replace(&mut self.project, prev);
+            self.carry_project_key(&was);
             self.history.merge_key = None;
             self.fix_state();
             self.bump();
@@ -1060,6 +1061,7 @@ impl Session {
         let (label, prev) = self.history.undo.pop()?;
         self.history.merge_key = None;
         let cur = std::mem::replace(&mut self.project, prev);
+        self.carry_project_key(&cur);
         self.history.redo.push((label.clone(), cur));
         self.fix_state();
         self.bump();
@@ -1073,6 +1075,7 @@ impl Session {
         let (label, next) = self.history.redo.pop()?;
         self.history.merge_key = None;
         let cur = std::mem::replace(&mut self.project, next);
+        self.carry_project_key(&cur);
         self.history.undo.push((label.clone(), cur));
         self.fix_state();
         self.bump();
@@ -1300,6 +1303,8 @@ mod assistant_cards_net_tests;
 mod assistant_cards_tests;
 #[cfg(test)]
 mod assistant_edit_tests;
+#[cfg(test)]
+mod assistant_scope_tests;
 #[cfg(test)]
 mod assistant_tests;
 #[cfg(test)]

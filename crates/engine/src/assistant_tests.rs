@@ -226,6 +226,7 @@ fn every_tool_is_read_only_and_the_engine_refuses_anything_else() {
 #[test]
 fn a_turn_with_a_tool_call_runs_the_tool_on_the_session_thread_and_answers() {
     let mut s = demo();
+    let before = (*s.project).clone();
     let model = scripted(vec![tool_reply(&[("t1", "sequence_view", json!({"to": 6}))]), text_reply("Your first shot is Ocean_Sunset.mp4.")]);
     s.assistant.use_model(model.clone());
     let r = s.execute("assistant.send", json!({"text": "what is my first shot?", "wait": true})).unwrap();
@@ -246,7 +247,10 @@ fn a_turn_with_a_tool_call_runs_the_tool_on_the_session_thread_and_answers() {
     assert_eq!(v["next"], v["events"].as_array().unwrap().len());
     // it ran as a job, and the editor is unchanged
     assert!(s.jobs.iter().any(|j| j.label == "Assistant" && j.progress.finished.load(Ordering::Relaxed)));
-    assert!(!s.is_dirty());
+    // the editor is unchanged by asking, apart from the project being given its identity the first time
+    let mut without = (*s.project).clone();
+    without.ext.remove(crate::assistant::PROJECT_KEY);
+    assert_eq!(without, before, "nothing else about the project changed");
 }
 
 #[test]
@@ -340,6 +344,7 @@ fn settings_are_validated_saved_and_loaded_again() {
         .unwrap();
     assert_eq!((r["saved"].clone(), r["settings"]["model"].clone(), r["settings"]["effort"].clone()), (json!(true), json!("claude-sonnet-5-5"), json!("high")));
     let mut again = Session::default();
+    same_project(&s, &mut again);
     again.assistant.set_dir(&dir);
     let loaded = again.execute("assistant.settings", json!({})).unwrap();
     assert_eq!(
@@ -657,6 +662,7 @@ fn a_finished_turn_is_saved_and_a_new_session_restores_and_continues_the_convers
 
     // a later run of the app
     let mut b = demo();
+    same_project(&a, &mut b);
     b.assistant.set_dir(&dir);
     let list = b.execute("assistant.threads", json!({})).unwrap();
     assert_eq!(list["threads"].as_array().unwrap().len(), 1);
@@ -690,13 +696,26 @@ fn deleting_a_thread_removes_its_file() {
     s.execute("assistant.deleteThread", json!({"thread": id})).unwrap();
     assert!(!saved_file(&dir, id).exists());
     let mut again = demo();
+    same_project(&s, &mut again);
     again.assistant.set_dir(&dir);
     assert!(again.execute("assistant.threads", json!({})).unwrap()["threads"].as_array().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The identity of the project a hand-written thread file belongs to (`set_project_key` gives a session's project it).
+pub(crate) const TEST_KEY: &str = "legacy-test-project-0001";
+
+pub(crate) fn set_project_key(s: &mut Session, key: &str) {
+    Arc::make_mut(&mut s.project).ext.insert(crate::assistant::PROJECT_KEY.to_string(), json!({"id": key}));
+}
+
+/// `to` is the same project as `from` opened again (in a later run of the app): its conversations are found.
+pub(crate) fn same_project(from: &Session, to: &mut Session) {
+    to.project = from.project.clone();
+}
+
 fn record(id: u64, thread: Value) -> Value {
-    json!({"version": 1, "id": id, "title": "saved", "thread": thread, "events": [], "dropped": 0, "finish": {"kind": "done"}, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0}, "meta": {"prompt_version": "2", "model": "m", "profile": "read_only", "started_unix": 0}, "replies": []})
+    json!({"version": 1, "id": id, "project": TEST_KEY, "title": "saved", "thread": thread, "events": [], "dropped": 0, "finish": {"kind": "done"}, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0}, "meta": {"prompt_version": "2", "model": "m", "profile": "read_only", "started_unix": 0}, "replies": []})
 }
 
 #[test]
@@ -725,6 +744,7 @@ fn damaged_oversize_mislabelled_and_broken_files_are_skipped_or_repaired_never_f
     std::fs::write(folder.join("8.json"), messy.to_string()).unwrap();
 
     let mut s = demo();
+    set_project_key(&mut s, TEST_KEY);
     s.assistant.set_dir(&dir);
     let st = s.execute("assistant.status", json!({})).unwrap();
     assert_eq!(st["restoreNote"], "5 saved conversations could not be restored.", "{st}");
@@ -753,6 +773,7 @@ fn only_the_newest_threads_are_restored() {
         std::fs::write(folder.join(format!("{id}.json")), record(id, thread.clone()).to_string()).unwrap();
     }
     let mut s = Session::default();
+    set_project_key(&mut s, TEST_KEY);
     s.assistant.set_dir(&dir);
     let ids: Vec<u64> = s.execute("assistant.threads", json!({})).unwrap()["threads"].as_array().unwrap().iter().filter_map(|t| t["id"].as_u64()).collect();
     assert_eq!((ids.len(), ids.first().copied(), ids.last().copied()), (50, Some(11), Some(60)));
@@ -916,6 +937,7 @@ fn saved_conversations_do_not_keep_picture_bytes() {
     assert!(file.len() < 200_000, "{} bytes", file.len());
     // and the conversation is still valid to continue after a restart
     let mut again = demo();
+    same_project(&s, &mut again);
     again.assistant.set_dir(&dir);
     let next = scripted(vec![text_reply("still here")]);
     again.assistant.use_model(next.clone());
@@ -1303,6 +1325,7 @@ fn a_rename_is_validated_kept_saved_and_stops_the_model_renaming() {
     ask(&mut s, "hello there", Some(t));
     assert_eq!((title_of(&mut s, t), model.requests().len()), ("My own name".to_string(), 1), "no title request after a rename");
     let mut again = Session::default();
+    same_project(&s, &mut again);
     again.assistant.set_dir(&dir);
     assert_eq!(title_of(&mut again, t), "My own name");
     for bad in [
@@ -1364,6 +1387,7 @@ fn branching_makes_a_new_thread_up_to_a_question_and_leaves_the_old_one_alone() 
 
     // a branched thread is saved, and reloads and continues
     let mut again = Session::default();
+    same_project(&s, &mut again);
     again.assistant.set_dir(&dir);
     let listed = again.execute("assistant.threads", json!({})).unwrap();
     assert_eq!(listed["threads"].as_array().unwrap().len(), 3);

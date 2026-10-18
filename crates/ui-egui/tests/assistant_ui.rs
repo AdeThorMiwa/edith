@@ -419,9 +419,9 @@ fn a_conversation_from_an_earlier_run_is_there_when_the_panel_opens() {
     earlier.assistant.set_dir(&dir);
     earlier.assistant.use_model(scripted(vec![tool_reply("t1", "project_overview", json!({})), text_reply("It is **26 seconds** long.")]));
     earlier.execute("assistant.send", json!({"text": "how long is my edit?", "wait": true})).unwrap();
-    // this run
+    // this run: the same project opened again
     let mut session = Session::default();
-    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.project = earlier.project.clone();
     session.assistant.set_dir(&dir);
     let mut d = Driver::with(session);
     d.open_assistant();
@@ -696,6 +696,7 @@ fn a_thread_is_renamed_from_the_menu_and_the_name_is_kept() {
     d.ok("ui.key", json!({"key": "Enter"}));
     d.wait("the new name", |d| d.label("assistant.thread").contains("Opening shots"));
     let mut again = Session::default();
+    again.project = d.app().session.project.clone();
     again.assistant.set_dir(&dir);
     assert_eq!(again.execute("assistant.threads", json!({})).unwrap()["threads"][0]["title"], "Opening shots");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1243,4 +1244,55 @@ fn edit_mode_is_chosen_beside_the_model_and_the_assistants_version_shows_a_banne
     let s = &d.app().session;
     assert_eq!(s.project.notes, "assistant notes");
     assert_eq!(s.history.undo.len(), main_undo + 1);
+}
+
+#[test]
+fn a_new_project_starts_with_an_empty_assistant_and_the_first_project_gets_its_conversation_back() {
+    let _g = guard();
+    let dir = data_dir("scope");
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    session.assistant.use_model(scripted(vec![text_reply("The first project has six clips."), text_reply("Nothing here yet.")]));
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    ask_and_wait(&mut d, "what is in the first project?", "The first project has six clips.");
+    let first = d.app().session.project.clone();
+    // a new project: the conversation of the first is not on show
+    d.exec("file.newProject", json!({"name": "Second"}));
+    d.wait("an empty assistant", |d| d.entries().is_empty() && d.label("assistant.thread").contains("New thread"));
+    assert!(!d.has("assistant.thread.1"), "the first project's conversation is not in the list");
+    d.snapshot("assistant-new-project");
+    ask_and_wait(&mut d, "and what is in the second?", "Nothing here yet.");
+    assert_eq!(d.entries()[0].1, "and what is in the second?");
+    // the first project opened again: its conversation is back, and the second's is not
+    d.app().session.project = first;
+    d.wait("the first conversation", |d| d.entries().first().is_some_and(|e| e.1 == "what is in the first project?"));
+    assert!(!d.entries().iter().any(|(_, l)| l.contains("second")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_conversation_from_before_projects_is_adopted_from_the_menu() {
+    let _g = guard();
+    let dir = data_dir("adopt");
+    let folder = dir.join("edith-threads");
+    std::fs::create_dir_all(&folder).unwrap();
+    let thread = json!({"messages": [{"role": "user", "parts": [{"type": "text", "text": "how long is it?"}]}, {"role": "assistant", "parts": [{"type": "text", "text": "Twenty-six seconds."}]}], "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0}});
+    let rec = json!({"version": 1, "id": 7, "title": "an old chat", "thread": thread, "events": [{"type": "user_message", "text": "how long is it?"}, {"type": "text", "text": "Twenty-six seconds."}], "dropped": 0, "finish": {"kind": "done"}, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0}, "meta": {"prompt_version": "2", "model": "m", "profile": "read_only", "started_unix": 0}, "replies": []});
+    std::fs::write(folder.join("7.json"), rec.to_string()).unwrap();
+    let mut session = Session::default();
+    session.execute("file.openDemoProject", json!({})).unwrap();
+    session.assistant.set_dir(&dir);
+    let mut d = Driver::with(session);
+    d.open_assistant();
+    assert!(d.entries().is_empty(), "it does not belong to this project");
+    d.click("assistant.thread");
+    d.wait("the older section", |d| d.has("assistant.older.7"));
+    d.snapshot("assistant-older-conversations");
+    d.click("assistant.older.7");
+    d.wait("the conversation", |d| d.entries().iter().any(|(_, l)| l.contains("Twenty-six seconds")));
+    assert!(d.label("assistant.thread").contains("an old chat"));
+    assert_eq!(d.exec("assistant.threads", json!({}))["threads"][0]["id"], 7);
+    let _ = std::fs::remove_dir_all(&dir);
 }

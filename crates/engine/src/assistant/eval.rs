@@ -124,6 +124,8 @@ fn run_task(inp: &Inputs, task: &Task, cancel: &dyn Fn() -> bool) -> (TaskResult
     if let Some(info) = &inp.info {
         lock(&s.assistant.models).models = vec![info.clone()];
     }
+    // the project is given its identity the first time the assistant is used in it: that is not the assistant's edit
+    s.ensure_project_key();
     let before = (*s.project).clone();
     let started = Instant::now();
     let context: Vec<Value> = task.context.iter().map(|k| json!({"kind": k})).collect();
