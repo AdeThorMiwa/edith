@@ -649,13 +649,16 @@ impl Session {
     /// channel send; serialization happens on the worker). Called after every command.
     pub fn sync_persistence(&mut self) {
         let dirty = self.is_dirty();
+        // with a version open, main is the project and the version goes beside it
+        let version = self.version_save();
+        let project = self.versions.main_project().unwrap_or_else(|| self.project.clone());
         let Some(p) = self.persistence.as_mut() else { return };
         let cur = autosave::Sent { revision: self.revision, saved_revision: self.saved_revision, path: self.path.clone() };
         if p.last_sent.as_ref() == Some(&cur) {
             return;
         }
         if dirty {
-            p.send_dirty(self.project.clone(), self.revision, self.path.clone());
+            p.send_dirty(project, version, self.revision, self.path.clone());
         } else {
             p.send_clean();
         }
@@ -771,11 +774,14 @@ impl Session {
         {
             self.log.push(panels::Level::Error, id, e.to_string());
         }
+        if r.is_ok() && spec.journal {
+            // before the snapshot for recovery is taken, so it says who made this step
+            self.version_note_steps();
+        }
         self.sync_persistence();
         // playback reads the newest snapshot (mixer moves, mutes… are heard while playing)
         self.previews.live.publish_project(self.project.clone());
         if r.is_ok() && spec.journal {
-            self.version_note_steps();
             self.journal.push((id.to_string(), params));
             if self.journal.len() > 10_000 {
                 self.journal.drain(..1000);

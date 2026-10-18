@@ -216,9 +216,6 @@ fn what_reaches_outside_the_edit_is_refused_while_a_version_is_open_and_allowed_
     let mut s = demo();
     s.execute("version.create", json!({"title": "Open"})).unwrap();
     for (cmd, p) in [
-        ("file.save", json!({})),
-        ("file.saveAs", json!({"path": "/tmp/never.fcproj"})),
-        ("file.saveCopy", json!({"path": "/tmp/never.fcproj"})),
         ("file.newProject", json!({})),
         ("file.open", json!({"path": "/tmp/never.fcproj"})),
         ("file.openDemoProject", json!({})),
@@ -230,7 +227,6 @@ fn what_reaches_outside_the_edit_is_refused_while_a_version_is_open_and_allowed_
         let e = s.execute(cmd, p.clone()).expect_err(cmd).to_string();
         assert!(e.contains("Commit it or discard it first") && e.contains("Open"), "{cmd}: {e}");
     }
-    assert!(!std::path::Path::new("/tmp/never.fcproj").exists());
     // a version cannot be run inside a version, and its parameters are checked
     for p in
         [json!({"command": "version.discard"}), json!({"command": ""}), json!({}), json!({"command": 5}), json!({"command": "project.setNotes", "params": 5})]
@@ -297,4 +293,184 @@ fn selection_that_points_into_the_version_does_not_dangle_when_you_go_back() {
     assert!(s.active_sequence().is_some());
     s.execute("version.peek", json!({})).unwrap();
     assert!(s.active_sequence().is_some());
+}
+
+// ---------------------------------------------------------------------------- saved with the project
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("edith-version-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn start(s: &mut Session, data: &std::path::Path) {
+    let mut cfg = crate::autosave::AutosaveConfig::new(data);
+    cfg.journal_debounce = std::time::Duration::from_millis(20);
+    s.start_autosave(cfg).unwrap();
+}
+
+fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
+    let t0 = std::time::Instant::now();
+    while !f() {
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "timed out waiting for {what}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// A saved project with a version open: main says "main notes", the version "my notes".
+fn saved_with_a_version(dir: &std::path::Path) -> (String, Session) {
+    let path = dir.join("film.fcproj").to_string_lossy().to_string();
+    let mut s = demo();
+    set_notes(&mut s, "main notes");
+    s.execute("version.create", json!({"title": "Colour pass", "by": "assistant"})).unwrap();
+    s.execute("version.run", json!({"command": "project.setNotes", "params": {"text": "assistant notes"}})).unwrap();
+    set_notes(&mut s, "my notes");
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    (path, s)
+}
+
+#[test]
+fn a_version_is_saved_with_the_project_and_comes_back_open_where_it_was() {
+    let dir = scratch("save");
+    let (path, s) = saved_with_a_version(&dir);
+    assert!(!s.is_dirty(), "saved");
+    assert!(s.versions.is_open(), "saving does not close it");
+    // the file: main is the project, the version is beside it
+    let loaded = filmcraft_format::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(loaded.project.notes, "main notes");
+    assert!(loaded.ext.contains_key("edith.version"));
+    assert_eq!(loaded.project.name, "film", "Save As named main after the file");
+    // opened again: the version is open, showing the version, with main behind it
+    let mut t = Session::default();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    assert!(t.versions.is_open() && !t.is_dirty());
+    let v = list(&mut t);
+    assert_eq!((v["title"].as_str(), v["startedBy"].as_str(), v["peeking"].clone()), (Some("Colour pass"), Some("assistant"), json!(false)));
+    assert_eq!(notes(&t), "my notes");
+    let steps: Vec<(String, String)> =
+        v["steps"].as_array().unwrap().iter().map(|x| (x["label"].as_str().unwrap().to_string(), x["by"].as_str().unwrap().to_string())).collect();
+    assert_eq!(steps.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["assistant", "you"], "who made what is kept: {steps:?}");
+    assert_eq!(v["locked"], 2, "those steps are a record: their snapshots were not kept");
+    t.execute("version.peek", json!({})).unwrap();
+    assert_eq!(notes(&t), "main notes", "the original is main");
+    assert_eq!(t.project.name, "film");
+    t.execute("version.peek", json!({})).unwrap();
+    // the recorded steps cannot be rewound to; new ones can
+    assert_eq!(t.execute("version.rewind", json!({"steps": 1})).unwrap()["undone"], 0);
+    set_notes(&mut t, "after reopening");
+    let v = list(&mut t);
+    assert_eq!((v["stepCount"].clone(), v["locked"].clone()), (json!(3), json!(2)));
+    assert_eq!(t.execute("version.rewind", json!({"steps": 5})).unwrap()["undone"], 1, "only the live step");
+    assert_eq!(notes(&t), "my notes");
+    // and it commits like any other: one undo step, main is what the version was
+    let before = undo_len(&t);
+    t.execute("version.commit", json!({})).unwrap();
+    assert_eq!(notes(&t), "my notes");
+    assert_eq!(undo_len(&t), before + 1);
+    assert_eq!(t.undo().as_deref(), Some("Version: Colour pass"));
+    assert_eq!(notes(&t), "main notes");
+    // a project saved with no version open has none to reopen
+    let mut u = demo();
+    set_notes(&mut u, "plain");
+    let plain = dir.join("plain.fcproj").to_string_lossy().to_string();
+    u.execute("file.saveAs", json!({"path": plain})).unwrap();
+    let mut w = Session::default();
+    w.execute("file.open", json!({"path": plain})).unwrap();
+    assert!(!w.versions.is_open());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn saving_while_looking_at_the_original_still_saves_main_and_the_version() {
+    let dir = scratch("peek-save");
+    let path = dir.join("film.fcproj").to_string_lossy().to_string();
+    let mut s = demo();
+    set_notes(&mut s, "main notes");
+    s.execute("version.create", json!({"title": "T"})).unwrap();
+    set_notes(&mut s, "version notes");
+    s.execute("version.peek", json!({})).unwrap();
+    s.execute("file.save", json!({})).ok();
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    let loaded = filmcraft_format::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(loaded.project.notes, "main notes");
+    let mut t = Session::default();
+    t.execute("file.open", json!({"path": path})).unwrap();
+    assert_eq!(notes(&t), "version notes", "the version, not the original, is what comes back as the work");
+    // a copy carries the version too
+    let copy = dir.join("copy.fcproj").to_string_lossy().to_string();
+    s.execute("file.saveCopy", json!({"path": copy})).unwrap();
+    assert!(filmcraft_format::decode(&std::fs::read(&copy).unwrap()).unwrap().ext.contains_key("edith.version"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_saved_version_that_cannot_be_read_never_stops_the_project_from_opening() {
+    let dir = scratch("hostile");
+    let (path, _s) = saved_with_a_version(&dir);
+    let original: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let valid_document = original["ext"]["edith.version"]["document"].clone();
+    let junk = [
+        json!({"title": "x", "document": "this is not a project"}),
+        json!({"title": "x"}),
+        json!({"document": 5}),
+        json!("a string"),
+        json!(null),
+        json!({"title": "x", "document": "{\"schema_version\": 9999, \"project\": 5}"}),
+    ];
+    for (i, bad) in junk.into_iter().enumerate() {
+        let mut doc = original.clone();
+        doc["ext"]["edith.version"] = bad;
+        let f = dir.join(format!("bad{i}.fcproj")).to_string_lossy().to_string();
+        std::fs::write(&f, serde_json::to_vec(&doc).unwrap()).unwrap();
+        let mut t = Session::default();
+        t.execute("file.open", json!({"path": f})).unwrap_or_else(|e| panic!("{i}: {e}"));
+        assert!(!t.versions.is_open(), "{i}: no version from a record that cannot be read");
+        assert_eq!(notes(&t), "main notes", "{i}: the project itself opened");
+    }
+    // odd steps and a long title are cleaned, not trusted
+    let mut doc = original.clone();
+    doc["ext"]["edith.version"] = json!({
+        "title": "t".repeat(500), "startedBy": "robot", "startedUnix": "soon", "document": valid_document,
+        "steps": (0..2000).map(|i| json!({"label": format!("step\u{7} {i}"), "by": "nobody"})).chain([json!(5), json!({"by": "you"})]).collect::<Vec<_>>(),
+    });
+    let f = dir.join("odd.fcproj").to_string_lossy().to_string();
+    std::fs::write(&f, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let mut t = Session::default();
+    t.execute("file.open", json!({"path": f})).unwrap();
+    let v = list(&mut t);
+    assert_eq!(v["title"].as_str().unwrap().chars().count(), 80);
+    assert_eq!(v["startedBy"], "you");
+    assert_eq!(v["stepCount"], 500, "capped");
+    assert!(v["steps"].as_array().unwrap().iter().all(|x| !x["label"].as_str().unwrap().contains('\u{7}')));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_crash_with_a_version_open_recovers_the_version_and_main() {
+    let dir = scratch("crash");
+    let mut a = demo();
+    start(&mut a, &dir);
+    set_notes(&mut a, "main notes");
+    a.execute("version.create", json!({"title": "Crash test", "by": "assistant"})).unwrap();
+    a.execute("version.run", json!({"command": "project.setNotes", "params": {"text": "work in progress"}})).unwrap();
+    let rev = a.revision;
+    wait_for("the recovery journal", || {
+        a.poll_persistence();
+        a.persistence.as_ref().is_some_and(|p| p.status.journaled_revision == rev)
+    });
+    a.persistence.take().unwrap().simulate_crash();
+    let mut c = Session::default();
+    start(&mut c, &dir);
+    assert_eq!(c.recovery_candidates().len(), 1);
+    c.execute("file.recover", json!({})).unwrap();
+    assert!(c.versions.is_open(), "the version is open again");
+    assert_eq!(notes(&c), "work in progress");
+    assert_eq!(list(&mut c)["title"], "Crash test");
+    assert_eq!(list(&mut c)["steps"][0]["by"], "assistant");
+    c.execute("version.peek", json!({})).unwrap();
+    assert_eq!(notes(&c), "main notes", "and main is as it was");
+    assert!(c.is_dirty(), "recovered work is unsaved");
+    c.shutdown();
+    let _ = std::fs::remove_dir_all(&dir);
 }

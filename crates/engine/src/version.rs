@@ -86,6 +86,9 @@ struct Open {
     peeking: Option<Saved>,
     /// Who made each step, by the step's snapshot (stable across undo and redo).
     who: HashMap<usize, Actor>,
+    /// Steps taken before the file this version came from was saved: their names and who made them, kept
+    /// as a record. Their snapshots were not kept, so they cannot be rewound to.
+    restored: Vec<Step>,
 }
 
 /// What the session keeps about versions.
@@ -110,6 +113,11 @@ impl Versions {
         self.open.as_ref().map(|o| o.title.as_str())
     }
 
+    /// Main, the committed edit, while a version is open.
+    pub fn main_project(&self) -> Option<Arc<Project>> {
+        self.open.as_ref().map(|o| o.main.project.clone())
+    }
+
     /// Main (where the version started) and the version as it is now, while one is open.
     pub fn both(&self, shown: &Arc<Project>) -> Option<(Arc<Project>, Arc<Project>)> {
         let o = self.open.as_ref()?;
@@ -119,16 +127,12 @@ impl Versions {
 }
 
 /// Commands that reach outside the edit and cannot be taken back by discarding a version.
-const DENIED: [&str; 17] = [
+const DENIED: [&str; 13] = [
     "file.newProject",
     "file.open",
     "file.openDemoProject",
     "file.recover",
     "file.revert",
-    "file.save",
-    "file.saveAs",
-    "file.saveCopy",
-    "file.autoSaveNow",
     "file.projectManager",
     "file.exportEdl",
     "file.exportFcp7Xml",
@@ -163,7 +167,10 @@ pub struct Info {
     pub started_by: Actor,
     /// Looking at the original (main), read-only.
     pub peeking: bool,
+    /// Every step, oldest first: first any kept from before the file was saved, then the live ones.
     pub steps: Vec<Step>,
+    /// How many of the first steps are only a record (their snapshots were not kept): you cannot rewind to them.
+    pub locked: usize,
 }
 
 impl Session {
@@ -171,12 +178,15 @@ impl Session {
     pub fn version_info(&self) -> Option<Info> {
         let open = self.versions.open.as_ref()?;
         let history = open.peeking.as_ref().map_or(&self.history, |p| &p.history);
-        let steps = history
-            .undo
-            .iter()
-            .map(|(label, snapshot)| Step { label: label.clone(), by: open.who.get(&(Arc::as_ptr(snapshot) as usize)).copied().unwrap_or_default() })
-            .collect();
-        Some(Info { title: open.title.clone(), started_by: open.started_by, peeking: open.peeking.is_some(), steps })
+        let mut steps = open.restored.clone();
+        let locked = steps.len();
+        steps.extend(
+            history
+                .undo
+                .iter()
+                .map(|(label, snapshot)| Step { label: label.clone(), by: open.who.get(&(Arc::as_ptr(snapshot) as usize)).copied().unwrap_or_default() }),
+        );
+        Some(Info { title: open.title.clone(), started_by: open.started_by, peeking: open.peeking.is_some(), steps, locked })
     }
 
     /// What the open version changes against main, in plain words.
@@ -193,7 +203,7 @@ impl Session {
         }
         if DENIED.contains(&id) {
             return Some(format!(
-                "“{}” is open as a version. Commit it or discard it first: opening, saving and exporting would reach outside the version and could not be taken back.",
+                "“{}” is open as a version. Commit it or discard it first: opening another project and exporting would reach outside the version and could not be taken back.",
                 open.title
             ));
         }
@@ -231,6 +241,7 @@ impl Session {
             main_was_clean: !self.is_dirty(),
             peeking: None,
             who: HashMap::new(),
+            restored: Vec::new(),
         });
         self.bump_view();
         Ok(id)
@@ -325,6 +336,103 @@ impl Session {
     }
 }
 
+// ---------------------------------------------------------------------------- saving
+
+/// The name the open version is kept under in a project file (and in the recovery journal).
+pub const FILE_KEY: &str = "edith.version";
+/// The longest document and record of steps read back from a file.
+const MAX_SAVED_STEPS: usize = 500;
+
+/// What of an open version goes into a file beside the project: enough to open it again where it was.
+/// The snapshots behind the steps are not kept (the record of them is); the version's project is.
+#[derive(Clone)]
+pub struct VersionSave {
+    title: String,
+    started_by: Actor,
+    started_unix: i64,
+    steps: Vec<Step>,
+    project: Arc<Project>,
+}
+
+impl VersionSave {
+    /// The version as the JSON that goes beside the project. The project is stored as a whole project
+    /// document (in a string), so it is checked and upgraded when it is read back like any other.
+    pub fn to_ext(&self) -> Value {
+        let document = String::from_utf8_lossy(&filmcraft_format::encode(&self.project, false)).into_owned();
+        json!({
+            "title": self.title, "startedBy": self.started_by.id(), "startedUnix": self.started_unix,
+            "steps": self.steps.iter().map(|s| json!({"label": s.label, "by": s.by.id()})).collect::<Vec<_>>(),
+            "document": document,
+        })
+    }
+
+    /// The `ext` map of a file for this version (empty when there is none).
+    pub fn file_ext(save: Option<&VersionSave>) -> std::collections::BTreeMap<String, Value> {
+        save.map(|v| std::iter::once((FILE_KEY.to_string(), v.to_ext())).collect()).unwrap_or_default()
+    }
+}
+
+impl Session {
+    /// The open version as it would be saved, if one is open. Cheap: pointer copies and the step names.
+    pub fn version_save(&self) -> Option<Arc<VersionSave>> {
+        let info = self.version_info()?;
+        let open = self.versions.open.as_ref()?;
+        let (_, version) = self.versions.both(&self.project)?;
+        Some(Arc::new(VersionSave { title: info.title, started_by: info.started_by, started_unix: open.started_unix, steps: info.steps, project: version }))
+    }
+
+    /// Open the version a file was saved with, on top of the project just loaded (which is main).
+    /// Returns its title; an unreadable record is an error and the project is left as it was loaded.
+    pub fn version_restore(&mut self, saved: &Value) -> Result<String> {
+        if self.versions.is_open() {
+            return Err(EngineError::Other("a version is already open".into()));
+        }
+        let unreadable = || EngineError::Other("the version saved in this file could not be read".to_string());
+        let document = saved.get("document").and_then(Value::as_str).ok_or_else(unreadable)?;
+        let loaded = filmcraft_format::decode(document.as_bytes()).map_err(|_| unreadable())?;
+        let steps: Vec<Step> = saved
+            .get("steps")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .take(MAX_SAVED_STEPS)
+                    .filter_map(|x| {
+                        let label: String = x.get("label")?.as_str()?.chars().filter(|c| !c.is_control()).take(120).collect();
+                        let by = x.get("by").and_then(Value::as_str).and_then(Actor::parse).unwrap_or_default();
+                        Some(Step { label, by })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let title = clean_title(saved.get("title").and_then(Value::as_str).unwrap_or(DEFAULT_TITLE));
+        let started_by = saved.get("startedBy").and_then(Value::as_str).and_then(Actor::parse).unwrap_or_default();
+        let started_unix = saved.get("startedUnix").and_then(Value::as_i64).unwrap_or(0);
+        self.versions.next_id += 1;
+        let id = self.versions.next_id;
+        let main = Saved { project: self.project.clone(), state: self.state.clone(), history: std::mem::replace(&mut self.history, fresh_history()) };
+        self.project = Arc::new(loaded.project);
+        self.versions.open =
+            Some(Open { id, title: title.clone(), started_by, started_unix, main, main_was_clean: true, peeking: None, who: HashMap::new(), restored: steps });
+        self.fix_state();
+        self.bump_view();
+        Ok(title)
+    }
+
+    /// Name the project after its file, wherever it is held (the version, main, and the one parked).
+    pub(crate) fn version_rename_projects(&mut self, name: &str) {
+        let Some(open) = self.versions.open.as_mut() else { return };
+        let rename = |p: &mut Arc<Project>| {
+            let p = Arc::make_mut(p);
+            p.root.name = name.to_string();
+            p.name = name.to_string();
+        };
+        rename(&mut open.main.project);
+        if let Some(parked) = open.peeking.as_mut() {
+            rename(&mut parked.project);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------- commands
 
 fn actor_param(p: &Value, cmd: &str, default: Actor) -> Result<Actor> {
@@ -342,7 +450,7 @@ fn describe(s: &Session) -> Value {
         "open": true, "id": id, "title": info.title, "startedBy": info.started_by.id(), "startedUnix": started_unix,
         "peeking": info.peeking,
         "steps": info.steps.iter().map(|x| json!({"label": x.label, "by": x.by.id()})).collect::<Vec<_>>(),
-        "stepCount": info.steps.len(), "canUndo": history.can_undo(), "canRedo": history.can_redo(),
+        "stepCount": info.steps.len(), "locked": info.locked, "canUndo": history.can_undo(), "canRedo": history.can_redo(),
     })
 }
 

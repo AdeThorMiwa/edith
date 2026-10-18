@@ -199,7 +199,7 @@ fn list_panel(
                     elems.push((format!("version.step.{i}"), row, s.label.clone()));
                     ui.label(RichText::new(actor_word(s.by)).size(10.5).color(if s.by == Actor::Assistant { t.accent } else { t.text_faint }));
                     // keeping this step and everything before it takes back the ones after
-                    if i + 1 < n {
+                    if i + 1 < n && i >= info.locked {
                         let b = ui.small_button(tl!("Rewind to here")).on_hover_text(tl!("Takes back the steps after this one."));
                         elems.push((format!("version.step.{i}.rewind"), b.clone(), "Rewind the version to this step".into()));
                         if b.clicked() {

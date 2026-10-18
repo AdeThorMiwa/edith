@@ -624,9 +624,19 @@ pub(crate) struct Sent {
 }
 
 struct Snapshot {
+    /// The project as saved: main, the committed edit, when a version is open.
     project: Arc<Project>,
+    /// The open version, kept beside the project so a crash does not lose it.
+    version: Option<Arc<crate::version::VersionSave>>,
     revision: u64,
     path: Option<String>,
+}
+
+impl Snapshot {
+    /// The bytes of a project file for this state: the project, and the version beside it.
+    fn encode(&self) -> Vec<u8> {
+        filmcraft_format::encode_with(&self.project, None, &crate::version::VersionSave::file_ext(self.version.as_deref()), false)
+    }
 }
 
 enum Msg {
@@ -747,8 +757,8 @@ impl Persistence {
         })
     }
 
-    pub(crate) fn send_dirty(&self, project: Arc<Project>, revision: u64, path: Option<String>) {
-        let _ = self.tx.send(Msg::Dirty(Snapshot { project, revision, path }));
+    pub(crate) fn send_dirty(&self, project: Arc<Project>, version: Option<Arc<crate::version::VersionSave>>, revision: u64, path: Option<String>) {
+        let _ = self.tx.send(Msg::Dirty(Snapshot { project, version, revision, path }));
     }
 
     pub(crate) fn send_clean(&self) {
@@ -963,7 +973,7 @@ impl Worker {
     fn write_journal(&mut self) {
         let Some(s) = &self.latest else { return };
         let t0 = Instant::now();
-        let bytes = filmcraft_format::encode(&s.project, false);
+        let bytes = s.encode();
         let serialize_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let t1 = Instant::now();
         let unix = unix_now();
@@ -1017,7 +1027,7 @@ impl Worker {
             None => (self.data_dir.join(names::AUTO_SAVE_DIR), s.project.name.clone()),
         };
         let t0 = Instant::now();
-        let bytes = filmcraft_format::encode(&s.project, false);
+        let bytes = s.encode();
         let serialize_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let t1 = Instant::now();
         let unix = unix_now();

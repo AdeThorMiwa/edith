@@ -214,10 +214,37 @@ fn a_discard_asks_twice_and_gives_the_edit_back_as_it_was() {
 }
 
 #[test]
-fn saving_is_refused_while_a_version_is_open_and_says_why() {
+fn opening_another_project_is_refused_while_a_version_is_open_and_says_why() {
     let mut d = Driver::new();
     open_version(&mut d, "Open one");
-    let r = d.harness.state_mut().session.execute("file.save", json!({}));
-    let e = r.expect_err("saving while a version is open").to_string();
+    let r = d.harness.state_mut().session.execute("file.newProject", json!({}));
+    let e = r.expect_err("opening another project while a version is open").to_string();
     assert!(e.contains("Commit it or discard it first"), "{e}");
+}
+
+#[test]
+fn saving_with_a_version_open_saves_it_and_the_banner_comes_back_when_the_project_is_opened() {
+    let dir = std::env::temp_dir().join(format!("version-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("film.fcproj").to_string_lossy().to_string();
+    let mut d = Driver::new();
+    set_notes(&mut d, "main");
+    open_version(&mut d, "Keep me");
+    set_notes(&mut d, "in the version");
+    d.exec("file.saveAs", json!({"path": path}));
+    d.frames(3);
+    assert!(d.has("version.banner"), "saving does not close the version");
+    d.exec("version.discard", json!({}));
+    d.frames(3);
+    assert!(!d.has("version.banner"));
+    d.exec("file.open", json!({"path": path}));
+    d.frames(6);
+    assert!(d.has("version.banner"), "the saved version is open again");
+    assert_eq!(notes(&mut d), "in the version");
+    d.click("version.changes");
+    d.frames(4);
+    assert!(d.has("version.step.0"), "its steps are listed");
+    assert!(!d.has("version.step.0.rewind"), "but a step from before the save has nothing to rewind to");
+    d.snapshot("version-banner-reopened");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4219,11 +4219,15 @@ fn write_project(s: &mut Session, path: &str, adopt: bool) -> Result<Value> {
         && let Some(name) = project_name_for(path)
         && s.project.name != name
     {
-        name_project(std::sync::Arc::make_mut(&mut s.project), name);
+        name_project(std::sync::Arc::make_mut(&mut s.project), name.clone());
+        s.version_rename_projects(&name);
     }
-    // what is open (sequence tabs, how each is shown) goes into the file beside the project
+    // what is open (sequence tabs, how each is shown) goes into the file beside the project; with a
+    // version open the project is main (the committed edit) and the version goes beside it
     let view = s.project_view();
-    let bytes = filmcraft_format::encode_with_view(&s.project, Some(&view), false);
+    let version = s.version_save();
+    let main = s.versions.main_project().unwrap_or_else(|| s.project.clone());
+    let bytes = filmcraft_format::encode_with(&main, Some(&view), &crate::version::VersionSave::file_ext(version.as_deref()), false);
     let mut backup = None;
     if adopt && s.path.as_deref() == Some(path) && s.loaded_schema < filmcraft_format::SCHEMA_VERSION {
         let b = schema_backup_path(path, s.loaded_schema);
@@ -4276,14 +4280,26 @@ fn install_project(s: &mut Session, proj: filmcraft_project::Project, path: Opti
     s.events.push(crate::Event::ProjectChanged { revision: s.revision });
 }
 
+/// A project file or a recovery snapshot that was saved with a version open opens it again, where it
+/// was. A record that cannot be read is said so and the project opens as it is.
+fn reopen_version(s: &mut Session, saved: Option<Value>) {
+    let Some(saved) = saved else { return };
+    match s.version_restore(&saved) {
+        Ok(title) => s.toast(format!("Reopened the version “{title}” that was open when this was saved")),
+        Err(e) => s.toast(format!("{e}; the committed edit was opened without it")),
+    }
+}
+
 fn open_project(s: &mut Session, path: &str) -> Result<Value> {
     let bytes = s.services.read_file(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let loaded = filmcraft_format::decode(&bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let (from, migrated) = (loaded.schema_version, loaded.migrated());
+    let saved_version = loaded.ext.get(crate::version::FILE_KEY).cloned();
     install_project(s, loaded.project, Some(path.to_string()), true);
     if let Some(view) = loaded.view.filter(|_| s.prefs.timeline.restore_open_sequences) {
         s.restore_project_view(view);
     }
+    reopen_version(s, saved_version);
     // the frontend shows the project's active sequence (with its own view, when one was restored)
     if let Some(seq) = s.state.active_sequence {
         s.events.push(crate::Event::OpenSequence(seq));
@@ -4307,7 +4323,9 @@ fn recover(s: &mut Session, id: Option<&str>) -> Result<Value> {
     let c = per.candidates[idx].clone();
     let saved_at = per.local_time(c.meta.saved_unix);
     let loaded = crate::autosave::load_candidate(&c).map_err(EngineError::Other)?;
+    let saved_version = loaded.ext.get(crate::version::FILE_KEY).cloned();
     install_project(s, loaded.project, c.meta.project_path.clone(), false);
+    reopen_version(s, saved_version);
     if let Some(seq) = s.state.active_sequence {
         s.events.push(crate::Event::OpenSequence(seq));
     }

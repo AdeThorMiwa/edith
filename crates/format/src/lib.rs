@@ -95,6 +95,9 @@ pub struct Loaded {
     /// What was open when the file was saved (sequence tabs and how each was shown), when the
     /// file records it and it can be read.
     pub view: Option<ProjectView>,
+    /// Data of the fork kept beside the project in the file, by name (an open version, say). Builds that
+    /// do not know a name ignore it; one that cannot be read is dropped, never a reason not to open.
+    pub ext: std::collections::BTreeMap<String, Value>,
 }
 
 impl Loaded {
@@ -117,6 +120,8 @@ struct EnvelopeOut<'a> {
     project: &'a Project,
     #[serde(skip_serializing_if = "Option::is_none")]
     view: Option<&'a ProjectView>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    ext: &'a std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -128,12 +133,19 @@ struct EnvelopeIn {
     /// it never stops a project from opening.
     #[serde(default)]
     view: Option<Value>,
+    /// Kept as JSON for the same reason: anything that is not an object is dropped.
+    #[serde(default)]
+    ext: Option<Value>,
 }
 
 impl EnvelopeIn {
     fn loaded(self, schema_version: u32) -> Loaded {
         let view = self.view.and_then(|v| serde_json::from_value(v).ok());
-        Loaded { project: self.project, schema_version, generator: self.generator, view }
+        let ext = match self.ext {
+            Some(Value::Object(m)) => m.into_iter().collect(),
+            _ => Default::default(),
+        };
+        Loaded { project: self.project, schema_version, generator: self.generator, view, ext }
     }
 }
 
@@ -163,7 +175,12 @@ pub fn encode(project: &Project, pretty: bool) -> Vec<u8> {
 /// outside the schema's promises: builds that do not know it ignore it, and it is dropped rather
 /// than migrated when it cannot be read.
 pub fn encode_with_view(project: &Project, view: Option<&ProjectView>, pretty: bool) -> Vec<u8> {
-    let env = EnvelopeOut { format: FORMAT_ID, schema_version: SCHEMA_VERSION, generator: generator(), project, view };
+    encode_with(project, view, &Default::default(), pretty)
+}
+
+/// [`encode_with_view`], with the fork's named data (`ext`) stored beside the project too.
+pub fn encode_with(project: &Project, view: Option<&ProjectView>, ext: &std::collections::BTreeMap<String, Value>, pretty: bool) -> Vec<u8> {
+    let env = EnvelopeOut { format: FORMAT_ID, schema_version: SCHEMA_VERSION, generator: generator(), project, view, ext };
     let r = if pretty { serde_json::to_vec_pretty(&env) } else { serde_json::to_vec(&env) };
     // Serializing plain data (string keys, finite numbers or null) cannot fail.
     r.unwrap_or_default()
@@ -424,6 +441,29 @@ mod tests {
 
     /// What is open is stored beside the project. A file without it, or with one that cannot be
     /// read, opens all the same.
+    #[test]
+    fn named_data_of_the_fork_is_kept_beside_the_project_and_never_stops_a_file_from_opening() {
+        let p = Project::new("ext");
+        let mut ext = std::collections::BTreeMap::new();
+        ext.insert("edith.version".to_string(), serde_json::json!({"title": "T", "n": [1, 2]}));
+        for pretty in [false, true] {
+            let l = decode(&encode_with(&p, None, &ext, pretty)).unwrap();
+            assert_eq!((&l.ext, &l.project), (&ext, &p));
+            assert!(decode(&encode(&p, pretty)).unwrap().ext.is_empty(), "none when none was written");
+        }
+        // the project is the same bytes with or without it beside it
+        let mut doc: Value = serde_json::from_slice(&encode_with(&p, None, &ext, false)).unwrap();
+        // data that is not an object is dropped; the project loads
+        for junk in [serde_json::json!(5), serde_json::json!("x"), serde_json::json!([1]), serde_json::json!(null)] {
+            doc["ext"] = junk;
+            let l = decode(&serde_json::to_vec(&doc).unwrap()).unwrap();
+            assert!(l.ext.is_empty() && l.project == p);
+        }
+        // unknown names are kept as they are, whatever they hold
+        doc["ext"] = serde_json::json!({"someone.else": {"deep": [true]}});
+        assert_eq!(decode(&serde_json::to_vec(&doc).unwrap()).unwrap().ext["someone.else"]["deep"][0], true);
+    }
+
     #[test]
     fn the_view_is_kept_beside_the_project_and_never_stops_a_file_from_opening() {
         use filmcraft_project::{ItemId, SequenceSettings, SequenceView};
