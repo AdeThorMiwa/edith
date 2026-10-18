@@ -75,6 +75,12 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 | F16 | Assistant workflows: the rough cut is the first | Must | L | F14, F15, F05, F08, F06 |
 | F17 | ★ Sound design suggestions | Must | L | F13, F14, F05 |
 | F18 | Consistency checker and shot matcher | Must | M | F10, F14 |
+| | **Phase 3b: from a script to a finished video (2026-10-19 round; order F28, F29, F17, F30, F31, F32)** | | | |
+| F28 | More sources: Openverse (images, music, sound) and NASA (video, images) | Must | M | F05 |
+| F29 | See before you offer: pictures of candidates, and what a sound sounds like | Must | M | F05, F28 |
+| F30 | Titles and on-screen text, captions from the narration | Must | M | F16, F08 |
+| F31 | Transitions and motion polish | Must | M | F16, F08 |
+| F32 | The whole-video workflow, its evaluation, and the end-of-round gate | Must | M | F16, F17, F28 to F31 |
 | | **Phase 4: voices** | | | |
 | F19 | Voice Lab (custom voices) | Must | L | F06 |
 | | **Phase 5: ship and grow** | | | |
@@ -809,6 +815,28 @@ Each suggestion says why in plain words (the mentor idea).
 **Decisions for the architect.** Whether to *hide* or *remove* each feature; whether to keep merging from upstream at all (if not, removal gets much cheaper and the fork can drift freely); whether the web build is wanted (it has its own checks and constraints).
 
 ---
+
+### Phase 3b: from a script to a finished video
+
+The architect's round of 2026-10-19: with only a script, Edith should get to a finished video with picture and sound. The full plan, with the reasons, is in the working plan file; this is its record. **The full gate (clippy, layers, web check, assets, whole-workspace tests) runs once at the end of the round, not after each piece**; each piece is committed on its own targeted tests. What a real request showed on 2026-10-19: Openverse needs no key and carries images and audio (about 645,000 Jamendo music tracks, Freesound and Wikimedia sound) with each licence; NASA's library needs no key and gives video with preview stills; the Library of Congress is behind a bot wall.
+
+### F28 More sources · Must · M · ⬜
+**Openverse** (images and audio; no key; licence mapping: CC0 and public domain are clear, BY and BY-SA are "credit needed" (SA flagged as share-alike), **no-derivatives and any non-commercial licence are refused**) and the **NASA Image and Video Library** (video and images; public domain unless the item says otherwise). Both appear in Find Media, Connections, `hub.providers` and `media_search`. Tested against local fakes; a manual smoke script for the real sites. Skipped on purpose: Library of Congress (bot wall), Coverr (API terms unclear), Jamendo direct (Openverse carries it), Smithsonian and Unsplash (need keys; later, optional).
+
+### F29 See before you offer · Must · M · ⬜
+Candidates carry preview pictures and, where the site gives one, a small preview video. **`media_look`** (vision models only) shows up to six candidates as small pictures with a line each; **`media_listen`** fetches a sound's preview to a temp file (never the project) and says what it sounds like from the existing sound analysis (music, ambience or speech; steady pulse and tempo; loudness; length; loopable). She looks only at an idea's shortlist, not every result.
+
+### F17 ★ Sound (scoped for this round) · Must · L · ⬜
+F17.1 `timeline.placeSoundList` (sound lanes with fades, Essential Sound types, short ambience or music tiled with crossfaded seams, one undo step); F17.2 `sound.autoMix` (narration is dialogue; music and ambience ducked under it; levels toward a target; plain-words report); F17.3 should-checks (sound under every idea that needs it, music ducked under the voice, loudness near the target once measured) and a sound stage in the workflow. Cut sweeteners, "silence before" holds, beat-matched cuts, reverb match and restraint guardrails stay on the F17 list for later.
+
+### F30 Titles and on-screen text · Must · M · ⬜
+`graphics.placeTextList` (title, chapter, lower third, quote, note, from the built-in templates and the Format Pack's title style, on a Titles track, readable long enough, one undo step); the narration's exact word times become a transcript so **captions from the narration** work (`captions.fromNarration`, readable lines); a workflow stage for titles.
+
+### F31 Transitions and motion polish · Must · M · ⬜
+Transitions in cut-list entries and a fade in and out; **`edit.polish`** applies the Format Pack's restraint policy (hard cuts within an idea, a dissolve between low-intensity ideas, a dip at section ends, slow moves on stills and long holds); *should* checks for restraint and consistency.
+
+### F32 The whole-video workflow and the end-of-round gate · Must · M · ⬜
+A workflow `video-from-a-script` (understand and voice, ideas, footage, calibrate, scale, sound, titles, polish, finish), evaluation tasks for each new tool with a right and a wrong scripted assistant, then **the one full gate**, the cache cleared, the app rebuilt, and a real-model run on a script-only project (needs the architect's go and a stated cap).
 
 ## 6. Format Pack baselines: Mystery and Explainer
 
