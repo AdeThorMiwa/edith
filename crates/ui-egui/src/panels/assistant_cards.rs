@@ -127,19 +127,28 @@ pub fn draw(
 ) {
     let id = view["id"].as_str().unwrap_or("").to_string();
     let download = view["kind"] == "download";
+    let narration = view["kind"] == "narration";
     let live = open["cards"].as_array().and_then(|a| a.iter().find(|c| c["id"].as_str() == Some(id.as_str())));
     let sent_as = answers.get(&id);
     let can_answer = live.is_some() && sent_as.is_none() && !running;
     let draft = live.map(|c| &c["draft"]).filter(|d| !d.is_null());
     let draft_kind = draft.and_then(|d| d["kind"].as_str()).unwrap_or("");
     let dl_state = live.and_then(|c| c["download"]["state"].as_str()).unwrap_or("");
+    let voicing = live.map(|c| &c["narration"]).filter(|n| !n.is_null());
     let started = draft_kind == "yes";
 
     let frame = egui::Frame::new().fill(t.field_bg).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 8));
     let shown = frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(if download { tl!("DOWNLOAD REQUEST") } else { tl!("QUESTION") }).size(10.5).strong().color(t.accent));
+            let tag = if download {
+                tl!("DOWNLOAD REQUEST")
+            } else if narration {
+                tl!("NARRATION")
+            } else {
+                tl!("QUESTION")
+            };
+            ui.label(RichText::new(tag).size(10.5).strong().color(t.accent));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (text, color) = match (sent_as.is_some(), live.is_some()) {
                     (true, _) => (tl!("Answered"), t.text_faint),
@@ -153,6 +162,8 @@ pub fn draw(
         let waiting_card = live.is_some() && sent_as.is_none();
         if download {
             draw_download(ui, app, ctx, view, id.as_str(), (can_answer, waiting_card), (draft_kind, dl_state, started), t, elems, out);
+        } else if narration {
+            draw_narration(ui, view, id.as_str(), (can_answer, waiting_card), (draft_kind, voicing), t, elems, out);
         } else {
             draw_question(ui, view, id.as_str(), thread, (can_answer, waiting_card), draft, t, elems, out);
         }
@@ -175,14 +186,14 @@ pub fn draw(
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tlf!("{n} of {m} answered", n = answered, m = total)).size(11.0).color(t.text_faint));
                 if waiting > 0 {
-                    ui.label(RichText::new(tl!("Waiting for the download…")).size(11.0).color(t.text_dim));
+                    ui.label(RichText::new(tl!("Waiting for it to finish…")).size(11.0).color(t.text_dim));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let ok = open["canSend"].as_bool() == Some(true);
                     let r = decision_button(ui, tl!("Send answers"), false, true, ok, t).on_hover_text(if running {
                         tl!("Edith is still working.")
                     } else if waiting > 0 {
-                        tl!("Sends when the download has finished, so the clip is in the project for Edith.")
+                        tl!("Sends when it has finished, so the clip or the narration is in the project for Edith.")
                     } else {
                         tl!("Sends all your answers to Edith in one message. A question you left alone goes as no answer.")
                     });
@@ -194,7 +205,13 @@ pub fn draw(
             });
         }
     });
-    let label = if download { short(view["candidate"]["title"].as_str().unwrap_or("")) } else { short(view["question"].as_str().unwrap_or("")) };
+    let label = if download {
+        short(view["candidate"]["title"].as_str().unwrap_or(""))
+    } else if narration {
+        short(view["preview"].as_str().unwrap_or(""))
+    } else {
+        short(view["question"].as_str().unwrap_or(""))
+    };
     elems.push((format!("assistant.card.{id}"), shown.response, label));
 }
 
@@ -342,4 +359,87 @@ fn draw_download(
             _ => {}
         }
     });
+}
+
+fn seconds_text(s: f64) -> String {
+    let n = s.max(0.0).round() as u64;
+    if n >= 60 { format!("{}:{:02}", n / 60, n % 60) } else { tlf!("{n} s", n = n) }
+}
+
+/// The voice-it card: a preview of the words, the voice and the length, and Yes, No and "I'll choose the voice".
+#[allow(clippy::too_many_arguments)]
+fn draw_narration(
+    ui: &mut Ui,
+    view: &Value,
+    id: &str,
+    answerable: (bool, bool),
+    state: (&str, Option<&Value>),
+    t: &Tokens,
+    elems: &mut Elems,
+    out: &mut Vec<CardAction>,
+) {
+    let (draft_kind, voicing) = state;
+    let (can_answer, waiting_card) = answerable;
+    let started = draft_kind == "yes";
+    ui.add_space(2.0);
+    ui.label(RichText::new(tl!("Make the narration from your words?")).font(Tokens::semibold(BODY)).color(t.text));
+    let facts = format!(
+        "{} · {} · {}",
+        tlf!("{n} words", n = view["words"].as_u64().unwrap_or(0)),
+        tlf!("about {t}", t = seconds_text(view["estimateSeconds"].as_f64().unwrap_or(0.0))),
+        tlf!("voice {name}", name = short(view["voice"]["name"].as_str().unwrap_or("")))
+    );
+    ui.label(RichText::new(facts).size(SMALL).color(t.text_faint));
+    egui::Frame::new().fill(t.panel_bg).corner_radius(4.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let more = if view["truncated"] == true { "…" } else { "" };
+        ui.add(egui::Label::new(RichText::new(format!("{}{more}", short(view["preview"].as_str().unwrap_or("")))).size(11.5).color(t.text_dim)).wrap());
+    });
+    if let Some(why) = view["why"].as_str().filter(|w| !w.is_empty()) {
+        ui.add(egui::Label::new(RichText::new(short(why)).size(11.5).italics().color(t.text_dim)).wrap());
+    }
+    if view["voice"]["natural"] != true {
+        ui.add(
+            egui::Label::new(
+                RichText::new(tl!("This is the basic voice: it sounds robotic and its word times are estimates. The natural voices are in Text to Speech ▸ Download natural voices."))
+                    .size(11.0)
+                    .color(rights::color(Status::Credit)),
+            )
+            .wrap(),
+        );
+    }
+    if !waiting_card {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        let choices: [(&str, &str, bool); 3] =
+            [("yes", tl!("Yes, make it"), true), ("no", tl!("No"), false), ("others", tl!("I'll choose the voice myself"), false)];
+        for (kind, label, main) in choices {
+            let enabled = can_answer && !started;
+            let r = decision_button(ui, label, draft_kind == kind, main && draft_kind.is_empty(), enabled || draft_kind == kind, t);
+            elems.push((format!("assistant.card.{id}.{kind}"), r.clone(), label.to_string()));
+            if enabled && r.clicked() {
+                out.push(CardAction::Choose { card: id.to_string(), params: json!({"decision": kind}) });
+            }
+        }
+    });
+    match voicing.and_then(|v| v["state"].as_str()).unwrap_or("") {
+        "rendering" => {
+            let secs = voicing.and_then(|v| v["seconds"].as_f64()).unwrap_or(0.0);
+            ui.label(RichText::new(tlf!("Making the narration… {s} s", s = secs.round() as u64)).size(11.5).color(t.text_dim));
+        }
+        "done" => {
+            let secs = voicing.and_then(|v| v["seconds"].as_f64()).unwrap_or(0.0);
+            ui.label(RichText::new(tlf!("On the timeline, {t}", t = seconds_text(secs))).size(11.5).color(rights::color(Status::Clear)));
+        }
+        "failed" => {
+            let why = voicing.and_then(|v| v["message"].as_str()).unwrap_or("");
+            ui.add(
+                egui::Label::new(RichText::new(format!("{} {}", tl!("It could not be made:"), short(why))).size(11.5).color(rights::color(Status::Credit)))
+                    .wrap(),
+            );
+        }
+        _ => {}
+    }
 }

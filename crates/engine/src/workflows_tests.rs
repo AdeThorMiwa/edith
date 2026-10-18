@@ -157,8 +157,8 @@ fn the_list_tool_gives_descriptions_only_and_the_load_tool_gives_the_whole_text(
     let load = s.run_assistant_tool("workflow_load", &json!({"name": "rough-cut-from-narration"}));
     assert!(!list.is_error && !load.is_error);
     assert!(list.content.contains("rough-cut-from-narration") && list.content.contains("Turn a narration into a first cut"), "{}", list.content);
-    assert!(!list.content.contains("Look at the project before asking anything"), "the text of a stage is not in the list");
-    assert!(load.content.contains("Look at the project before asking anything") && load.content.contains("Stages: 1 understand"), "{}", load.content);
+    assert!(!list.content.contains("look at the project before asking anything"), "the text of a stage is not in the list");
+    assert!(load.content.contains("look at the project before asking anything") && load.content.contains("Stages: 1 understand"), "{}", load.content);
     assert!(list.content.len() * 4 < load.content.len(), "listing is far smaller than loading: {} vs {}", list.content.len(), load.content.len());
     assert!(list.content.len() < 1500);
     // a clumsy name still finds it, a wrong one says what there is

@@ -4126,3 +4126,17 @@
 	Earlier conversations (click to move one into this project)	以前の会話（クリックでこのプロジェクトに移す）
 	No conversations in this project yet.	このプロジェクトにはまだ会話がありません。
 	Move an Older Conversation Here	以前の会話をここに移す
+	I'll choose the voice myself	声は自分で選ぶ
+	It could not be made:	作成できませんでした:
+	Make the narration from your words?	このテキストからナレーションを作りますか？
+	Making the narration… {s} s	ナレーションを作成中… {s} 秒
+	NARRATION	ナレーション
+	On the timeline, {t}	タイムラインに追加済み、{t}
+	Sends when it has finished, so the clip or the narration is in the project for Edith.	完了してから送ります。Edith が使うときにはクリップやナレーションがプロジェクトに入っています。
+	This is the basic voice: it sounds robotic and its word times are estimates. The natural voices are in Text to Speech ▸ Download natural voices.	これは基本の声です。ロボットのように聞こえ、単語のタイミングは推定です。自然な声は「テキスト読み上げ ▸ 自然な声をダウンロード」にあります。
+	Waiting for it to finish…	完了を待っています…
+	Yes, make it	はい、作成する
+	about {t}	約 {t}
+	voice {name}	声: {name}
+	{n} s	{n} 秒
+	{n} words	{n} 語

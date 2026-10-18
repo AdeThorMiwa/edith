@@ -56,6 +56,7 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::beats_and_silence::tools());
     // questions for the person, download requests and the media search behind them (fork; roadmap F16.1)
     all.extend(crate::assistant_cards::tools());
+    all.extend(crate::assistant_narration::tools());
     // is the cut done? (fork; roadmap F16.3)
     all.extend(crate::edit_checks::tools());
     // guidance for a bigger job, and where the project is in it (fork; roadmap F16.4)

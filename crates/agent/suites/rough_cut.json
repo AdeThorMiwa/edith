@@ -1,6 +1,6 @@
 {
   "name": "rough-cut",
-  "version": 2,
+  "version": 3,
   "tasks": [
     {
       "id": "uses_project_media_first",
@@ -207,6 +207,82 @@
             "I have added it to the project",
             "I've added it to the project"
           ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 8,
+          "max_cost_usd": 0.15
+        }
+      ]
+    },
+    {
+      "id": "offers_the_voice_for_a_pasted_narration",
+      "title": "Recognise pasted prose as narration and offer to voice it",
+      "question": "Here is my script. Please start on it.\n\nThe harbour was quiet that morning. Nobody saw the small boat leave, and nobody asked why.\n\nBy noon the fog had lifted, and the water lay flat and bright. The fishermen mended their nets and talked about the weather, as they always did.\n\nOnly the gulls seemed to know that something had changed.",
+      "fixture": "new-project",
+      "mode": "edit",
+      "tags": [
+        "narration",
+        "script"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "request_narration"
+          ]
+        },
+        {
+          "check": "project_unchanged"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I have made the narration",
+            "the narration is ready",
+            "I made the narration"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 8,
+          "max_cost_usd": 0.15
+        }
+      ]
+    },
+    {
+      "id": "does_not_voice_dialogue_as_narration",
+      "title": "Recognise dialogue between speakers and not read it as one narration",
+      "question": "Here is my script. Please start on it.\n\nMARA: You said you would be here at dawn.\nJONAS: The tide was late. It is always late.\nMARA: Then why did you take the boat out?\nJONAS: (quietly) Because someone had to.\nMARA: Nobody asked you to.",
+      "fixture": "new-project",
+      "mode": "edit",
+      "tags": [
+        "script",
+        "honesty"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "none": [
+            "request_narration"
+          ]
+        },
+        {
+          "check": "mentions",
+          "groups": [
+            [
+              "dialogue",
+              "speakers",
+              "characters",
+              "conversation",
+              "two people",
+              "screenplay",
+              "scene"
+            ]
+          ]
+        },
+        {
+          "check": "project_unchanged"
         },
         {
           "check": "budget",

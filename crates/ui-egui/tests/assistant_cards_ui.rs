@@ -444,3 +444,66 @@ fn a_workflow_is_started_from_the_list_shown_with_its_stage_and_stopped_with_the
     assert_eq!(d.exec("workflow.state", json!({}))["active"], false);
     // a workflow of the person's own in the folder joins the list
 }
+
+const SCRIPT: &str =
+    "The harbour was quiet that morning. [pause 1s] Nobody saw the small boat leave. By noon the fog had lifted, and the water lay flat and bright.";
+
+#[test]
+fn a_script_is_offered_a_voice_and_yes_makes_the_narration_on_the_timeline() {
+    let _g = guard();
+    let (_rig, sources) = rig();
+    let mut d = Driver::new(sources);
+    let dir = std::env::temp_dir().join(format!("edith-narration-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    d.exec("file.projectSettings.scratchDisks", json!({"captured": dir.to_string_lossy()}));
+    let (thread, _model) = start(
+        &mut d,
+        vec![
+            tool_reply(&[("n", "request_narration", json!({"text": SCRIPT, "voice": "basic-female", "why": "It reads as narration."}))]),
+            text_reply("Shall I make it?"),
+            text_reply("Thank you."),
+        ],
+        "here is my script",
+    );
+    for id in ["assistant.card.c1", "assistant.card.c1.yes", "assistant.card.c1.no", "assistant.card.c1.others", "assistant.cards.send"] {
+        assert!(d.has(id), "{id} missing");
+    }
+    let label =
+        d.ok("ui.elements", json!({"prefix": "assistant.card.c1"})).as_array().unwrap().iter().find(|e| e["id"] == "assistant.card.c1").unwrap()["label"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    assert!(label.starts_with("The harbour was quiet"), "{label}");
+    d.snapshot("assistant-narration-offer");
+    let narrations = |d: &mut Driver| d.harness.state_mut().session.project.narrations.len();
+    assert_eq!(narrations(&mut d), 0, "an offer makes nothing");
+    // Yes: the voice is made and a narration appears on the timeline
+    d.click("assistant.card.c1.yes");
+    d.wait("the narration", |d| d.cards(thread)["cards"][0]["narration"]["state"] == json!("done"));
+    assert_eq!(narrations(&mut d), 1);
+    d.frames(6);
+    d.snapshot("assistant-narration-made");
+    d.wait("Send", |d| d.enabled("assistant.cards.send"));
+    d.click("assistant.cards.send");
+    d.wait("the next turn", |d| {
+        d.exec("assistant.thread", json!({"thread": thread}))["running"] == json!(false)
+            && d.exec("assistant.thread", json!({"thread": thread}))["events"].as_array().unwrap().iter().any(|e| e["type"] == "cards_answered")
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn choosing_the_voice_yourself_opens_text_to_speech_with_the_words_in_it() {
+    let _g = guard();
+    let (_rig, sources) = rig();
+    let mut d = Driver::new(sources);
+    start(
+        &mut d,
+        vec![tool_reply(&[("n", "request_narration", json!({"text": SCRIPT, "voice": "basic-female"}))]), text_reply("Shall I make it?")],
+        "here is my script",
+    );
+    d.click("assistant.card.c1.others");
+    d.wait("Text to Speech", |d| d.has("tts.text"));
+    assert_eq!(d.harness.state_mut().ui.tts.text, SCRIPT);
+    assert_eq!(d.harness.state_mut().session.project.narrations.len(), 0, "nothing was made");
+}

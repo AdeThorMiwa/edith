@@ -400,6 +400,7 @@ impl Session {
         }
         crate::analysis_tools::finish_pending(self);
         crate::assistant_cards::finish_searches(self);
+        crate::assistant_narration::pump(self);
         let rx = self.assistant.tool_rx.clone();
         let mut first = true;
         loop {

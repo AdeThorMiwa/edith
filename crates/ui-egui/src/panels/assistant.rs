@@ -253,10 +253,9 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
         }
     }
     // the question and download cards waiting for an answer: cheap, and only while the thread has any
-    let has_cards = chat
-        .logs
-        .get(&thread)
-        .is_some_and(|l| l.entries.iter().any(|e| matches!(e, Entry::Tool { view: Some(v), .. } if matches!(v["kind"].as_str(), Some("ask" | "download")))));
+    let has_cards = chat.logs.get(&thread).is_some_and(|l| {
+        l.entries.iter().any(|e| matches!(e, Entry::Tool { view: Some(v), .. } if matches!(v["kind"].as_str(), Some("ask" | "download" | "narration"))))
+    });
     if has_cards {
         let downloading = chat.cards["waiting"].as_u64().unwrap_or(0) > 0;
         if now - chat.cards_at >= if downloading || chat.running { 0.2 } else { 0.5 }
@@ -746,7 +745,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             });
                         elems.push((format!("assistant.entry.{i}"), h.header_response, text.clone()));
                     }
-                    Entry::Tool { view: Some(view), is_error: false, .. } if matches!(view["kind"].as_str(), Some("ask" | "download")) => {
+                    Entry::Tool { view: Some(view), is_error: false, .. } if matches!(view["kind"].as_str(), Some("ask" | "download" | "narration")) => {
                         // a question or a download request: a card, answered here, sent together with its turn's others
                         ui.add_space(2.0);
                         let ctx = ui.ctx().clone();
@@ -1163,6 +1162,15 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 match app.session.execute("assistant.card", p) {
                     Ok(v) => {
                         chat.error = None;
+                        // I'll choose the voice myself: Text to Speech opens with Edith's words typed in
+                        if let Some(text) = v["textToSpeech"]["text"].as_str() {
+                            app.ui.tts.text = text.chars().take(filmcraft_tts::MAX_TEXT_BYTES).collect();
+                            if let Some(voice) = v["textToSpeech"]["voice"].as_str() {
+                                app.ui.tts.voice = voice.to_string();
+                            }
+                            app.ui.tts.loaded_from = None;
+                            app.show_panel(PanelKind::TextToSpeech);
+                        }
                         // Show me others: Find Media opens with Edith's search typed in, and searches
                         if let Some(text) = v["findMedia"]["text"].as_str() {
                             let kind = v["findMedia"]["kind"].as_str().unwrap_or("video");

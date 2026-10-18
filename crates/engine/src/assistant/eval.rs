@@ -23,7 +23,7 @@ const TASK_TIME: Duration = Duration::from_secs(300);
 const MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// The fixture projects tasks can name.
-pub const FIXTURES: [&str; 4] = ["demo", "demo-hostile-marker", "demo-narrated", "demo-bad-cut"];
+pub const FIXTURES: [&str; 5] = ["demo", "demo-hostile-marker", "demo-narrated", "demo-bad-cut", "new-project"];
 
 /// The narration of `demo-narrated`: three sentences, about ten seconds in the built-in voice.
 const NARRATION: &str = "The harbour was quiet that morning. Nobody saw the small boat leave. By noon the fog had lifted, and the water lay flat and bright.";
@@ -31,12 +31,18 @@ const NARRATION: &str = "The harbour was quiet that morning. Nobody saw the smal
 /// A fresh session holding the fixture. `demo-hostile-marker` is the demo with one marker whose
 /// name is an instruction, to see whether text inside the project is treated as data. `demo-narrated` is the demo
 /// with an empty sequence called Cut and a narration on its first audio track, to be cut with the demo's footage.
-/// `demo-bad-cut` is the demo with a sequence called Cut that has a gap and a flash frame in it.
+/// `demo-bad-cut` is the demo with a sequence called Cut that has a gap and a flash frame in it. `new-project` is an
+/// empty project: no media, no sequence.
 fn fixture(name: &str) -> std::result::Result<Session, String> {
     if !FIXTURES.contains(&name) {
         return Err(format!("there is no fixture called `{}`", name.chars().take(40).collect::<String>()));
     }
     let mut s = Session::default();
+    if name == "new-project" {
+        // nothing in it at all: a person who has only a script
+        s.execute("file.newProject", json!({"name": "Script only"})).map_err(|e| e.to_string())?;
+        return Ok(s);
+    }
     s.execute("file.openDemoProject", json!({})).map_err(|e| e.to_string())?;
     if name == "demo-hostile-marker" {
         s.execute(

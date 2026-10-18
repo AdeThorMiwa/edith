@@ -69,6 +69,8 @@ struct PendingSearch {
 pub(crate) struct Cards {
     drafts: HashMap<(u64, String), Draft>,
     searches: Vec<PendingSearch>,
+    /// Narrations being made for cards the person said Yes to (fork roadmap F16.7).
+    pub(crate) voicing: crate::assistant_narration::VoicingMap,
 }
 
 // ---------------------------------------------------------------------------- reading the turn
@@ -81,7 +83,9 @@ fn open_cards(s: &Session, thread: u64) -> Vec<Value> {
     for ev in st.events.iter().rev() {
         match ev {
             AgentEvent::UserMessage { .. } => break,
-            AgentEvent::ToolResult { view: Some(v), is_error: false, .. } if matches!(v["kind"].as_str(), Some("ask" | "download")) => out.push(v.clone()),
+            AgentEvent::ToolResult { view: Some(v), is_error: false, .. } if matches!(v["kind"].as_str(), Some("ask" | "download" | "narration")) => {
+                out.push(v.clone())
+            }
             _ => {}
         }
     }
@@ -105,7 +109,7 @@ fn last_search(s: &Session, thread: u64) -> Option<(String, String)> {
 
 /// The next card id in `thread` (`c1`, `c2`, …), one past the highest in its saved events, so a restored
 /// conversation never reuses one.
-fn next_card_id(s: &Session, thread: u64) -> String {
+pub(crate) fn next_card_id(s: &Session, thread: u64) -> String {
     let highest = s.assistant.slot(thread).map_or(0, |slot| {
         lock(&slot.shared.state)
             .events
@@ -137,6 +141,12 @@ pub(crate) fn serve(s: &mut Session, req: ToolRequest) -> Option<ToolRequest> {
             let _ = req.reply.send(out);
             None
         }
+        "request_narration" => {
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::assistant_narration::request(s, req.thread, &req.input)))
+                .unwrap_or_else(|_| ToolOutput::error("the request could not be shown"));
+            let _ = req.reply.send(out);
+            None
+        }
         "request_download" => {
             let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| request_download(s, req.thread, &req.input)))
                 .unwrap_or_else(|_| ToolOutput::error("the request could not be shown"));
@@ -153,7 +163,7 @@ pub(crate) fn serve(s: &mut Session, req: ToolRequest) -> Option<ToolRequest> {
     }
 }
 
-fn room_check(s: &Session, thread: u64) -> std::result::Result<usize, ToolOutput> {
+pub(crate) fn room_check(s: &Session, thread: u64) -> std::result::Result<usize, ToolOutput> {
     let so_far = open_cards(s, thread).len();
     if so_far >= MAX_CARDS {
         return Err(ToolOutput::error(format!(
@@ -412,9 +422,12 @@ fn draft_json(card: &Value, d: &Draft) -> Value {
 }
 
 /// What the answer to `card` says in the message to the assistant, and in the card afterwards.
-fn answer_words(s: &Session, card: &Value, d: Option<&Draft>) -> String {
+fn answer_words(s: &Session, thread: u64, card: &Value, d: Option<&Draft>) -> String {
     match (card["kind"].as_str(), d) {
         (_, None) => "no answer".to_string(),
+        (Some("narration"), Some(Draft::No)) => "no".to_string(),
+        (Some("narration"), Some(Draft::Others)) => "they will make the narration themselves in Text to Speech, with their own choice of voice".to_string(),
+        (Some("narration"), Some(Draft::Yes)) => crate::assistant_narration::answer_yes(s, thread, card),
         (Some("ask"), Some(Draft::Option(i))) => card["options"][*i]["label"].as_str().unwrap_or("(an option)").to_string(),
         (Some("ask"), Some(Draft::Other(t))) => format!("(in their own words) {t}"),
         (Some("download"), Some(Draft::No)) => "no".to_string(),
@@ -436,6 +449,12 @@ fn answer_words(s: &Session, card: &Value, d: Option<&Draft>) -> String {
 
 fn card_title(card: &Value) -> String {
     match card["kind"].as_str() {
+        Some("narration") => format!(
+            "Make the narration ({} words, about {} seconds, voice {})",
+            card["words"].as_u64().unwrap_or(0),
+            card["estimateSeconds"].as_f64().unwrap_or(0.0).round(),
+            card["voice"]["name"].as_str().unwrap_or("")
+        ),
         Some("download") => format!(
             "Download “{}” from {} ({})",
             card["candidate"]["title"].as_str().unwrap_or(""),
@@ -450,6 +469,7 @@ fn cards_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "assistant.cards";
     s.pump_assistant();
     s.pump_hub();
+    crate::assistant_narration::pump(s);
     let thread = thread_of(s, p, cmd)?;
     let running = s.assistant.slot(thread).is_some_and(|t| lock(&t.shared.state).running);
     let group = open_cards(s, thread);
@@ -466,10 +486,15 @@ fn cards_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             if dl.as_ref().is_some_and(|d| d["state"] == "downloading") {
                 waiting += 1;
             }
+            let narration = crate::assistant_narration::state_json(s, thread, c);
+            if narration.as_ref().is_some_and(|d| d["state"] == "rendering") {
+                waiting += 1;
+            }
             let mut v = c.clone();
+            v["narration"] = narration.unwrap_or(Value::Null);
             v["draft"] = draft.map_or(Value::Null, |d| draft_json(c, d));
             v["download"] = dl.unwrap_or(Value::Null);
-            v["answer"] = json!(answer_words(s, c, draft));
+            v["answer"] = json!(answer_words(s, thread, c, draft));
             v
         })
         .collect();
@@ -484,6 +509,7 @@ fn card_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "assistant.card";
     s.pump_assistant();
     s.pump_hub();
+    crate::assistant_narration::pump(s);
     let thread = thread_of(s, p, cmd)?;
     let id = str_p(p, "card").ok_or_else(|| bad(cmd, "`card` must be a card id (c1, c2, …; see assistant.cards)"))?.to_string();
     let card = open_cards(s, thread)
@@ -514,6 +540,20 @@ fn card_cmd(s: &mut Session, p: &Value) -> Result<Value> {
                 .ok_or_else(|| bad(cmd, format!("`other` must be 1 to {MAX_OTHER} characters of plain text")))?;
             Draft::Other(t)
         }
+    } else if kind == "narration" {
+        if matches!(s.assistant.cards.drafts.get(&key), Some(Draft::Yes)) {
+            return Err(bad(cmd, "the narration has been started; it cannot be changed"));
+        }
+        match str_p(p, "decision") {
+            Some("yes") => {
+                // the person's own action: the voice is made now, and placed on the timeline when it is done
+                crate::assistant_narration::start(s, thread, &card)?;
+                Draft::Yes
+            }
+            Some("no") => Draft::No,
+            Some("others") => Draft::Others,
+            _ => return Err(bad(cmd, "`decision` must be yes, no or others")),
+        }
     } else {
         // a download card
         let locked = matches!(s.assistant.cards.drafts.get(&key), Some(Draft::Yes));
@@ -536,7 +576,10 @@ fn card_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.assistant.cards.drafts.insert(key, draft.clone());
     let mut out = json!({"thread": thread, "card": id, "draft": draft_json(&card, &draft)});
-    if draft == Draft::Others {
+    if draft == Draft::Others && kind == "narration" {
+        // the panel opens Text to Speech with the words typed in
+        out["textToSpeech"] = json!({"text": card["text"], "voice": card["voice"]["id"]});
+    } else if draft == Draft::Others {
         // the panel opens Find Media with this typed in
         out["findMedia"] = json!({"text": card["query"], "kind": card["searchKind"]});
     }
@@ -547,6 +590,7 @@ fn answer_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "assistant.answerCards";
     s.pump_assistant();
     s.pump_hub();
+    crate::assistant_narration::pump(s);
     let thread = thread_of(s, p, cmd)?;
     let wait = bool_p(p, "wait").unwrap_or(false);
     let group = open_cards(s, thread);
@@ -567,12 +611,16 @@ fn answer_cmd(s: &mut Session, p: &Value) -> Result<Value> {
             ),
         ));
     }
+    let voicing = group.iter().filter(|c| crate::assistant_narration::state_json(s, thread, c).is_some_and(|d| d["state"] == "rendering")).count();
+    if voicing > 0 {
+        return Err(bad(cmd, "the narration is still being made: send the answers when it has finished, so it is on the timeline for the next turn"));
+    }
     let mut lines = Vec::new();
     let mut answers = Vec::new();
     for (n, c) in group.iter().enumerate() {
         let id = c["id"].as_str().unwrap_or("").to_string();
         let draft = s.assistant.cards.drafts.get(&(thread, id.clone())).cloned();
-        let words = answer_words(s, c, draft.as_ref());
+        let words = answer_words(s, thread, c, draft.as_ref());
         lines.push(format!("{}. {}: {}", n + 1, card_title(c), words));
         answers.push(CardAnswer { card: id, answer: words });
     }

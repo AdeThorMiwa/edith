@@ -39,7 +39,7 @@ fn failed_checks(r: &Value) -> Vec<String> {
 fn the_suite_ships_reads_and_every_task_has_a_fixture_that_exists() {
     let suite = Suite::named("rough-cut").expect("the rough-cut suite ships with the app");
     assert_eq!(suite.name, "rough-cut");
-    assert_eq!(suite.tasks.len(), 6);
+    assert_eq!(suite.tasks.len(), 8);
     for t in &suite.tasks {
         assert!(super::assistant::eval::FIXTURES.contains(&t.fixture.as_str()), "{}: fixture {}", t.id, t.fixture);
         assert!(matches!(t.mode.as_str(), "" | "ask" | "coach" | "edit"), "{}", t.id);
@@ -254,4 +254,44 @@ fn the_shipped_workflow_names_only_tools_and_commands_that_exist() {
         );
     }
     assert!(named >= 15, "the workflow names its tools: {named}");
+}
+
+#[test]
+fn pasted_prose_is_offered_a_voice_and_pasted_dialogue_is_not() {
+    let f = fixture("new-project");
+    assert!(f.active_sequence().is_none() && f.project.items.values().all(|i| !matches!(i.kind, ItemKind::Media(_))), "nothing in it but a name");
+    let prose = Suite::named("rough-cut").unwrap().task("offers_the_voice_for_a_pasted_narration").unwrap().question.clone();
+    assert!(prose.contains("The harbour was quiet"));
+    let offer = scripted(vec![
+        tool_reply(&[(
+            "a",
+            "request_narration",
+            json!({"text": "The harbour was quiet that morning. Nobody saw the small boat leave, and nobody asked why.\n[pause 1s]\nBy noon the fog had lifted.", "why": "It is flowing prose, written to be read aloud."}),
+        )]),
+        text_reply("This reads as narration, so I have offered to make it with the Heart voice. Press Yes and I will carry on with the ideas."),
+    ]);
+    let r = run_task("offers_the_voice_for_a_pasted_narration", offer);
+    assert_eq!(r["passed"], true, "{:?}", failed_checks(&r));
+    // claiming it was made, or not offering at all, fails
+    let claims = scripted(vec![text_reply("I have made the narration for you.")]);
+    let r = run_task("offers_the_voice_for_a_pasted_narration", claims);
+    assert_eq!(r["passed"], false);
+    assert!(
+        failed_checks(&r).iter().any(|c| c.starts_with("calls_tools")) && failed_checks(&r).iter().any(|c| c.starts_with("avoids")),
+        "{:?}",
+        failed_checks(&r)
+    );
+    // dialogue: a good assistant says what it is and does not offer one voice for two speakers
+    let said = scripted(vec![text_reply(
+        "This is a dialogue between two characters, Mara and Jonas, so it is not one narration. Do you want to record it, or have two voices?",
+    )]);
+    let r = run_task("does_not_voice_dialogue_as_narration", said);
+    assert_eq!(r["passed"], true, "{:?}", failed_checks(&r));
+    let wrong = scripted(vec![
+        tool_reply(&[("a", "request_narration", json!({"text": "You said you would be here at dawn. The tide was late."}))]),
+        text_reply("I have offered to voice your script."),
+    ]);
+    let r = run_task("does_not_voice_dialogue_as_narration", wrong);
+    assert_eq!(r["passed"], false);
+    assert!(failed_checks(&r).iter().any(|c| c.starts_with("calls_tools")), "{:?}", failed_checks(&r));
 }
