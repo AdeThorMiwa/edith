@@ -188,14 +188,14 @@ fn analysis_run_with_bad_input_answers_with_the_error_in_the_turn() {
 }
 
 #[test]
-fn the_mode_is_a_setting_that_only_accepts_ask_or_coach() {
+fn the_mode_is_a_setting_that_only_accepts_ask_coach_or_edit() {
     let mut s = Session::default();
     assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "ask", "Ask is the starting mode");
     let modes = s.execute("assistant.status", json!({})).unwrap()["modes"].clone();
-    assert_eq!(modes, json!([{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}]));
+    assert_eq!(modes, json!([{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}, {"id": "edit", "label": "Edit"}]));
     s.execute("assistant.settings", json!({"mode": "coach"})).unwrap();
     assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "coach");
-    for bad in [json!("propose"), json!("Coach"), json!(""), json!(7), json!(null), json!(["coach"]), json!("coach; drop")] {
+    for bad in [json!("propose"), json!("direct"), json!("Edit"), json!("Coach"), json!(""), json!(7), json!(null), json!(["coach"]), json!("coach; drop")] {
         assert!(s.execute("assistant.settings", json!({"mode": bad.clone()})).is_err(), "{bad}");
     }
     assert_eq!(s.execute("assistant.status", json!({})).unwrap()["settings"]["mode"], "coach", "a refused change changes nothing");

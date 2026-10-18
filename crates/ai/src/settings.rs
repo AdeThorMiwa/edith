@@ -92,7 +92,7 @@ impl AiSettings {
         while self.model_by_service.len() > 16 {
             self.model_by_service.pop_last();
         }
-        if !matches!(self.mode.as_str(), "ask" | "coach") {
+        if !matches!(self.mode.as_str(), "ask" | "coach" | "edit") {
             self.mode = d.mode;
         }
         self.max_steps = self.max_steps.clamp(1, 40);

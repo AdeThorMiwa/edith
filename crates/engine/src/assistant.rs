@@ -328,6 +328,10 @@ impl Session {
                 crate::analysis_tools::start(self, req);
                 continue;
             }
+            if let Some(out) = crate::assistant_edit::run_edit(self, &req.name, &req.input) {
+                let _ = req.reply.send(out);
+                continue;
+            }
             let out = self.run_assistant_tool(&req.name, &req.input);
             let _ = req.reply.send(out);
         }
@@ -417,7 +421,7 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
         "model": info.as_ref().map(model_json),
         "threads": threads,
         // How the assistant can work (the Mode picker): the same tools, a different way of teaching.
-        "modes": [{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}],
+        "modes": [{"id": "ask", "label": "Ask"}, {"id": "coach", "label": "Coach"}, {"id": "edit", "label": "Edit"}],
     }))
 }
 
@@ -471,8 +475,8 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("mode") {
         next.mode = match v.as_str() {
-            Some(m @ ("ask" | "coach")) => m.to_string(),
-            _ => return Err(bad(cmd, "`mode` must be \"ask\" or \"coach\"")),
+            Some(m @ ("ask" | "coach" | "edit")) => m.to_string(),
+            _ => return Err(bad(cmd, "`mode` must be \"ask\", \"coach\" or \"edit\"")),
         };
     }
     if let Some(v) = p.get("showThinking") {
@@ -621,7 +625,11 @@ fn models(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The profile for a `mode` setting.
 pub(crate) fn profile_of(mode: &str) -> Profile {
-    if mode == "coach" { Profile::Coach } else { Profile::ReadOnly }
+    match mode {
+        "coach" => Profile::Coach,
+        "edit" => Profile::Propose,
+        _ => Profile::ReadOnly,
+    }
 }
 
 fn new_slot(s: &mut Session, title: &str) -> Result<u64> {
@@ -898,6 +906,10 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     {
         // what the coach needs to know before it looks: the edit's headline numbers and what the rules found
         ctx.insert(0, ContextBlock::text("coach", text));
+    }
+    if profile == Profile::Propose {
+        // where the version stands, so it knows whether to open one and what the person has done in it
+        ctx.insert(0, ContextBlock::text("edit", crate::assistant_edit::context(s)));
     }
     let defs = assistant_tools::tools();
     let env = Arc::new(ChannelEnvironment {

@@ -582,11 +582,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         } else {
                             String::new()
                         };
-                        let title = if input.is_empty() {
-                            format!("{} {name}{waiting}", tl!("Looked at"))
+                        // the tools that change the edit are not "looking"
+                        let verb = if matches!(name.as_str(), "begin_version" | "edit" | "undo_steps" | "redo_step") {
+                            tl!("Changed the edit with")
                         } else {
-                            format!("{} {name}  ({input}){waiting}", tl!("Looked at"))
+                            tl!("Looked at")
                         };
+                        let title = if input.is_empty() { format!("{verb} {name}{waiting}") } else { format!("{verb} {name}  ({input}){waiting}") };
                         let h = egui::CollapsingHeader::new(RichText::new(title).size(11.5).color(color))
                             .id_salt(("assistant-tool", thread, i))
                             .default_open(false)
@@ -753,7 +755,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let shown_model = if current_model.is_empty() { tl!("Choose a model").to_string() } else { short(&name, 24) };
             // the mode picker follows the model picker, so leave it room
             let mode_id = chat.setting("mode").as_str().unwrap_or("ask").to_string();
-            let mode_label = |id: &str| if id == "coach" { tl!("Coach") } else { tl!("Ask") };
+            let mode_label = |id: &str| match id {
+                "coach" => tl!("Coach"),
+                "edit" => tl!("Edit"),
+                _ => tl!("Ask"),
+            };
             let mode_w = chip_w(mode_label(&mode_id));
             let mw = chip_w(&shown_model).min((ui.available_width() - 40.0 - mode_w - 4.0).max(80.0));
             let (mrect, _) = ui.allocate_exact_size(vec2(mw, 24.0), egui::Sense::hover());
@@ -780,13 +786,14 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             // mode
             let (drect, _) = ui.allocate_exact_size(vec2(mode_w, 24.0), egui::Sense::hover());
             let dresp = crate::widgets::dropdown_text(ui, drect, mode_label(&mode_id), &t, egui::Id::new("assistant-mode-dd"))
-                .on_hover_text(tl!("How Edith works with you: Ask answers questions about your edit; Coach teaches from its measurements."));
+                .on_hover_text(tl!("How Edith works with you: Ask answers questions about your edit; Coach teaches from its measurements; Edit changes your edit, in a version you decide on."));
             elems.push(("assistant.mode".into(), dresp.clone(), format!("Mode {}", mode_label(&mode_id))));
             egui::Popup::menu(&dresp).show(|ui| {
                 ui.set_min_width(220.0);
                 for (id, hint) in [
                     ("ask", tl!("Look at your edit and answer your questions, using its measurements when they help.")),
                     ("coach", tl!("Teach from the measurements: what they mean, why it matters, and one thing to try.")),
+                    ("edit", tl!("Change your edit, only inside a version that you can look at, edit alongside, and commit or discard.")),
                 ] {
                     let r = ui.selectable_label(id == mode_id, mode_label(id)).on_hover_text(hint);
                     elems.push((format!("assistant.mode.{id}"), r.clone(), mode_label(id).to_string()));

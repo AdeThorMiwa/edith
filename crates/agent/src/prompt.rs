@@ -85,7 +85,7 @@ impl PromptPack {
         }
         for (mode, body) in &self.mode_sections {
             if *mode == profile {
-                text.push_str(&format!("## {} mode\n{body}\n\n", if profile == Profile::Coach { "coach" } else { "propose" }));
+                text.push_str(&format!("## {} mode\n{body}\n\n", if profile == Profile::Coach { "coach" } else { "edit" }));
             }
         }
         text.push_str(profile.note());
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "9");
+        assert_eq!(p.version, "10");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();
@@ -138,7 +138,7 @@ mod tests {
         assert!(a.last().is_some_and(|x| x.cache));
         let b = p.system_parts(Profile::Propose);
         assert_ne!(a[0].text, b[0].text);
-        assert!(b[0].text.contains("propose"));
+        assert!(b[0].text.contains("Edit mode") && b[0].text.contains("begin_version"));
     }
 
     #[test]

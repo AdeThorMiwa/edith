@@ -47,6 +47,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::look::tools());
     // the sound map and the sound plan (fork; roadmap F13.5)
     all.extend(crate::soundmap::tools());
+    // Edit mode: the tools that work inside a version (fork; roadmap F15)
+    all.extend(crate::assistant_edit::tools());
     all
 }
 

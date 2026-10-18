@@ -18,7 +18,7 @@ fn demo() -> Session {
     s
 }
 
-fn text_reply(t: &str) -> (Vec<StreamEvent>, Response) {
+pub(crate) fn text_reply(t: &str) -> (Vec<StreamEvent>, Response) {
     (
         vec![StreamEvent::Text(t.into())],
         Response {
@@ -30,7 +30,7 @@ fn text_reply(t: &str) -> (Vec<StreamEvent>, Response) {
     )
 }
 
-fn tool_reply(calls: &[(&str, &str, Value)]) -> (Vec<StreamEvent>, Response) {
+pub(crate) fn tool_reply(calls: &[(&str, &str, Value)]) -> (Vec<StreamEvent>, Response) {
     let parts =
         calls.iter().map(|(id, name, input)| Part::ToolUse { id: (*id).into(), name: (*name).into(), input: input.clone(), input_error: None }).collect();
     (
@@ -44,7 +44,7 @@ fn tool_reply(calls: &[(&str, &str, Value)]) -> (Vec<StreamEvent>, Response) {
     )
 }
 
-fn scripted(replies: Vec<(Vec<StreamEvent>, Response)>) -> Arc<ScriptedModel> {
+pub(crate) fn scripted(replies: Vec<(Vec<StreamEvent>, Response)>) -> Arc<ScriptedModel> {
     let m = Arc::new(ScriptedModel::new());
     for (e, r) in replies {
         m.push_reply(e, r);
@@ -211,8 +211,13 @@ fn tools_refuse_hostile_arguments_with_an_error_not_a_panic() {
 
 #[test]
 fn every_tool_is_read_only_and_the_engine_refuses_anything_else() {
-    assert!(crate::assistant_tools::tools().iter().all(|d| d.read_only));
+    // the only tools that change the project are the four of Edit mode, and the engine refuses them outside it
+    let editing: Vec<String> = crate::assistant_tools::tools().iter().filter(|d| !d.read_only).map(|d| d.spec.name.clone()).collect();
+    assert_eq!(editing, ["begin_version", "edit", "undo_steps", "redo_step"]);
     let s = demo();
+    for name in &editing {
+        assert!(run_tool(&s, name, json!({})).is_error, "{name}");
+    }
     let r = run_tool(&s, "delete_clip", json!({"clip": 1}));
     assert!(r.is_error && r.content.contains("unknown tool"), "{}", r.content);
 }
@@ -317,8 +322,8 @@ fn context_blocks_are_sent_in_the_user_message() {
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
     assert_eq!(
         req.tools.len(),
-        19,
-        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, and the two sound tools"
+        22,
+        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, the two sound tools, and the three that read a version, the plan and the commands"
     );
     assert_eq!(req.model, "claude-haiku-5-5");
 }
@@ -504,7 +509,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "9");
+    assert_eq!(trace.meta.prompt_version, "10");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));
@@ -875,7 +880,7 @@ fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool(
     s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "look_see"));
-    assert_eq!(model.requests()[0].tools.len(), 17, "every tool but the two that need to see pictures");
+    assert_eq!(model.requests()[0].tools.len(), 20, "every tool but the two that need to see pictures");
     // and the engine would refuse to run it anyway if asked
     let out = s.run_assistant_tool("frame_view", &json!({}));
     assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");

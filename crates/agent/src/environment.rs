@@ -61,7 +61,9 @@ impl Profile {
         match self {
             Profile::ReadOnly => "This thread is read-only: you can look at the project but you cannot change it.",
             Profile::Coach => "This thread is in Coach mode and read-only: you can look at the project and its measurements but you cannot change it.",
-            Profile::Propose => "You may propose edits with the propose tools. Nothing changes until the person accepts a proposal.",
+            Profile::Propose => {
+                "This thread is in Edit mode: you may change the edit, but only inside a version you open with begin_version. Nothing reaches the person's committed edit until they commit the version, and you cannot commit it."
+            }
         }
     }
 }

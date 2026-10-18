@@ -4078,3 +4078,6 @@
 	Commit Version	バージョンをコミット
 	Discard Version	バージョンを破棄
 	See Original	元を見る
+	Change your edit, only inside a version that you can look at, edit alongside, and commit or discard.	編集の変更は、見比べたり一緒に編集したりでき、コミットも破棄もできるバージョンの中だけで行います。
+	How Edith works with you: Ask answers questions about your edit; Coach teaches from its measurements; Edit changes your edit, in a version you decide on.	Edith の働き方：質問は編集についての疑問に答え、コーチは測定値から教え、編集はあなたが決めるバージョンの中で編集を変更します。
+	Changed the edit with	編集の変更に使用：

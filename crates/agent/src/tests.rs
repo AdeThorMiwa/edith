@@ -123,7 +123,7 @@ fn the_request_carries_the_stable_cached_prompt_and_only_the_offered_tools() {
     push(&m, text_reply("a"));
     run(&agent(&m, &e, |c| c.profile = Profile::Propose), &mut Thread::new(), "q");
     assert_eq!(m.requests()[0].tools.len(), 3);
-    assert!(m.requests()[0].system[0].text.contains("propose"));
+    assert!(m.requests()[0].system[0].text.contains("Edit mode"));
 }
 
 #[test]

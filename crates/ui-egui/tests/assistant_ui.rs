@@ -1199,3 +1199,47 @@ fn the_soundmap_view_shows_the_lanes_and_a_mark_jumps_to_what_is_missing() {
     let p = playhead_seconds(&mut d);
     assert!((p - 30.0).abs() < 12.0, "the middle of a 60 s edit: {p}");
 }
+
+#[test]
+fn edit_mode_is_chosen_beside_the_model_and_the_assistants_version_shows_a_banner_the_person_commits() {
+    let _g = guard();
+    let mut session = measured_edit();
+    session.execute("project.setNotes", json!({"text": "main notes"})).unwrap();
+    let main_undo = session.history.undo.len();
+    let mut d = Driver::with(session);
+    d.app().session.assistant.use_model(scripted(vec![
+        tool_reply("t1", "begin_version", json!({"title": "Notes pass"})),
+        tool_reply("t2", "edit", json!({"command": "project.setNotes", "params": {"text": "assistant notes"}})),
+        text_reply("I opened a version and changed the notes in it. It is yours to commit."),
+    ]));
+    d.open_assistant();
+    d.exec("window.floatPanel", json!({"panel": "Assistant", "rect": [40.0, 40.0, 700.0, 900.0]}));
+    d.frames(6);
+    d.click("assistant.mode");
+    assert!(d.has("assistant.mode.ask") && d.has("assistant.mode.coach") && d.has("assistant.mode.edit"));
+    d.click("assistant.mode.edit");
+    d.wait("the mode to change", |d| d.exec("assistant.settings", json!({}))["settings"]["mode"] == "edit");
+    assert!(d.label("assistant.mode").contains("Edit"), "{}", d.label("assistant.mode"));
+    assert!(!d.has("version.banner"), "no version yet");
+    d.type_into_input("tighten the notes");
+    d.click("assistant.send");
+    d.wait("the answer", |d| d.entries().iter().any(|(_, l)| l.contains("yours to commit")));
+    d.frames(6);
+    assert!(d.has("version.banner"), "the version the assistant opened is shown");
+    d.snapshot("assistant-edit-version");
+    {
+        let s = &d.app().session;
+        let info = s.version_info().expect("a version is open");
+        assert_eq!((info.title.as_str(), info.steps.len(), info.steps[0].by.id()), ("Notes pass", 1, "assistant"));
+        assert_eq!(s.project.notes, "assistant notes");
+    }
+    // the person looks at the original, then commits: one undo step
+    d.click("version.peek");
+    assert_eq!(d.app().session.project.notes, "main notes");
+    d.click("version.peek");
+    d.click("version.commit");
+    assert!(!d.has("version.banner"));
+    let s = &d.app().session;
+    assert_eq!(s.project.notes, "assistant notes");
+    assert_eq!(s.history.undo.len(), main_undo + 1);
+}
