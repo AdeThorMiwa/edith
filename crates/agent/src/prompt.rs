@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "13");
+        assert_eq!(p.version, "14");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();

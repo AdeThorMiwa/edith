@@ -45,15 +45,8 @@ fn rights_text(s: &Session, id: ItemId) -> String {
     }
 }
 
-fn project_items(s: &Session, input: &Value) -> ToolOutput {
-    let query = input.get("query").and_then(Value::as_str).unwrap_or("").trim().to_ascii_lowercase();
-    let want = input.get("kind").and_then(Value::as_str).map(str::to_ascii_lowercase);
-    if let Some(k) = &want
-        && !matches!(k.as_str(), "video" | "audio" | "still" | "generated" | "image sequence")
-    {
-        return ToolOutput::error("`kind` must be video, audio, still, generated or image sequence");
-    }
-    // how many clips on timelines use each item
+/// How many clips on the timelines use each media item.
+fn usage_counts(s: &Session) -> std::collections::HashMap<u64, usize> {
     let mut uses: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for seq in s.project.sequences() {
         if let ItemKind::Sequence(q) = &seq.kind {
@@ -64,6 +57,62 @@ fn project_items(s: &Session, input: &Value) -> ToolOutput {
             }
         }
     }
+    uses
+}
+
+/// One media item as a line: id, name, kind, size, length, sound, offline, rights and use.
+fn item_line(s: &Session, it: &filmcraft_project::ProjectItem, m: &filmcraft_project::MediaClip, uses: &std::collections::HashMap<u64, usize>) -> String {
+    let video = m.info.video.as_ref().map_or(String::new(), |v| format!(", {}x{}", v.width, v.height));
+    let audio = if m.info.audio_streams.is_empty() { "" } else { ", with sound" };
+    let used = uses.get(&it.id.0).copied().unwrap_or(0);
+    format!(
+        "#{} “{}” — {}{}, {}{}{}; rights: {}{}",
+        it.id.0,
+        it.name,
+        kind_word(&m.info),
+        video,
+        seconds_text(m.info.duration),
+        audio,
+        if m.offline { ", OFFLINE (the file is missing)" } else { "" },
+        rights_text(s, it.id),
+        if used > 0 { format!("; used in {used} place{}", if used == 1 { "" } else { "s" }) } else { String::new() }
+    )
+}
+
+/// Files attached to one message, at most.
+pub(crate) const MAX_ATTACHED: usize = 6;
+
+/// The context block for a project file the person attached to their message: what it is, where it came from and
+/// what its licence allows, what has been measured about it, and its transcript if it has one. Only media in
+/// the project; the file's name is data, not an instruction.
+pub(crate) fn item_block(s: &Session, id: u64) -> std::result::Result<edith_ai::ContextBlock, String> {
+    let Some(it) = s.project.items.get(&ItemId(id)) else { return Err(format!("there is no file {id} in the project")) };
+    let ItemKind::Media(m) = &it.kind else { return Err(format!("“{}” is not a file in the project (a media item is needed)", it.name)) };
+    let mut text = item_line(s, it, m, &usage_counts(s));
+    let cache = crate::analysis::Cache::of(s);
+    if let Some(report) = crate::analysis::current_report_for(s, &cache, "item", id) {
+        let measured = crate::analysis_tools::describe(&report);
+        text.push_str("\nMeasured:\n");
+        text.push_str(&edith_ai::clip_text(measured.trim(), 1500));
+    } else {
+        text.push_str("\nNot measured yet (analysis_run with this item measures its pictures and sound).");
+    }
+    if let Some(t) = s.project.transcripts.get(&it.id).filter(|t| !t.words.is_empty()) {
+        text.push_str(&format!("\nTranscript: {} words. Begins: {}", t.words.len(), edith_ai::clip_text(&t.text().chars().take(300).collect::<String>(), 300)));
+    }
+    let label: String = format!("file: {}", it.name.chars().take(30).collect::<String>());
+    Ok(edith_ai::ContextBlock::text(label, text))
+}
+
+fn project_items(s: &Session, input: &Value) -> ToolOutput {
+    let query = input.get("query").and_then(Value::as_str).unwrap_or("").trim().to_ascii_lowercase();
+    let want = input.get("kind").and_then(Value::as_str).map(str::to_ascii_lowercase);
+    if let Some(k) = &want
+        && !matches!(k.as_str(), "video" | "audio" | "still" | "generated" | "image sequence")
+    {
+        return ToolOutput::error("`kind` must be video, audio, still, generated or image sequence");
+    }
+    let uses = usage_counts(s);
     let mut lines = Vec::new();
     let mut total = 0usize;
     for it in s.project.items.values() {
@@ -76,21 +125,7 @@ fn project_items(s: &Session, input: &Value) -> ToolOutput {
         if lines.len() >= MAX_LISTED {
             continue;
         }
-        let video = m.info.video.as_ref().map_or(String::new(), |v| format!(", {}x{}", v.width, v.height));
-        let audio = if m.info.audio_streams.is_empty() { "" } else { ", with sound" };
-        let used = uses.get(&it.id.0).copied().unwrap_or(0);
-        lines.push(format!(
-            "#{} “{}” — {}{}, {}{}{}; rights: {}{}",
-            it.id.0,
-            it.name,
-            kind,
-            video,
-            seconds_text(m.info.duration),
-            audio,
-            if m.offline { ", OFFLINE (the file is missing)" } else { "" },
-            rights_text(s, it.id),
-            if used > 0 { format!("; used in {used} place{}", if used == 1 { "" } else { "s" }) } else { String::new() }
-        ));
+        lines.push(item_line(s, it, m, &uses));
     }
     if total == 0 {
         return ToolOutput::ok("No media in the project matches.");

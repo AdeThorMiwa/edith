@@ -357,3 +357,58 @@ fn a_download_request_downloads_only_on_yes_and_show_me_others_opens_find_media(
     assert!(said.contains("yes, it is now in the project as item") && said.contains("look at other options themselves in Find Media"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_project_file_is_attached_from_the_menu_and_goes_with_the_message() {
+    let _g = guard();
+    let (_rig, sources) = rig();
+    let mut d = Driver::new(sources);
+    let model = scripted(vec![text_reply("I see it.")]);
+    d.harness.state_mut().session.assistant.use_model(model.clone());
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.Assistant"}));
+    d.frames(4);
+    let media = |d: &mut Driver, name: &str| {
+        d.harness
+            .state_mut()
+            .session
+            .project
+            .items
+            .values()
+            .find(|i| i.name.contains(name) && matches!(i.kind, filmcraft_project::ItemKind::Media(_)))
+            .map(|i| i.id.0)
+            .unwrap()
+    };
+    let ocean = media(&mut d, "Ocean_Sunset");
+    let neon = media(&mut d, "Neon_Loop");
+    assert!(d.has("assistant.attach"));
+    // the menu lists the project's own files
+    d.click("assistant.attach");
+    d.wait("the file list", |d| d.has(&format!("assistant.attach.item.{ocean}")));
+    assert!(d.has(&format!("assistant.attach.item.{neon}")), "every media item of the project is listed");
+    d.snapshot("assistant-attach-menu");
+    d.click(&format!("assistant.attach.item.{ocean}"));
+    d.wait("the chip", |d| d.has(&format!("assistant.attached.{ocean}")));
+    // a second file, and one comes off again with a click on its chip
+    d.click(&format!("assistant.attach.item.{neon}"));
+    d.wait("two chips", |d| d.has(&format!("assistant.attached.{neon}")));
+    d.click(&format!("assistant.attached.{neon}"));
+    d.wait("one chip", |d| !d.has(&format!("assistant.attached.{neon}")) && d.has(&format!("assistant.attached.{ocean}")));
+    d.snapshot("assistant-attached");
+    // sent with the message, and the chip is spent
+    d.click("assistant.input");
+    d.ok("ui.type", json!({"text": "is this shot good enough?"}));
+    d.click("assistant.send");
+    d.wait("the answer", |_| model.requests().len() == 1);
+    let text: String = model
+        .requests()
+        .first()
+        .unwrap()
+        .messages
+        .iter()
+        .flat_map(|m| m.parts.iter())
+        .filter_map(|p| if let Part::Text { text, .. } = p { Some(text.clone()) } else { None })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("file: Ocean_Sunset") && text.contains(&format!("#{ocean} ")) && !text.contains("Neon_Loop"), "{text}");
+    d.wait("the chip to go", |d| !d.has(&format!("assistant.attached.{ocean}")));
+}

@@ -67,6 +67,10 @@ struct Chat {
     /// the person), and when it was read (fork roadmap F16.1).
     cards: Value,
     cards_at: f64,
+    /// Project files attached to the message being written (media items), sent with it (fork roadmap F16.1c).
+    attached: Vec<u64>,
+    /// What was typed to narrow the list of files in the attach menu.
+    attach_filter: String,
 }
 
 impl Chat {
@@ -96,6 +100,8 @@ impl Chat {
             hover_entry: None,
             cards: Value::Null,
             cards_at: f64::NEG_INFINITY,
+            attached: Vec::new(),
+            attach_filter: String::new(),
         }
     }
 
@@ -238,7 +244,10 @@ struct Chips {
     frame: bool,
 }
 
-fn context_blocks(app: &FilmcraftApp, chips: Chips) -> Vec<Value> {
+/// The most project files attached to one message (the engine refuses more).
+const MAX_ATTACHED: usize = 6;
+
+fn context_blocks(app: &FilmcraftApp, chips: Chips, attached: &[u64]) -> Vec<Value> {
     let (selection, playhead) = (chips.selection, chips.playhead);
     let s = &app.session;
     let Some(q) = s.active_sequence() else { return Vec::new() };
@@ -267,7 +276,34 @@ fn context_blocks(app: &FilmcraftApp, chips: Chips) -> Vec<Value> {
             out.push(json!({"kind": kind}));
         }
     }
+    // files the person attached: only ones still in the project
+    for id in attached.iter().take(MAX_ATTACHED) {
+        if s.project.items.contains_key(&filmcraft_project::ItemId(*id)) {
+            out.push(json!({"kind": "item", "item": id}));
+        }
+    }
     out
+}
+
+/// The media in the project the attach menu offers: (id, name, a word for what it is, length in seconds).
+fn project_files(app: &FilmcraftApp) -> Vec<(u64, String, &'static str, f64)> {
+    app.session
+        .project
+        .items
+        .values()
+        .filter_map(|it| match &it.kind {
+            filmcraft_project::ItemKind::Media(m) => {
+                let kind = match m.info.kind {
+                    filmcraft_media::MediaKind::AudioOnly => tl!("audio"),
+                    filmcraft_media::MediaKind::Still | filmcraft_media::MediaKind::ImageSequence => tl!("picture"),
+                    _ if m.info.video.is_some() => tl!("video"),
+                    _ => tl!("audio"),
+                };
+                Some((it.id.0, it.name.clone(), kind, m.info.duration.seconds()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn short(s: &str, n: usize) -> String {
@@ -492,7 +528,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
 
     // ---- what the composer below will take: its height decides how tall the conversation is ----
-    let composer_h = 90.0;
+    // the chips of attached files add a row above the field
+    let composer_h = 90.0 + if chat.attached.is_empty() { 0.0 } else { 28.0 };
     let hint_h = if ready && chat.needs_model() { 18.0 } else { 0.0 };
     let slash_h = if chat.input.starts_with('/') && !chat.input.contains(char::is_whitespace) && ready { 30.0 } else { 0.0 };
 
@@ -748,6 +785,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     // Enter sends; Shift+Enter makes a new line. Taken before the field sees the key.
     let enter = focused && ready && !running && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+    // files attached to this message, as chips that come off with a click; one that left the project is dropped
+    let files = project_files(app);
+    chat.attached.retain(|id| files.iter().any(|f| f.0 == *id));
+    if !chat.attached.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for id in chat.attached.clone() {
+                let name = files.iter().find(|f| f.0 == id).map(|f| short(&f.1, 28)).unwrap_or_default();
+                let r = super::assistant_widgets::pill(ui, &format!("{name}  ×"), true, true, &t).on_hover_text(tl!("Take this file off the message"));
+                elems.push((format!("assistant.attached.{id}"), r.clone(), format!("Attached: {name}")));
+                if r.clicked() {
+                    chat.attached.retain(|x| *x != id);
+                }
+            }
+        });
+    }
     let border = if focused { t.accent } else { t.field_border };
     egui::Frame::new().fill(t.field_bg).stroke(egui::Stroke::new(1.0, border)).corner_radius(6.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -766,6 +819,47 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            // attach a file: the project's own media only (importing stays in the Project and Media panels)
+            // a fixed id: the chips above shift the button's automatic one, and the open menu is keyed to it
+            let (arect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
+            let aresp = ui.interact(arect, egui::Id::new("assistant-attach-button"), egui::Sense::click());
+            ui.painter().rect_filled(arect, 4.0, if aresp.hovered() { t.hover } else { t.field_bg });
+            ui.painter().rect_stroke(arect, 4.0, egui::Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+            crate::icons::paint(ui.painter(), Rect::from_center_size(arect.center(), vec2(12.0, 12.0)), crate::icons::Icon::Plus, t.text_dim);
+            let aresp = aresp.on_hover_text(tl!("Attach a file from the project"));
+            elems.push(("assistant.attach".into(), aresp.clone(), "Attach a file from the project".into()));
+            // stays open while several files are picked; a click outside closes it
+            egui::Popup::menu(&aresp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                ui.set_min_width(280.0);
+                let f = ui.add(egui::TextEdit::singleline(&mut chat.attach_filter).id(egui::Id::new("assistant-attach-filter")).hint_text(tl!("Search the project…")).desired_width(f32::INFINITY));
+                elems.push(("assistant.attach.search".into(), f, "Search the project's files".into()));
+                let q = chat.attach_filter.trim().to_lowercase();
+                let shown: Vec<&(u64, String, &str, f64)> = files.iter().filter(|f| q.is_empty() || f.1.to_lowercase().contains(&q)).take(200).collect();
+                if files.is_empty() {
+                    ui.label(RichText::new(tl!("No files in the project yet.")).color(t.text_faint));
+                } else if shown.is_empty() {
+                    ui.label(RichText::new(tl!("Nothing matches.")).color(t.text_faint));
+                }
+                let full = chat.attached.len() >= MAX_ATTACHED;
+                if full {
+                    ui.label(RichText::new(tl!("Up to 6 files can go with one message.")).size(11.0).color(WARN));
+                }
+                egui::ScrollArea::vertical().max_height(280.0).id_salt("assistant-attach-list").show(ui, |ui| {
+                    for (id, name, kind, secs) in shown {
+                        let on = chat.attached.contains(id);
+                        let label = format!("{}   ·  {kind}, {secs:.0} s", short(name, 34));
+                        let r = ui.add_enabled(on || !full, egui::Button::selectable(on, label));
+                        elems.push((format!("assistant.attach.item.{id}"), r.clone(), name.to_string()));
+                        if r.clicked() {
+                            if on {
+                                chat.attached.retain(|x| x != id);
+                            } else {
+                                chat.attached.push(*id);
+                            }
+                        }
+                    }
+                });
+            });
             // provider
             let providers: Vec<Value> = chat.status.as_ref().and_then(|s| s["providers"].as_array()).cloned().unwrap_or_default();
             let current_service = chat.setting("service").as_str().unwrap_or("").to_string();
@@ -879,6 +973,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         markers: chat.chip("markers"),
         frame: chat.chip("frame") && sees,
     };
+    let attached = chat.attached.clone();
     drop(chat);
     for (id, r, label) in &elems {
         app.auto.add_response(id, r, label);
@@ -889,7 +984,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let mut chat = lock(&shared);
         match a {
             Action::Send(text) => {
-                let mut params = json!({"text": text, "context": context_blocks(app, chips)});
+                let mut params = json!({"text": text, "context": context_blocks(app, chips, &attached)});
                 if let Some(id) = chat.thread {
                     params["thread"] = json!(id);
                 }
@@ -898,6 +993,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                         chat.thread = v["thread"].as_u64();
                         chat.running = true;
                         chat.input.clear();
+                        chat.attached.clear();
                         chat.hist_pos = None;
                         chat.finish_kind.clear();
                         chat.error = None;
@@ -978,7 +1074,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
             Action::Branch { turn, text } => {
                 let Some(from) = chat.thread else { continue };
-                let mut params = json!({"thread": from, "turn": turn, "context": context_blocks(app, chips)});
+                let mut params = json!({"thread": from, "turn": turn, "context": context_blocks(app, chips, &attached)});
                 if let Some(t) = &text {
                     params["text"] = json!(t);
                 }
@@ -986,6 +1082,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     Ok(v) => {
                         chat.thread = v["thread"].as_u64();
                         chat.running = true;
+                        chat.attached.clear();
                         chat.editing = None;
                         chat.hist_pos = None;
                         if text.is_some() {

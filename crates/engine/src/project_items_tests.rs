@@ -88,3 +88,100 @@ fn two_and_three_part_times_are_clock_times_and_four_parts_are_timecode() {
         assert!(t(bad.clone()).is_err(), "{bad}");
     }
 }
+
+// ------------------------------------------------------------------------------ attaching files (F16.1c)
+
+fn first_media(s: &Session, name: &str) -> u64 {
+    s.project.items.values().find(|i| i.name.contains(name)).map(|i| i.id.0).expect(name)
+}
+
+/// Every text part the model was sent in its first request, joined.
+fn sent(model: &edith_ai::scripted::ScriptedModel) -> String {
+    model
+        .requests()
+        .first()
+        .map(|r| {
+            r.messages
+                .iter()
+                .flat_map(|m| m.parts.iter())
+                .filter_map(|p| if let edith_ai::Part::Text { text, .. } = p { Some(text.clone()) } else { None })
+                .collect::<Vec<_>>()
+                .join("\n---\n")
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn an_attached_project_file_reaches_the_model_with_what_is_known_about_it() {
+    let mut s = demo();
+    let id = first_media(&s, "Ocean_Sunset");
+    let model = crate::assistant_tests::scripted(vec![crate::assistant_tests::text_reply("Noted.")]);
+    s.assistant.use_model(model.clone());
+    let r = s.execute("assistant.send", json!({"text": "what do you make of this clip?", "wait": true, "context": [{"kind": "item", "item": id}]})).unwrap();
+    assert_eq!(r["finish"]["kind"], "done", "{r}");
+    let text = sent(&model);
+    assert!(
+        text.contains("file: Ocean_Sunset") && text.contains(&format!("#{id} ")) && text.contains("rights:") && text.contains("Not measured yet"),
+        "{text}"
+    );
+    assert!(text.contains("what do you make of this clip?"));
+    // the person sees it listed among what was sent along
+    let v = s.execute("assistant.thread", json!({"thread": r["thread"]})).unwrap();
+    let attached = v["events"].as_array().unwrap().iter().find(|e| e["type"] == "user_message").unwrap()["attached"].clone();
+    assert!(attached.as_array().unwrap().iter().any(|a| a.as_str().is_some_and(|l| l.starts_with("file: Ocean_Sunset"))), "{attached}");
+    // measured, and with a transcript, it says so
+    s.execute("analysis.run", json!({"item": id, "samples": 2, "wait": true})).unwrap();
+    s.execute(
+        "transcript.set",
+        json!({"item": id, "transcript": {"language": "en", "words": [{"text": "Hello", "start": 0, "end": 1000}, {"text": "there.", "start": 2000, "end": 3000}]}}),
+    )
+    .unwrap();
+    let model = crate::assistant_tests::scripted(vec![crate::assistant_tests::text_reply("Ok.")]);
+    s.assistant.use_model(model.clone());
+    s.execute("assistant.send", json!({"text": "and now?", "wait": true, "context": [{"kind": "item", "item": id}]})).unwrap();
+    let text = sent(&model);
+    assert!(
+        text.contains("Measured:") && !text.contains("Not measured yet") && text.contains("Transcript: 2 words") && text.contains("Hello there."),
+        "{text}"
+    );
+}
+
+#[test]
+fn only_media_in_the_project_can_be_attached_and_never_too_many() {
+    let mut s = demo();
+    let id = first_media(&s, "Ocean_Sunset");
+    let seq = s.project.items.values().find(|i| matches!(i.kind, filmcraft_project::ItemKind::Sequence(_))).map(|i| i.id.0).unwrap();
+    s.assistant.use_model(crate::assistant_tests::scripted(vec![crate::assistant_tests::text_reply("x")]));
+    for (ctx, want) in [
+        (json!([{"kind": "item", "item": 999_999}]), "no file 999999"),
+        (json!([{"kind": "item", "item": seq}]), "not a file in the project"),
+        (json!([{"kind": "item"}]), "needs `item`"),
+        (json!([{"kind": "item", "item": "one"}]), "needs `item`"),
+        (json!([{"kind": "item", "item": -1}]), "needs `item`"),
+        (json!((0..7).map(|_| json!({"kind": "item", "item": id})).collect::<Vec<_>>()), "at most 6 project files"),
+    ] {
+        let e = s.execute("assistant.send", json!({"text": "look", "context": ctx})).unwrap_err().to_string();
+        assert!(e.contains(want), "{want}: {e}");
+    }
+    assert!(
+        s.assistant.threads.is_empty() || s.execute("assistant.threads", json!({})).unwrap()["threads"].as_array().unwrap().iter().all(|t| t["events"] == 0),
+        "a refused message leaves no conversation"
+    );
+}
+
+#[test]
+fn six_files_and_the_playhead_chips_travel_together() {
+    let mut s = demo();
+    let ids: Vec<u64> = s.project.items.values().filter(|i| matches!(i.kind, filmcraft_project::ItemKind::Media(_))).map(|i| i.id.0).take(6).collect();
+    assert_eq!(ids.len(), 6);
+    let model = crate::assistant_tests::scripted(vec![crate::assistant_tests::text_reply("ok")]);
+    s.assistant.use_model(model.clone());
+    let mut ctx: Vec<serde_json::Value> = ids.iter().map(|i| json!({"kind": "item", "item": i})).collect();
+    ctx.push(json!({"label": "playhead", "text": "The playhead is at 0:04."}));
+    s.execute("assistant.send", json!({"text": "compare these", "wait": true, "context": ctx})).unwrap();
+    let text = sent(&model);
+    for i in ids {
+        assert!(text.contains(&format!("#{i} ")), "{i} missing");
+    }
+    assert!(text.contains("The playhead is at 0:04."));
+}

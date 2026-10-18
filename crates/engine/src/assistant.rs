@@ -828,6 +828,10 @@ fn context_blocks(s: &Session, p: &Value, cmd: &str, can_see: bool) -> Result<Ve
     if arr.len() > 10 {
         return Err(bad(cmd, "at most 10 context blocks"));
     }
+    let attached = arr.iter().filter(|b| b.get("kind").and_then(Value::as_str) == Some("item")).count();
+    if attached > crate::project_items::MAX_ATTACHED {
+        return Err(bad(cmd, format!("at most {} project files can be attached to one message", crate::project_items::MAX_ATTACHED)));
+    }
     arr.iter()
         .map(|b| {
             if let Some(kind) = b.get("kind") {
@@ -838,7 +842,13 @@ fn context_blocks(s: &Session, p: &Value, cmd: &str, can_see: bool) -> Result<Ve
                     Some("frame") => assistant_tools::frame_block(s).map_err(|e| EngineError::Other(format!("could not attach the frame: {e}"))),
                     Some("transcript") => Ok(assistant_tools::transcript_block(s)),
                     Some("markers") => Ok(assistant_tools::markers_block(s)),
-                    _ => Err(bad(cmd, "a context `kind` must be frame, transcript or markers")),
+                    // a project file the person attached (fork roadmap F16.1c)
+                    Some("item") => b
+                        .get("item")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| bad(cmd, "an attached file needs `item`: the number of a media item in the project"))
+                        .and_then(|id| crate::project_items::item_block(s, id).map_err(|e| bad(cmd, e))),
+                    _ => Err(bad(cmd, "a context `kind` must be frame, transcript, markers or item")),
                 };
             }
             let label = b.get("label").and_then(Value::as_str).filter(|l| !l.is_empty() && l.chars().count() <= 40);
