@@ -611,7 +611,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Steps** (rewritten 2026-10-17; the first plan was a "proposals engine" with ghost clips and a replay system, replaced by this).
 - F14.1 **The version engine**: `version.create|list|peek|commit|discard|rename|rewind|run`, who made each step, one undo step on commit, one version at a time, and the refusals (opening, saving and exporting are refused while a version is open).
-- F14.2 **Diff**: what a version changes against main, in plain words (clips added, removed, moved, trimmed; effects; markers; the plan).
+- F14.2 ✅ (2026-10-18) **Diff**: `version.diff` says what a version changes against main in plain sentences, from two snapshots of the project: clips added, removed, moved, trimmed, retimed or switched on and off; effects added, removed or adjusted; sound changes; markers added, removed or changed; transitions and tracks; sequence and project settings; items added, removed or renamed in the project; the project notes; and the plan (by beat: "Changes the plan: 2 beats: Cold open, The turn"). Names are cut to three with a count; a sequence both snapshots share is not looked into, so it is quick; the result is the same while looking at the original; a change and its undo is an empty diff.
 - F14.3 **The interface**: a banner above the timeline with the version's title, how many steps, **See original**, **Commit** and **Discard**, a step list you can rewind from and the plain-words summary, and **Edit ▸ New Version**.
 - F14.4 (optional, decided after F14.3) **Versions saved with the project**, so one survives closing the app.
 

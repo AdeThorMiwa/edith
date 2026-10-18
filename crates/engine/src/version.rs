@@ -11,6 +11,7 @@
 //! | `version.create {title?, by?}` | start a version of the edit as it is now and check out to it; one at a time |
 //! | `version.list` | whether one is open, its title, who started it, whether you are looking at the original, and its steps (each with who made it) |
 //! | `version.peek {on?}` | look at the original (main) read-only, and back; edits are refused while you look |
+//! | `version.diff` | what the version changes against main, in plain words: clips added, removed, moved, trimmed, effects, markers, the plan… |
 //! | `version.commit` | put the whole version into main as **one undo step** (`Version: <title>`), then work on main again |
 //! | `version.discard` | throw the version away and work on main again, exactly as it was |
 //! | `version.rename {title}` | rename the open version |
@@ -107,6 +108,13 @@ impl Versions {
 
     pub fn title(&self) -> Option<&str> {
         self.open.as_ref().map(|o| o.title.as_str())
+    }
+
+    /// Main (where the version started) and the version as it is now, while one is open.
+    pub fn both(&self, shown: &Arc<Project>) -> Option<(Arc<Project>, Arc<Project>)> {
+        let o = self.open.as_ref()?;
+        let version = o.peeking.as_ref().map_or_else(|| shown.clone(), |p| p.project.clone());
+        Some((o.main.project.clone(), version))
     }
 }
 
@@ -331,6 +339,12 @@ fn peek_command(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(describe(s))
 }
 
+fn diff_command(s: &mut Session, _p: &Value) -> Result<Value> {
+    let (main, version) = s.versions.both(&s.project).ok_or_else(|| bad("version.diff", "no version is open"))?;
+    let d = crate::version_diff::diff(&main, &version);
+    Ok(json!({"empty": d.is_empty(), "lines": d.lines, "changes": d.changes}))
+}
+
 fn commit_command(s: &mut Session, _p: &Value) -> Result<Value> {
     s.version_commit()
 }
@@ -400,6 +414,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec("version.create", "New Version", r#"{"title":str?,"by":"you|assistant"?}"#, create_command, false),
         spec("version.list", "Version", "{}", list_command, false),
         spec("version.peek", "See Original", r#"{"on":bool?}"#, peek_command, false),
+        spec("version.diff", "What the Version Changes", "{}", diff_command, false),
         spec("version.commit", "Commit Version", "{}", commit_command, false),
         spec("version.discard", "Discard Version", "{}", discard_command, false),
         spec("version.rename", "Rename Version", r#"{"title":str}"#, rename_command, false),

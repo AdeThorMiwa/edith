@@ -73,6 +73,7 @@ pub mod sync;
 pub mod transcript;
 pub mod trim;
 pub mod version;
+pub mod version_diff;
 pub mod voiceover;
 
 use std::sync::Arc;
@@ -1408,6 +1409,8 @@ mod track_params_tests;
 mod transcript_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod version_diff_tests;
 #[cfg(test)]
 mod version_tests;
 #[cfg(test)]
