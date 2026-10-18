@@ -45,7 +45,7 @@ const ALLOWED: [&str; 14] = [
     "mixer.",
 ];
 /// More families, kept apart because each needs a word of care.
-const ALLOWED_MORE: [&str; 3] = ["masks.", "multicam.", "project."];
+const ALLOWED_MORE: [&str; 4] = ["masks.", "multicam.", "project.", "motion."];
 /// Commands inside an allowed family that are still not the assistant's to run.
 const NEVER: [&str; 5] = [
     // its own undo steps have a tool that never reaches the person's

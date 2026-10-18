@@ -49,11 +49,13 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::soundmap::tools());
     // Edit mode: the tools that work inside a version (fork; roadmap F15)
     all.extend(crate::assistant_edit::tools());
+    // the media in the project, with where each came from (fork; roadmap F16 spike)
+    all.extend(crate::project_items::tools());
     all
 }
 
 fn base_tools() -> Vec<ToolDef> {
-    let time = "A time: seconds (12.5) or timecode (\"00:00:12:03\") in the sequence's rate.";
+    let time = "A time: seconds (12.5), a clock time (\"1:25\" is one minute 25 seconds), or a timecode with frames (\"00:00:12:03\") in the sequence's rate.";
     vec![
         def(
             "project_overview",
@@ -81,7 +83,7 @@ fn base_tools() -> Vec<ToolDef> {
             "frame_view",
             "A picture of the edit as it looks at one moment (the Program monitor), for when seeing is better than reading timecodes: framing, colour, contrast, what is on screen. Costs more than text, so look at the moments that matter. Not available to models that cannot see pictures.",
             json!({
-                "time": {"type": "string", "description": "The moment: seconds or timecode. Default: the playhead."},
+                "time": {"type": "string", "description": "The moment: seconds (8), a clock time (\"0:08\") or a timecode with frames (\"00:00:08:00\"). Default: the playhead."},
                 "size": {"type": "integer", "description": "Longest side in pixels, 256 to 1568. Default 768."},
             }),
             frame_view,
@@ -112,7 +114,9 @@ fn secs(t: Tick) -> f64 {
     t.0 as f64 / TICKS_PER_SECOND as f64
 }
 
-/// A time argument: seconds as a number or string, or `HH:MM:SS:FF`, `MM:SS:FF`, `SS:FF`.
+/// A time argument: seconds as a number or string (`12.5`), a clock time (`1:25`, `0:01:25`: minutes and
+/// seconds, or hours, minutes and seconds), or a timecode with frames (`00:00:12:03`). Two and three
+/// parts are a clock time, as a person writes it: the first version read `0:00:08` as eight frames.
 pub(crate) fn parse_time(v: &Value, q: &Sequence, what: &str) -> Result<Tick, String> {
     let seconds = match v {
         Value::Number(n) => n.as_f64().ok_or_else(|| format!("{what} is not a usable number"))?,
@@ -124,9 +128,9 @@ pub(crate) fn parse_time(v: &Value, q: &Sequence, what: &str) -> Result<Tick, St
             let nums: Vec<f64> = parts.iter().map(|p| p.parse::<f64>().unwrap_or(0.0)).collect();
             let fps = q.settings.frame_rate.as_f64().max(1.0);
             let (h, m, s2, f) = match nums.as_slice() {
-                [f] => (0.0, 0.0, *f, 0.0),
-                [s, f] => (0.0, 0.0, *s, *f),
-                [m, s, f] => (0.0, *m, *s, *f),
+                [s] => (0.0, 0.0, *s, 0.0),
+                [m, s] => (0.0, *m, *s, 0.0),
+                [h, m, s] => (*h, *m, *s, 0.0),
                 [h, m, s, f] => (*h, *m, *s, *f),
                 _ => (0.0, 0.0, 0.0, 0.0),
             };

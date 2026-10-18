@@ -70,6 +70,28 @@ fn message_json(m: &Message) -> Option<Value> {
     Some(json!({"role": role, "content": content}))
 }
 
+/// Marks where the API may cache the conversation so far, so a call that adds a few blocks to the
+/// previous one pays full price only for what is new (a cached read costs a tenth of an input token).
+/// Two marks: the last block of the newest message, and one three messages earlier, so a step that adds
+/// many blocks (several tool calls at once) still finds the previous call's cache. Thinking blocks
+/// cannot carry a mark, so the nearest block before one is used.
+fn mark_cache_points(messages: &mut [Value]) {
+    let n = messages.len();
+    let mut from = vec![n.saturating_sub(1)];
+    if n >= 4 {
+        from.push(n - 3);
+    }
+    for i in from {
+        let Some(blocks) = messages.get_mut(i).and_then(|m| m.get_mut("content")).and_then(Value::as_array_mut) else { continue };
+        let Some(block) = blocks.iter_mut().rev().find(|b| !matches!(b.get("type").and_then(Value::as_str), Some("thinking" | "redacted_thinking"))) else {
+            continue;
+        };
+        if let Some(o) = block.as_object_mut() {
+            o.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        }
+    }
+}
+
 /// The JSON body of a streaming `POST /v1/messages` request.
 ///
 /// Notes on choices: the tool list and system prompt come first so a `cache` marker on the last
@@ -80,10 +102,11 @@ pub fn build_body(req: &Request) -> Result<Value, LlmError> {
     if req.model.trim().is_empty() {
         return Err(LlmError::BadRequest("no model chosen".to_string()));
     }
-    let messages: Vec<Value> = req.messages.iter().filter_map(message_json).collect();
+    let mut messages: Vec<Value> = req.messages.iter().filter_map(message_json).collect();
     if messages.is_empty() {
         return Err(LlmError::BadRequest("there is nothing to send".to_string()));
     }
+    mark_cache_points(&mut messages);
     let mut body = json!({
         "model": req.model,
         "max_tokens": req.max_output_tokens.max(1),
@@ -147,7 +170,10 @@ mod tests {
         assert!(b["system"][0].get("cache_control").is_none());
         assert_eq!(b["tools"][0]["name"], "project_inspect");
         assert!(b["tools"][0].get("eager_input_streaming").is_none());
-        assert_eq!(b["messages"][0], json!({"role": "user", "content": [{"type": "text", "text": "Why does the cut at 00:42 feel abrupt?"}]}));
+        assert_eq!(
+            b["messages"][0],
+            json!({"role": "user", "content": [{"type": "text", "text": "Why does the cut at 00:42 feel abrupt?", "cache_control": {"type": "ephemeral"}}]})
+        );
         assert!(b.get("thinking").is_none() && b.get("output_config").is_none());
     }
 
@@ -269,5 +295,68 @@ mod tests {
         assert!(c[1]["text"].as_str().unwrap().contains("too large"));
         assert_eq!(c[2]["type"], "image", "an acceptable picture still goes");
         assert!(b.to_string().len() < 2000, "the oversize picture is not in the request");
+    }
+
+    fn marks(b: &Value) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for (i, m) in b["messages"].as_array().unwrap().iter().enumerate() {
+            for (j, c) in m["content"].as_array().unwrap().iter().enumerate() {
+                if c.get("cache_control").is_some() {
+                    out.push((i, j));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_conversation_is_marked_for_caching_at_its_newest_block_and_three_messages_back() {
+        let mut r = req();
+        // a tool loop: user, assistant (two calls), user (two results), assistant, user (result), assistant, user (result)
+        for k in 0..3 {
+            r.messages.push(Message {
+                role: Role::Assistant,
+                parts: vec![
+                    Part::Text { text: "Looking.".into() },
+                    Part::ToolUse { id: format!("a{k}"), name: "project_inspect".into(), input: json!({}), input_error: None },
+                    Part::ToolUse { id: format!("b{k}"), name: "project_inspect".into(), input: json!({}), input_error: None },
+                ],
+            });
+            r.messages.push(Message::tool_results(vec![
+                Part::ToolResult { tool_use_id: format!("a{k}"), content: "one".into(), is_error: false, images: Vec::new() },
+                Part::ToolResult { tool_use_id: format!("b{k}"), content: "two".into(), is_error: false, images: Vec::new() },
+            ]));
+        }
+        let b = build_body(&r).unwrap();
+        let n = b["messages"].as_array().unwrap().len();
+        assert_eq!(n, 7);
+        // the last block of the newest message, and of the message three before it; no more (the API allows four marks, two are the system's)
+        assert_eq!(marks(&b), vec![(n - 3, 1), (n - 1, 1)], "{:?}", marks(&b));
+        assert_eq!(b["messages"][n - 1]["content"][1]["type"], "tool_result");
+    }
+
+    #[test]
+    fn a_short_conversation_gets_one_mark_and_thinking_blocks_never_carry_one() {
+        let b = build_body(&req()).unwrap();
+        assert_eq!(marks(&b), vec![(0, 0)]);
+        // an assistant message that ends in a thinking block: the nearest block before it is marked instead
+        let mut r = req();
+        r.messages.push(Message {
+            role: Role::Assistant,
+            parts: vec![
+                Part::Text { text: "Hm.".into() },
+                Part::Opaque { provider: "anthropic".into(), value: json!({"type": "thinking", "thinking": "x", "signature": "S"}) },
+            ],
+        });
+        let b = build_body(&r).unwrap();
+        assert_eq!(marks(&b), vec![(1, 0)]);
+        assert!(b["messages"][1]["content"][1].get("cache_control").is_none());
+        // a request whose newest message has no usable block is left alone (never a panic)
+        let mut r = req();
+        r.messages.push(Message {
+            role: Role::Assistant,
+            parts: vec![Part::Opaque { provider: "anthropic".into(), value: json!({"type": "thinking", "thinking": "x", "signature": "S"}) }],
+        });
+        assert!(build_body(&r).is_ok());
     }
 }

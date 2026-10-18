@@ -50,6 +50,7 @@ pub mod perf;
 pub mod planner;
 pub mod presets;
 pub mod previews;
+mod project_items;
 pub mod project_manager;
 pub mod project_panel;
 pub mod project_tools;
@@ -1368,6 +1369,8 @@ mod planner_tests;
 mod presets_tests;
 #[cfg(test)]
 mod previews_tests;
+#[cfg(test)]
+mod project_items_tests;
 #[cfg(test)]
 mod project_manager_tests;
 #[cfg(test)]
