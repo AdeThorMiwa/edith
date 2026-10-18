@@ -4050,3 +4050,31 @@
 	Note	メモ
 	Sound Map	サウンドマップ
 	Spotting Sheet	スポッティングシート
+	you	あなた
+	assistant	アシスタント
+	VERSION	バージョン
+	Viewing the original: read-only	元の編集を表示中：読み取り専用
+	Name of this version	このバージョンの名前
+	no changes yet	変更はまだありません
+	1 step	1 ステップ
+	{n} steps	{n} ステップ
+	{n} steps ({you} by you, {a} by the assistant)	{n} ステップ（あなた {you}、アシスタント {a}）
+	Really discard?	本当に破棄しますか？
+	Commit	コミット
+	Changes ▴	変更 ▴
+	Changes ▾	変更 ▾
+	Back to the version	バージョンに戻る
+	See original	元を見る
+	Committed “{title}” as one undo step.	「{title}」を1回の取り消しとしてコミットしました。
+	The version changed nothing, so there is nothing to commit.	このバージョンには変更がないため、コミットするものはありません。
+	Discarded the version. Your edit is as it was.	バージョンを破棄しました。編集は元のままです。
+	What this version changes	このバージョンの変更点
+	Nothing yet: it is the same as the original.	まだありません。元と同じです。
+	Steps, oldest first	ステップ（古い順）
+	No steps yet.	ステップはまだありません。
+	Rewind to here	ここまで戻す
+	Takes back the steps after this one.	これより後のステップを取り消します。
+	New Version	新しいバージョン
+	Commit Version	バージョンをコミット
+	Discard Version	バージョンを破棄
+	See Original	元を見る

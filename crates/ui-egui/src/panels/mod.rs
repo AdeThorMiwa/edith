@@ -144,6 +144,7 @@ pub mod source_drag;
 pub mod source_range;
 pub mod spotting_sheet;
 pub mod storyboard;
+pub mod version_banner;
 
 #[derive(Clone, Debug)]
 enum DragPayload {

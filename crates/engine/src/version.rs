@@ -149,7 +149,42 @@ fn fresh_history() -> History {
     History { limit: MAX_STEPS, ..Default::default() }
 }
 
+/// One step of a version: what it was called and who made it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Step {
+    pub label: String,
+    pub by: Actor,
+}
+
+/// What the interface shows about the open version.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Info {
+    pub title: String,
+    pub started_by: Actor,
+    /// Looking at the original (main), read-only.
+    pub peeking: bool,
+    pub steps: Vec<Step>,
+}
+
 impl Session {
+    /// The open version, if there is one, for the banner. Reads only; cheap.
+    pub fn version_info(&self) -> Option<Info> {
+        let open = self.versions.open.as_ref()?;
+        let history = open.peeking.as_ref().map_or(&self.history, |p| &p.history);
+        let steps = history
+            .undo
+            .iter()
+            .map(|(label, snapshot)| Step { label: label.clone(), by: open.who.get(&(Arc::as_ptr(snapshot) as usize)).copied().unwrap_or_default() })
+            .collect();
+        Some(Info { title: open.title.clone(), started_by: open.started_by, peeking: open.peeking.is_some(), steps })
+    }
+
+    /// What the open version changes against main, in plain words.
+    pub fn version_changes(&self) -> Option<crate::version_diff::Diff> {
+        let (main, version) = self.versions.both(&self.project)?;
+        Some(crate::version_diff::diff(&main, &version))
+    }
+
     /// Why `id` may not run right now because of an open version (`None` when it may).
     pub(crate) fn version_refuses(&self, id: &str) -> Option<String> {
         let open = self.versions.open.as_ref()?;
@@ -300,18 +335,14 @@ fn actor_param(p: &Value, cmd: &str, default: Actor) -> Result<Actor> {
 }
 
 fn describe(s: &Session) -> Value {
-    let Some(open) = s.versions.open.as_ref() else { return json!({"open": false}) };
-    // while looking at the original the version's own history is parked
-    let history = open.peeking.as_ref().map_or(&s.history, |p| &p.history);
-    let steps: Vec<Value> = history
-        .undo
-        .iter()
-        .map(|(label, snapshot)| json!({"label": label, "by": open.who.get(&(Arc::as_ptr(snapshot) as usize)).copied().unwrap_or_default().id()}))
-        .collect();
+    let Some(info) = s.version_info() else { return json!({"open": false}) };
+    let (id, started_unix) = s.versions.open.as_ref().map_or((0, 0), |o| (o.id, o.started_unix));
+    let history = s.versions.open.as_ref().and_then(|o| o.peeking.as_ref()).map_or(&s.history, |p| &p.history);
     json!({
-        "open": true, "id": open.id, "title": open.title, "startedBy": open.started_by.id(), "startedUnix": open.started_unix,
-        "peeking": open.peeking.is_some(), "steps": steps, "stepCount": history.undo.len(),
-        "canUndo": history.can_undo(), "canRedo": history.can_redo(),
+        "open": true, "id": id, "title": info.title, "startedBy": info.started_by.id(), "startedUnix": started_unix,
+        "peeking": info.peeking,
+        "steps": info.steps.iter().map(|x| json!({"label": x.label, "by": x.by.id()})).collect::<Vec<_>>(),
+        "stepCount": info.steps.len(), "canUndo": history.can_undo(), "canRedo": history.can_redo(),
     })
 }
 
@@ -399,6 +430,19 @@ fn run_command(s: &mut Session, p: &Value) -> Result<Value> {
     r?
 }
 
+/// For the menu items that only make sense with a version open.
+fn when_open(s: &Session) -> std::result::Result<(), String> {
+    if s.versions.is_open() { Ok(()) } else { Err("no version is open".to_string()) }
+}
+
+/// For starting one: only when none is open.
+fn when_closed(s: &Session) -> std::result::Result<(), String> {
+    match s.versions.title() {
+        Some(t) => Err(format!("“{t}” is already open as a version")),
+        None => Ok(()),
+    }
+}
+
 pub fn commands() -> Vec<CommandSpec> {
     let spec = |id, label, params, run: fn(&mut Session, &Value) -> Result<Value>, journal| CommandSpec {
         id,
@@ -411,12 +455,48 @@ pub fn commands() -> Vec<CommandSpec> {
         journal,
     };
     vec![
-        spec("version.create", "New Version", r#"{"title":str?,"by":"you|assistant"?}"#, create_command, false),
+        CommandSpec {
+            id: "version.create",
+            label: "New Version",
+            menu: &["Edit"],
+            shortcut: None,
+            params: r#"{"title":str?,"by":"you|assistant"?}"#,
+            enabled: when_closed,
+            run: create_command,
+            journal: false,
+        },
         spec("version.list", "Version", "{}", list_command, false),
-        spec("version.peek", "See Original", r#"{"on":bool?}"#, peek_command, false),
+        CommandSpec {
+            id: "version.peek",
+            label: "See Original",
+            menu: &["Edit"],
+            shortcut: None,
+            params: r#"{"on":bool?}"#,
+            enabled: when_open,
+            run: peek_command,
+            journal: false,
+        },
         spec("version.diff", "What the Version Changes", "{}", diff_command, false),
-        spec("version.commit", "Commit Version", "{}", commit_command, false),
-        spec("version.discard", "Discard Version", "{}", discard_command, false),
+        CommandSpec {
+            id: "version.commit",
+            label: "Commit Version",
+            menu: &["Edit"],
+            shortcut: None,
+            params: "{}",
+            enabled: when_open,
+            run: commit_command,
+            journal: false,
+        },
+        CommandSpec {
+            id: "version.discard",
+            label: "Discard Version",
+            menu: &["Edit"],
+            shortcut: None,
+            params: "{}",
+            enabled: when_open,
+            run: discard_command,
+            journal: false,
+        },
         spec("version.rename", "Rename Version", r#"{"title":str}"#, rename_command, false),
         spec("version.rewind", "Rewind Version", r#"{"steps":n}"#, rewind_command, false),
         spec("version.run", "Run in Version", r#"{"command":str,"params":object?,"by":"you|assistant"?}"#, run_command, false),

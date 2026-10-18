@@ -4026,3 +4026,31 @@
 	Note	备注
 	Sound Map	声音地图
 	Spotting Sheet	声音设计表
+	you	你
+	assistant	助手
+	VERSION	版本
+	Viewing the original: read-only	正在查看原稿：只读
+	Name of this version	此版本的名称
+	no changes yet	尚无更改
+	1 step	1 步
+	{n} steps	{n} 步
+	{n} steps ({you} by you, {a} by the assistant)	{n} 步（你 {you} 步，助手 {a} 步）
+	Really discard?	确定丢弃？
+	Commit	提交
+	Changes ▴	更改 ▴
+	Changes ▾	更改 ▾
+	Back to the version	返回版本
+	See original	查看原稿
+	Committed “{title}” as one undo step.	已将“{title}”作为一步撤销提交。
+	The version changed nothing, so there is nothing to commit.	此版本没有任何更改，无需提交。
+	Discarded the version. Your edit is as it was.	已丢弃此版本。你的编辑保持原样。
+	What this version changes	此版本的更改
+	Nothing yet: it is the same as the original.	暂无：与原稿相同。
+	Steps, oldest first	步骤（从旧到新）
+	No steps yet.	还没有步骤。
+	Rewind to here	回退到这里
+	Takes back the steps after this one.	撤销此步之后的步骤。
+	New Version	新建版本
+	Commit Version	提交版本
+	Discard Version	丢弃版本
+	See Original	查看原稿

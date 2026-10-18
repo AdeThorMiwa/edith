@@ -4048,3 +4048,31 @@
 	Note	Nota
 	Sound Map	Mapa de sonido
 	Spotting Sheet	Hoja de spotting
+	you	tú
+	assistant	asistente
+	VERSION	VERSIÓN
+	Viewing the original: read-only	Viendo el original: solo lectura
+	Name of this version	Nombre de esta versión
+	no changes yet	aún sin cambios
+	1 step	1 paso
+	{n} steps	{n} pasos
+	{n} steps ({you} by you, {a} by the assistant)	{n} pasos ({you} tuyos, {a} del asistente)
+	Really discard?	¿Descartar de verdad?
+	Commit	Confirmar
+	Changes ▴	Cambios ▴
+	Changes ▾	Cambios ▾
+	Back to the version	Volver a la versión
+	See original	Ver el original
+	Committed “{title}” as one undo step.	«{title}» confirmada como un solo paso de deshacer.
+	The version changed nothing, so there is nothing to commit.	La versión no cambió nada, así que no hay nada que confirmar.
+	Discarded the version. Your edit is as it was.	Versión descartada. Tu edición queda como estaba.
+	What this version changes	Qué cambia esta versión
+	Nothing yet: it is the same as the original.	Aún nada: es igual que el original.
+	Steps, oldest first	Pasos, del más antiguo al más reciente
+	No steps yet.	Aún no hay pasos.
+	Rewind to here	Volver hasta aquí
+	Takes back the steps after this one.	Deshace los pasos posteriores a este.
+	New Version	Nueva versión
+	Commit Version	Confirmar versión
+	Discard Version	Descartar versión
+	See Original	Ver el original
