@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn the_builtin_pack_has_a_version_and_the_core_sections() {
         let p = PromptPack::builtin();
-        assert_eq!(p.version, "15");
+        assert_eq!(p.version, "16");
         let names: Vec<_> = p.sections.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["identity", "honesty", "working", "craft notes", "tool results"]);
         let all = p.system_parts(Profile::ReadOnly)[0].text.clone();
@@ -170,10 +170,10 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_pack_has_four_commands_and_the_system_prompt_leaves_them_out() {
+    fn the_builtin_pack_has_five_commands_and_the_system_prompt_leaves_them_out() {
         let p = PromptPack::builtin();
         let names: Vec<&str> = p.commands.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["explain-cut", "pacing", "summarize", "glossary"]);
+        assert_eq!(names, ["explain-cut", "pacing", "summarize", "glossary", "workflow"]);
         assert!(p.commands.iter().all(|c| !c.description.is_empty() && !c.template.is_empty()));
         let system = &p.system_parts(Profile::ReadOnly)[0].text;
         assert!(!system.contains("Explain the cut nearest the playhead"), "commands are not part of the system prompt");

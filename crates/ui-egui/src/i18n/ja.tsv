@@ -4111,3 +4111,15 @@
 	Place a Cut List	カットリストを配置
 	Check the Edit	編集をチェック
 	Lead or Trail a Clip's Sound	クリップの音を先行・後追いさせる
+	Clear Workflow	ワークフローを解除
+	Stop following this workflow	このワークフローの追従をやめる
+	WORKFLOW	ワークフロー
+	Workflow	ワークフロー
+	Workflows	ワークフロー
+	Workflow State	ワークフローの状態
+	Record Workflow Progress	ワークフローの進捗を記録
+	Stage {n} of {m}: {name}	ステージ {n}/{m}: {name}
+	done	完了
+	stuck	行き詰まり
+	waiting for you	あなたの返事待ち
+	working	作業中

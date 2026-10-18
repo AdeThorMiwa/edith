@@ -67,6 +67,12 @@ struct Chat {
     /// the person), and when it was read (fork roadmap F16.1).
     cards: Value,
     cards_at: f64,
+    /// Where the project is in a workflow (`workflow.state`) and the workflows there are (`workflow.list`), with when
+    /// each was read (fork roadmap F16.4).
+    workflow: Value,
+    workflow_at: f64,
+    workflows: Value,
+    workflows_at: f64,
     /// Project files attached to the message being written (media items), sent with it (fork roadmap F16.1c).
     attached: Vec<u64>,
     /// What was typed to narrow the list of files in the attach menu.
@@ -100,6 +106,10 @@ impl Chat {
             hover_entry: None,
             cards: Value::Null,
             cards_at: f64::NEG_INFINITY,
+            workflow: Value::Null,
+            workflow_at: f64::NEG_INFINITY,
+            workflows: Value::Null,
+            workflows_at: f64::NEG_INFINITY,
             attached: Vec::new(),
             attach_filter: String::new(),
         }
@@ -162,6 +172,8 @@ enum Action {
     },
     /// Send the cards' answers as one message (`assistant.answerCards`).
     CardsSend,
+    /// Forget which workflow the project is in (`workflow.clear`).
+    ClearWorkflow,
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -190,6 +202,19 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
         chat.models_at = now;
         if let Ok(v) = app.session.execute("assistant.models", json!({})) {
             chat.models = Some(v);
+        }
+    }
+    // where the project is in a workflow, and the workflows there are: cheap, and neither can fail
+    if now - chat.workflow_at >= 1.0 {
+        chat.workflow_at = now;
+        if let Ok(v) = app.session.execute("workflow.state", json!({})) {
+            chat.workflow = v;
+        }
+    }
+    if now - chat.workflows_at >= 10.0 {
+        chat.workflows_at = now;
+        if let Ok(v) = app.session.execute("workflow.list", json!({})) {
+            chat.workflows = v;
         }
     }
     let Some(thread) = chat.thread else { return };
@@ -502,6 +527,42 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let r = ui.label(RichText::new(&chat.usage_text).size(11.0).color(t.text_faint));
         elems.push(("assistant.cost".into(), r, chat.usage_text.clone()));
     }
+    // the workflow the project is in, and how far: one line, with a way to stop following it
+    if chat.workflow["active"] == true && chat.workflow["known"] == true {
+        let w = &chat.workflow;
+        let name = w["name"].as_str().unwrap_or("").replace('-', " ");
+        let stage = tlf!(
+            "Stage {n} of {m}: {name}",
+            n = w["stage"].as_u64().unwrap_or(0),
+            m = w["stages"].as_u64().unwrap_or(0),
+            name = w["stageName"].as_str().unwrap_or("")
+        );
+        let status = match w["status"].as_str().unwrap_or("working") {
+            "waiting" => tl!("waiting for you"),
+            "done" => tl!("done"),
+            "blocked" => tl!("stuck"),
+            _ => tl!("working"),
+        };
+        let text = format!("{name} · {stage} · {status}");
+        // the tag, the name and the cross on one line; where it is, and the note, under them
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tl!("WORKFLOW")).size(10.5).strong().color(t.accent));
+            let r = ui.add(egui::Label::new(RichText::new(&name).size(12.0).color(t.text)).truncate());
+            elems.push(("assistant.workflow".into(), r, text.clone()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let x = ui.small_button("×").on_hover_text(tl!("Stop following this workflow"));
+                elems.push(("assistant.workflow.clear".into(), x.clone(), "Stop following this workflow".into()));
+                if x.clicked() {
+                    actions.push(Action::ClearWorkflow);
+                }
+            });
+        });
+        ui.add(egui::Label::new(RichText::new(format!("{stage} · {status}")).size(11.5).color(t.text_dim)).wrap());
+        if let Some(note) = w["note"].as_str().filter(|n| !n.is_empty()) {
+            ui.add(egui::Label::new(RichText::new(note).size(11.0).color(t.text_faint)).wrap());
+        }
+        ui.add_space(4.0);
+    }
     // notes from the engine: a damaged settings file, conversations that could not be restored
     for key in ["settingsNote", "restoreNote"] {
         if let Some(note) = chat.status.as_ref().and_then(|st| st[key].as_str()) {
@@ -557,6 +618,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 elems.push((format!("assistant.starter.{n}"), r.clone(), q.to_string()));
                 if r.clicked() {
                     actions.push(Action::Send(q.to_string()));
+                }
+            }
+            // workflows: guidance for a bigger job, put in the box for the person to read and send
+            let flows: Vec<Value> = chat.workflows["workflows"].as_array().cloned().unwrap_or_default();
+            if !flows.is_empty() {
+                ui.add_space(8.0);
+                ui.label(RichText::new(tl!("Workflows")).size(11.0).color(t.text_faint));
+                for w in flows.iter().take(8) {
+                    let name = w["name"].as_str().unwrap_or("");
+                    let shown = name.replace('-', " ");
+                    let shown = shown.chars().next().map_or(String::new(), |c| c.to_uppercase().collect::<String>() + &shown[c.len_utf8()..]);
+                    let r = super::assistant_widgets::list_button(ui, &shown, &t).on_hover_text(w["description"].as_str().unwrap_or(""));
+                    elems.push((format!("assistant.workflow.start.{name}"), r.clone(), shown));
+                    if r.clicked() {
+                        actions.push(Action::SetInput(format!("Let's use the “{name}” workflow.")));
+                    }
                 }
             }
         }
@@ -1057,6 +1134,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     Err(e) => chat.error = Some(e.to_string()),
                 }
                 chat.cards_at = f64::NEG_INFINITY;
+            }
+            Action::ClearWorkflow => {
+                if let Err(e) = app.session.execute("workflow.clear", json!({})) {
+                    chat.error = Some(e.to_string());
+                }
+                chat.workflow_at = f64::NEG_INFINITY;
             }
             Action::CardsSend => {
                 let Some(id) = chat.thread else { continue };

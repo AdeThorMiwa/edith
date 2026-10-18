@@ -58,6 +58,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::assistant_cards::tools());
     // is the cut done? (fork; roadmap F16.3)
     all.extend(crate::edit_checks::tools());
+    // guidance for a bigger job, and where the project is in it (fork; roadmap F16.4)
+    all.extend(crate::workflows::tools());
     all
 }
 

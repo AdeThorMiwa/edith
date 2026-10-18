@@ -132,6 +132,16 @@ fn result_text(v: &Value) -> String {
 }
 
 fn status_text(s: &Session) -> String {
+    let mut t = status_core(s);
+    if let Some(line) = crate::workflows::context_line(s) {
+        t.push('\n');
+        t.push_str(&line);
+        t.push('\n');
+    }
+    t
+}
+
+fn status_core(s: &Session) -> String {
     let Some(info) = s.version_info() else {
         return "No version is open. Call begin_version to open one before changing anything.".to_string();
     };
@@ -312,7 +322,7 @@ pub(crate) fn tools() -> Vec<ToolDef> {
 
 /// Answers the tools that change the edit, on the session thread; `None` for any other tool.
 pub(crate) fn run_edit(s: &mut Session, name: &str, input: &Value) -> Option<ToolOutput> {
-    if !matches!(name, "begin_version" | "edit" | "undo_steps" | "redo_step") {
+    if !matches!(name, "begin_version" | "edit" | "undo_steps" | "redo_step" | "workflow_progress") {
         return None;
     }
     // the agent offers these only in Edit mode; the engine asks again
@@ -323,6 +333,7 @@ pub(crate) fn run_edit(s: &mut Session, name: &str, input: &Value) -> Option<Too
     let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match name {
         "begin_version" => begin(s, &input),
         "edit" => edit(s, &input),
+        "workflow_progress" => crate::workflows::progress_tool(s, &input),
         "undo_steps" => undo(s, &input),
         _ => redo(s),
     }));

@@ -211,9 +211,10 @@ fn tools_refuse_hostile_arguments_with_an_error_not_a_panic() {
 
 #[test]
 fn every_tool_is_read_only_and_the_engine_refuses_anything_else() {
-    // the only tools that change the project are the four of Edit mode, and the engine refuses them outside it
+    // the only tools that change the project are those of Edit mode (the four that edit, and the one that records a
+    // workflow's progress), and the engine refuses them outside it
     let editing: Vec<String> = crate::assistant_tools::tools().iter().filter(|d| !d.read_only).map(|d| d.spec.name.clone()).collect();
-    assert_eq!(editing, ["begin_version", "edit", "undo_steps", "redo_step"]);
+    assert_eq!(editing, ["begin_version", "edit", "undo_steps", "redo_step", "workflow_progress"]);
     let s = demo();
     for name in &editing {
         assert!(run_tool(&s, name, json!({})).is_error, "{name}");
@@ -322,8 +323,8 @@ fn context_blocks_are_sent_in_the_user_message() {
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
     assert_eq!(
         req.tools.len(),
-        30,
-        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, the two sound tools, the three that read a version, the plan and the commands, the project's media, the narration's word times, the beats of a score, where nothing sounds, and the three for talking to the person (a question, a download request, a media search), and the checks that say whether a cut is done"
+        32,
+        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, the two sound tools, the three that read a version, the plan and the commands, the project's media, the narration's word times, the beats of a score, where nothing sounds, and the three for talking to the person (a question, a download request, a media search), the checks that say whether a cut is done, and the three for workflows (list, load, progress)"
     );
     assert_eq!(req.model, "claude-haiku-5-5");
 }
@@ -509,7 +510,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "15");
+    assert_eq!(trace.meta.prompt_version, "16");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));
@@ -607,7 +608,8 @@ fn slash_commands_are_listed_and_the_model_gets_the_expansion_while_the_person_s
     let mut s = demo();
     let list = s.execute("assistant.commands", json!({})).unwrap();
     let names: Vec<&str> = list["commands"].as_array().unwrap().iter().filter_map(|c| c["name"].as_str()).collect();
-    assert_eq!(names, ["explain-cut", "pacing", "summarize", "glossary"]);
+    assert_eq!(names, ["explain-cut", "pacing", "summarize", "glossary", "workflow"]);
+    assert_eq!(list["commands"][4]["takesText"], true);
     assert_eq!(list["commands"][3]["takesText"], true);
     assert_eq!(list["commands"][1]["takesText"], false);
     let model = scripted(vec![text_reply("The pacing is steady."), text_reply("A J-cut is...")]);
@@ -880,7 +882,7 @@ fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool(
     s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "look_see"));
-    assert_eq!(model.requests()[0].tools.len(), 28, "every tool but the two that need to see pictures");
+    assert_eq!(model.requests()[0].tools.len(), 30, "every tool but the two that need to see pictures");
     // and the engine would refuse to run it anyway if asked
     let out = s.run_assistant_tool("frame_view", &json!({}));
     assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");

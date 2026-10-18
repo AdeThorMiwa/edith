@@ -83,6 +83,7 @@ pub mod trim;
 pub mod version;
 pub mod version_diff;
 pub mod voiceover;
+mod workflows;
 
 use std::sync::Arc;
 
@@ -1449,6 +1450,8 @@ mod version_tests;
 mod vfx_tests;
 #[cfg(test)]
 mod voiceover_tests;
+#[cfg(test)]
+mod workflows_tests;
 
 #[cfg(test)]
 mod source_placement_tests;

@@ -412,3 +412,35 @@ fn a_project_file_is_attached_from_the_menu_and_goes_with_the_message() {
     assert!(text.contains("file: Ocean_Sunset") && text.contains(&format!("#{ocean} ")) && !text.contains("Neon_Loop"), "{text}");
     d.wait("the chip to go", |d| !d.has(&format!("assistant.attached.{ocean}")));
 }
+
+#[test]
+fn a_workflow_is_started_from_the_list_shown_with_its_stage_and_stopped_with_the_cross() {
+    let _g = guard();
+    let (_rig, sources) = rig();
+    let mut d = Driver::new(sources);
+    d.harness.state_mut().session.assistant.use_model(scripted(vec![text_reply("ok")]));
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.Assistant"}));
+    d.frames(4);
+    // the shipped workflow is offered, with what it is for as its tip; there is no strip until one is followed
+    d.wait("the workflow list", |d| d.has("assistant.workflow.start.rough-cut-from-narration"));
+    assert!(!d.has("assistant.workflow"));
+    d.snapshot("assistant-workflows-list");
+    // choosing it writes a message for the person to read and send
+    d.click("assistant.workflow.start.rough-cut-from-narration");
+    d.wait("the draft", |d| d.label("assistant.draft").contains("rough-cut-from-narration"));
+    // where the project is in it shows as a strip
+    d.exec(
+        "workflow.progress",
+        json!({"workflow": "rough-cut-from-narration", "stage": 2, "status": "waiting", "note": "Six ideas written as beats; waiting for your changes."}),
+    );
+    d.wait("the strip", |d| d.has("assistant.workflow"));
+    let text = d.label("assistant.workflow");
+    assert!(text.contains("rough cut from narration") && text.contains("Stage 2 of") && text.contains("waiting for you"), "{text}");
+    assert!(d.has("assistant.workflow.clear"));
+    d.snapshot("assistant-workflow-strip");
+    // the cross stops following it, and the project forgets
+    d.click("assistant.workflow.clear");
+    d.wait("the strip to go", |d| !d.has("assistant.workflow"));
+    assert_eq!(d.exec("workflow.state", json!({}))["active"], false);
+    // a workflow of the person's own in the folder joins the list
+}

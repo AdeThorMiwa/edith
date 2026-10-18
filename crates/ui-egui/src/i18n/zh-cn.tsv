@@ -4087,3 +4087,15 @@
 	Place a Cut List	放置剪辑清单
 	Check the Edit	检查剪辑
 	Lead or Trail a Clip's Sound	让素材声音提前或延后
+	Clear Workflow	清除工作流程
+	Stop following this workflow	不再按此工作流程进行
+	WORKFLOW	工作流程
+	Workflow	工作流程
+	Workflows	工作流程
+	Workflow State	工作流程状态
+	Record Workflow Progress	记录工作流程进度
+	Stage {n} of {m}: {name}	第 {n}/{m} 阶段：{name}
+	done	已完成
+	stuck	卡住了
+	waiting for you	等你回复
+	working	进行中

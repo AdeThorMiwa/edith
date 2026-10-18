@@ -10,6 +10,7 @@
 //!   [`AgentEvent`].
 //! - [`Environment`]: the tools the agent may call. The engine implements it.
 //! - [`PromptPack`]: the versioned prompt text.
+//! - [`workflow`]: guidance files (stages, when to ask, what done means) the assistant loads for a big job.
 //! - [`Trace`]: a JSON-lines record of a run that replays with no network ([`Trace::replay_model`]).
 //! - [`eval`]: the evaluation suite: tasks, code graders that read only a trace, and reports that
 //!   compare models and prompt versions.
@@ -27,6 +28,7 @@ mod environment;
 pub mod eval;
 mod prompt;
 mod trace;
+pub mod workflow;
 
 pub use agent::{Agent, AgentConfig, AgentEvent, CardAnswer, Finish, Thread, TurnReport};
 pub use context::{ContextBlock, clip_text, user_message};

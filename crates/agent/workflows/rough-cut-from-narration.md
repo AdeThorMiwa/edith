@@ -5,7 +5,7 @@ description: Turn a narration into a first cut of the video, idea by idea, with 
 
 # Rough cut from a narration
 
-This is a **draft** used for the F16.0 spike. It is written as plain guidance for the assistant: stages, when to ask the person, and what "done" means. The tools named here arrive in F16.1 to F16.4; until then the spike uses what exists (`sequence_view`, `transcript`, `analysis_get`, `coach_findings`, `frame_view`, and in Edit mode `begin_version`, `edit`, `command_list`).
+This workflow is guidance, not a script: follow the stages in order, and use judgment inside them. The tools you will use are `project_items` (what media there is, with licences), `narration_timings` (when each word is spoken), `ask_user` (questions as cards), `media_search` and `request_download` (footage the person approves), `timeline.placeCutList` through `edit` (shots, many at once), `edit_checks` (is it done), `frame_view` (look at your own work) and `workflow_progress` (record your stage).
 
 You are cutting a video the person will finish. You make editing decisions; they decide taste, cost and rights. Work inside a version. Never commit it.
 
