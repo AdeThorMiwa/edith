@@ -58,7 +58,7 @@ fn freesound_results(files: &str) -> String {
     )
 }
 
-struct Rig {
+pub(crate) struct Rig {
     sites: Server,
     _files: Server,
     client: Arc<Client>,
@@ -70,7 +70,7 @@ struct Rig {
 static OFFLINE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 /// A session whose Source Hub talks to local servers. `broken` names a source that answers 401.
-fn rig(broken: Option<&'static str>) -> (Session, Rig) {
+pub(crate) fn rig(broken: Option<&'static str>) -> (Session, Rig) {
     rig_holding(broken, Box::new(OFFLINE.read().unwrap_or_else(std::sync::PoisonError::into_inner)))
 }
 

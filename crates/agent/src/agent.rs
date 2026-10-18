@@ -200,9 +200,24 @@ pub enum AgentEvent {
     Notice {
         text: String,
     },
+    /// The person answered the question cards of the turn before (fork roadmap F16.1): what each card
+    /// was answered with, for showing the cards as answered after the fact. The model got the same
+    /// answers as words in the user message that follows.
+    CardsAnswered {
+        answers: Vec<CardAnswer>,
+    },
     Finished {
         finish: Finish,
     },
+}
+
+/// One question card's answer, as the conversation records it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardAnswer {
+    /// The card's id (`c1`).
+    pub card: String,
+    /// What it was answered with, in words ("Slow and contemplative", "yes, now item 61", "no answer").
+    pub answer: String,
 }
 
 /// The result of a turn: why it ended, how many requests it made, and the model's replies in order

@@ -28,7 +28,7 @@ pub mod eval;
 mod prompt;
 mod trace;
 
-pub use agent::{Agent, AgentConfig, AgentEvent, Finish, Thread, TurnReport};
+pub use agent::{Agent, AgentConfig, AgentEvent, CardAnswer, Finish, Thread, TurnReport};
 pub use context::{ContextBlock, clip_text, user_message};
 pub use environment::{Environment, Profile, ToolOutput};
 pub use prompt::{Command, PromptPack};

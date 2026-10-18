@@ -54,6 +54,8 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     // when each word of the narration is spoken (fork; roadmap F16.2)
     all.extend(crate::narration_timings::tools());
     all.extend(crate::beats_and_silence::tools());
+    // questions for the person, download requests and the media search behind them (fork; roadmap F16.1)
+    all.extend(crate::assistant_cards::tools());
     all
 }
 

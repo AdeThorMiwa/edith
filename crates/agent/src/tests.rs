@@ -602,3 +602,13 @@ fn a_tools_view_reaches_the_event_stream_but_not_the_model() {
     let sent = serde_json::to_string(&t.messages).unwrap();
     assert!(sent.contains("Shown to the person") && !sent.contains("\"timeline\""), "{sent}");
 }
+
+#[test]
+fn the_answers_to_question_cards_are_an_event_that_survives_saving() {
+    use crate::{AgentEvent, CardAnswer};
+    let ev = AgentEvent::CardsAnswered { answers: vec![CardAnswer { card: "c1".into(), answer: "Slow and contemplative".into() }] };
+    let json = serde_json::to_value(&ev).unwrap();
+    assert_eq!(json["type"], "cards_answered");
+    assert_eq!(json["answers"][0]["card"], "c1");
+    assert_eq!(serde_json::from_value::<AgentEvent>(json).unwrap(), ev);
+}

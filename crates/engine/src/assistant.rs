@@ -61,6 +61,8 @@ pub(crate) const MAX_TEXT: usize = 20_000;
 const TOOL_WAIT: Duration = Duration::from_secs(60);
 
 pub(crate) struct ToolRequest {
+    /// The thread whose turn made the call (the question cards belong to it).
+    pub(crate) thread: u64,
     pub(crate) name: String,
     pub(crate) input: Value,
     pub(crate) reply: SyncSender<ToolOutput>,
@@ -68,6 +70,7 @@ pub(crate) struct ToolRequest {
 
 /// The agent's view of the editor: tools whose calls are answered on the session thread.
 struct ChannelEnvironment {
+    thread: u64,
     specs: Vec<(ToolSpec, bool)>,
     tx: Mutex<Sender<ToolRequest>>,
 }
@@ -79,7 +82,12 @@ impl Environment for ChannelEnvironment {
 
     fn run(&self, name: &str, input: &Value, cancel: &Cancel) -> ToolOutput {
         let (reply, answer) = sync_channel(1);
-        let sent = self.tx.lock().unwrap_or_else(PoisonError::into_inner).send(ToolRequest { name: name.to_string(), input: input.clone(), reply });
+        let sent = self.tx.lock().unwrap_or_else(PoisonError::into_inner).send(ToolRequest {
+            thread: self.thread,
+            name: name.to_string(),
+            input: input.clone(),
+            reply,
+        });
         if sent.is_err() {
             return ToolOutput::error("the editor is not available");
         }
@@ -101,20 +109,20 @@ impl Environment for ChannelEnvironment {
     }
 }
 
-struct ThreadState {
+pub(crate) struct ThreadState {
     thread: Thread,
-    events: VecDeque<AgentEvent>,
+    pub(crate) events: VecDeque<AgentEvent>,
     /// Events dropped from the front, so indexes stay absolute.
     dropped: u64,
-    running: bool,
+    pub(crate) running: bool,
     finish: Option<Finish>,
     trace: Trace,
     usage: Usage,
     profile: Profile,
 }
 
-struct ThreadShared {
-    state: Mutex<ThreadState>,
+pub(crate) struct ThreadShared {
+    pub(crate) state: Mutex<ThreadState>,
     cancel: Cancel,
     title: Mutex<String>,
     /// The title is still the first question; the model may name the thread after its first answer.
@@ -138,7 +146,7 @@ impl ThreadShared {
 
 pub(crate) struct ThreadSlot {
     pub(crate) id: u64,
-    shared: Arc<ThreadShared>,
+    pub(crate) shared: Arc<ThreadShared>,
     progress: Option<Arc<filmcraft_export::Progress>>,
 }
 
@@ -167,6 +175,9 @@ pub struct AssistantHub {
     model_override: Option<Arc<dyn ChatModel>>,
     /// `analysis_run` calls waiting for their job (fork; roadmap F11.2b).
     pub(crate) pending_tools: Vec<crate::analysis_tools::PendingTool>,
+    /// The person's choices on the open question cards, not yet sent, and the `media_search` calls waiting for
+    /// their results (fork; roadmap F16.1).
+    pub(crate) cards: crate::assistant_cards::Cards,
     /// Titles are normally not asked of a plugged-in model (tests script exact replies); this allows it.
     titles_with_override: bool,
     /// A prompt pack to use instead of the built-in one (the evaluation suite compares packs).
@@ -223,6 +234,7 @@ impl Default for AssistantHub {
             restore_note: None,
             model_override: None,
             pending_tools: Vec::new(),
+            cards: Default::default(),
             titles_with_override: false,
             pack_override: None,
             models: Arc::new(Mutex::new(ModelCache::default())),
@@ -279,16 +291,16 @@ impl AssistantHub {
         }
     }
 
-    fn slot(&self, id: u64) -> Option<&ThreadSlot> {
+    pub(crate) fn slot(&self, id: u64) -> Option<&ThreadSlot> {
         self.threads.iter().find(|t| t.id == id)
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn push_event(shared: &ThreadShared, ev: AgentEvent) {
+pub(crate) fn push_event(shared: &ThreadShared, ev: AgentEvent) {
     let mut st = lock(&shared.state);
     if let AgentEvent::Usage { total, .. } = &ev {
         st.usage = *total;
@@ -315,6 +327,7 @@ impl Session {
             }
         }
         crate::analysis_tools::finish_pending(self);
+        crate::assistant_cards::finish_searches(self);
         let rx = self.assistant.tool_rx.clone();
         let mut first = true;
         loop {
@@ -328,6 +341,11 @@ impl Session {
                 crate::analysis_tools::start(self, req);
                 continue;
             }
+            // the question cards and the media search need the thread and the session's hub
+            let req = match crate::assistant_cards::serve(self, req) {
+                None => continue,
+                Some(req) => req,
+            };
             if let Some(out) = crate::assistant_edit::run_edit(self, &req.name, &req.input) {
                 let _ = req.reply.send(out);
                 continue;
@@ -376,7 +394,7 @@ impl Session {
 // commands
 // ---------------------------------------------------------------------------------------------
 
-fn thread_arg(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
+pub(crate) fn thread_arg(s: &Session, p: &Value, cmd: &str) -> Result<u64> {
     let id = p.get("thread").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`thread` must be a thread id (a whole number)"))?;
     s.assistant.slot(id).map(|t| t.id).ok_or_else(|| bad(cmd, format!("there is no thread {id}")))
 }
@@ -913,6 +931,7 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let defs = assistant_tools::tools();
     let env = Arc::new(ChannelEnvironment {
+        thread: id,
         specs: defs.iter().filter(|d| can_see || !matches!(d.spec.name.as_str(), "frame_view" | "look_see")).map(|d| (d.spec.clone(), d.read_only)).collect(),
         tx: Mutex::new(s.assistant.tool_tx.clone()),
     });
@@ -1109,5 +1128,6 @@ pub fn commands() -> Vec<CommandSpec> {
     ]
     .into_iter()
     .chain(eval::commands())
+    .chain(crate::assistant_cards::commands())
     .collect()
 }

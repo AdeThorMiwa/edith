@@ -14,6 +14,7 @@ pub mod aaf_omf;
 pub mod analysis;
 mod analysis_tools;
 pub mod assistant;
+mod assistant_cards;
 mod assistant_edit;
 mod assistant_store;
 mod assistant_tools;
@@ -1289,6 +1290,10 @@ mod analysis_tests;
 mod analysis_tools_tests;
 #[cfg(test)]
 mod animated_image_tests;
+#[cfg(all(test, feature = "net"))]
+mod assistant_cards_net_tests;
+#[cfg(test)]
+mod assistant_cards_tests;
 #[cfg(test)]
 mod assistant_edit_tests;
 #[cfg(test)]
