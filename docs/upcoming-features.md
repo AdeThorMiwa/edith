@@ -37,7 +37,7 @@ The target workflow:
 
 ## 2. Principles
 
-1. **The human drives.** AI output arrives as a proposal, scoped to what you point at, previewed, accepted or rejected as one undo step. No silent edits (§4.4).
+1. **The human drives.** AI output arrives in a version: a branch of your edit that is checked out while it is open, that you can see against the original, and that you commit as one undo step or discard. No silent edits (§4.4).
 2. **Free first.** Every default path costs nothing: free stock and archive sources, local models, free API tiers. Paid providers are opt-in, never default, always with a visible meter.
 3. **Provenance by default.** Every asset records where it came from and under what license. Generated assets are flagged. Exports can list credits.
 4. **Commands first.** Each feature is engine commands with typed parameters and tests. The UI, CLI, control channel, MCP and the assistant all dispatch the same ids (upstream rule), so every new feature is automatically reachable by agents.
@@ -70,8 +70,8 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 | F12 | ★ Reference analysis and look bible | Must | L | F10 (F08 for targets) |
 | F13 | ★ Sound map and spotting sheet | Must | M | F10, F08 |
 | | **Phase 3: human-in-the-loop automation** | | | |
-| F14 | Proposals engine | Must | L | F01 |
-| F15 | Assistant v2: edit tools via proposals | Must | M | F03, F14 (F08) |
+| F14 | Versions (the proposals engine) | Must | M | F01 |
+| F15 | Assistant v2: Edit mode and edit tools in versions | Must | M | F03, F14 (F08) |
 | F16 | VO-first rough cut | Must | L | F14, F05, F08, F06 |
 | F17 | ★ Sound design suggestions | Must | L | F13, F14, F05 |
 | F18 | Consistency checker and shot matcher | Must | M | F10, F14 |
@@ -93,7 +93,7 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 - *Phase 0* is invisible but everything needs it.
 - *Phase 1* is the **first-video kit**: connect an assistant (also the riskiest unknown, so it is validated early), find and license B-roll, make the narration sound right, give the picture a film finish. After it, you can make a decent video. If B-roll is more urgent than the assistant, F04 and F05 can go first.
 - *Phase 2* makes the craft visible in numbers. It is the most useful phase for a newcomer and needs no proposals yet.
-- *Phase 3* adds automation, all of it through proposals, once the proposals engine exists.
+- *Phase 3* adds automation, all of it inside versions, once the version mechanism exists.
 - *Phase 4* is the research-heavy voice work, after the cheap narration wins in F06.
 
 ## 4. Shared architecture
@@ -133,16 +133,21 @@ The pane has a **Connect** button per provider. What it does depends on what eac
 
 **Never:** read or reuse another tool's tokens (for example Claude Code's keychain entry), reuse another client's OAuth client id, or imitate another client's identity headers. Policy in this area changed several times in 2026; re-check the vendor's terms before each lane ships (§9).
 
-### 4.4 Proposals: how the human stays in charge
+### 4.4 Versions: how the human stays in charge
 
-A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alternatives?}`: a list of ordinary engine commands plus the reason for them. Because the project is an `Arc<Project>` edited copy-on-write with snapshot undo, a proposal can be tried on a cheap fork.
+*(Rewritten 2026-10-17 at the architect's direction. The first design was a list of steps held back as a "proposal"; this is simpler and works the way git does.)*
 
-1. **Preview.** Apply the steps to a forked session. Render from the fork for ghost clips and an A/B toggle in the Program monitor. Compute a diff (clips added, removed, moved, trimmed; effects and parameters; markers) and a plain-language summary.
-2. **Decide.** Accept all, accept part, reject, or edit. Stale proposals (the project changed under them) are flagged and re-previewed.
-3. **Apply.** Replay the steps on the live session as **one undo step** labeled `AI: <title>`, filterable in History.
-4. **Scope locks.** A proposal may only touch what you pointed at (selected clips, a range, a beat). Steps outside the scope are refused.
-5. **Profiles.** *Read-only* (default for a new thread), *Propose*, and *Direct* (explicit, per thread, never default). Exports, file writes and media downloads always ask.
-6. **Untrusted text.** Clip names, captions and web metadata reach the model as delimited data, and tool results are never treated as instructions. Edit tools only propose, which limits prompt injection.
+A **version** is a branch of the edit that you or the assistant start. **Main** is the committed edit, exactly what you edit today.
+
+1. **Check out.** While a version is open the session works on it: the timeline, the Program monitor and History show the version, every edit from either of you goes into it, and Undo and Redo work inside it. Main is parked and untouched, so nothing can change it meanwhile and there is never anything to merge. One version is open at a time.
+2. **See original.** A toggle shows main read-only, briefly, and back. Edits are refused while you look; an edit the assistant makes meanwhile still goes to the version.
+3. **Commit** puts the whole version into main as **one undo step** (`Version: <title>`). **Discard** throws it away and main is exactly as it was. Only the person commits or discards.
+4. **Who did what.** Each step records who made it (you or the assistant); the step list shows it. You can rewind a version by undoing steps, never further back than where it started.
+5. **What cannot happen inside a version:** opening, creating, saving or reverting a project, and exporting: things that reach outside the edit and cannot be taken back. Saving is refused rather than quietly saving main, so an open version is never lost behind your back. The recovery journal still snapshots what is on screen, so a crash keeps the work in progress.
+6. **Who may start one.** You, from the Edit menu or the banner. The assistant, only in **Edit mode** (F15): there it must open a version before it can change anything, and it can never commit. Ask and Coach never edit.
+7. **Untrusted text.** Clip names, captions and web metadata reach the model as delimited data, and tool results are never treated as instructions. Edits only ever land in a version, which limits prompt injection.
+
+Under the hood a version is the editor's own machinery: snapshots of the project (how undo already works), the same commands, the same undo. A version is a parked set of project, editor state and undo history; checking out swaps one set in. Real git was considered and rejected: it versions files and merges by lines, which suits neither a single structured project nor an in-memory swap.
 
 ### 4.5 Where data lives
 
@@ -161,7 +166,7 @@ A **proposal** is `{id, title, rationale, scope, steps[{command, params}], alter
 - Custom code goes in new crates and new files. The small upstream-owned hook points are: `LAYERS` and `SAME_LAYER` in `xtask/src/main.rs`, `PanelKind` in `crates/ui-egui/src/dock.rs`, command registration in `crates/engine/src/commands.rs`, one extension point on `Project`, and the default features in `apps/filmcraft/Cargo.toml` and `apps/filmcraft-cli/Cargo.toml`.
 - Do not refactor `crates/automation` (upstream's MCP server). The assistant mirrors its tool names and shapes in the engine layer instead.
 - Avoid bumping `SCHEMA_VERSION` per feature. Upstream bumps it too: it was 13 when this file was written and is 15 in 0.7.2 (`MIGRATIONS.len() + 1` in `crates/format/src/lib.rs`), so two different v16s would collide (D1).
-- Command namespaces: `assistant.*`, `net.*`, `secrets.*`, `connections.*`, `provenance.*`, `hub.*`, `planner.*`, `analysis.*`, `coach.*`, `reference.*`, `soundplan.*`, `proposal.*`, `voicelab.*`, `youtube.*`; narration additions extend `tts.*`.
+- Command namespaces: `assistant.*`, `net.*`, `secrets.*`, `connections.*`, `provenance.*`, `hub.*`, `planner.*`, `analysis.*`, `coach.*`, `reference.*`, `soundplan.*`, `version.*`, `voicelab.*`, `youtube.*`; narration additions extend `tts.*`.
 
 ### 4.7 Testing conventions for networked and AI code
 
@@ -598,32 +603,31 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 ### Phase 3: human-in-the-loop automation
 
-### F14 Proposals engine · Must · L · ⬜
+### F14 Versions · Must · M · yours · 🟡
 
 **Needs:** F01 · **Unlocks:** F15, F16, F17, F18, F22, F23.
 
-**What it does.** The mechanism that keeps the human in charge (§4.4). Anything an AI or analysis tool wants to change arrives as a proposal you preview and accept or reject.
+**What it does.** The primitive that keeps the human in charge (§4.4): a version of the edit that you or the assistant work in, checked out while it is open, committed as one undo step or discarded, with a "see original" toggle. F14 is the mechanism only; the Edit mode and the assistant's way to start a version and edit inside it are F15.
 
-**Steps.**
-- F14.1 **Grouped undo**: `Session::group(label, …)` collapses N commands into one undo step. Precedent: `history.merge_key` coalescing in `crates/engine/src/lib.rs`. MCP's `command_batch` runs each step as its own undo step today and can adopt it.
-- F14.2 **Fork and diff**: `Session::fork()` clones the `Arc<Project>`, applies the steps, and a diff names what changed.
-- F14.3 **Preview**: ghost clips on the timeline and an A/B toggle in the Program monitor that renders from the fork.
-- F14.4 **Suggestions tray** panel: accept all, accept part, reject, edit; rationale and alternatives; stale detection.
-- F14.5 **Scope locks and profiles**: steps outside the selected clips, range or beat are refused; Read-only (default), Propose, Direct.
+**Steps** (rewritten 2026-10-17; the first plan was a "proposals engine" with ghost clips and a replay system, replaced by this).
+- F14.1 **The version engine**: `version.create|list|peek|commit|discard|rename|rewind|run`, who made each step, one undo step on commit, one version at a time, and the refusals (opening, saving and exporting are refused while a version is open).
+- F14.2 **Diff**: what a version changes against main, in plain words (clips added, removed, moved, trimmed; effects; markers; the plan).
+- F14.3 **The interface**: a banner above the timeline with the version's title, how many steps, **See original**, **Commit** and **Discard**, a step list you can rewind from and the plain-words summary, and **Edit ▸ New Version**.
+- F14.4 (optional, decided after F14.3) **Versions saved with the project**, so one survives closing the app.
 
-**Commands.** `proposal.create|preview|diff|accept|reject|list`.
+**Commands.** `version.create|list|peek|commit|discard|rename|rewind|run`, `version.diff`.
 
-**Done when.** A hand-written proposal of five commands previews, shows a correct diff and accepts as one undo step labeled `AI: …`; a scope-violating step is refused.
+**Done when.** A version made by hand takes edits from you and from a command run "as the assistant", main is untouched until the commit, **See original** shows main read-only and back, the commit is one undo step labelled `Version: …`, Discard gives main back exactly, saving is refused while a version is open, and the banner shows all of it.
 
-### F15 Assistant v2: edit tools via proposals · Must · M · yours · ⬜
+### F15 Assistant v2: Edit mode and edit tools in versions · Must · M · yours · ⬜
 
 **Needs:** F03, F14 (F08 for planner tools).
 
-**What it does.** The assistant can now suggest changes: tighten this section, rearrange these beats, suggest B-roll for this line, critique this beat, explain this cut. Every suggestion is a proposal (F14); it never edits directly.
+**What it does.** A third assistant mode, **Edit**, beside Ask and Coach, and the only one that may change your edit. In it the assistant must **open a version** (F14) before it can change anything, then works inside it over as many rounds as it takes: changing things, undoing them, trying again, while you watch the timeline and can edit the same version yourself. It can never commit; you press Commit, or Discard. In Ask and Coach it has no editing tools at all.
 
-**How it works.** Edit tools build proposals. Planner tools (`planner.*`) let it read and propose beat changes. Source Hub tools (`hub.search`) let it request candidates, with downloads always asking first. Transcripts and clip text stay labeled as untrusted data. Tool-call cards show the exact commands before you accept.
+**How it works.** `begin_version {title}` opens the version (the person sees the banner appear), then one general tool runs any editor command inside it (`version.run`, recorded as the assistant's, so the step list shows who did what), with undo and redo for its own steps. The engine decides which commands are allowed (nothing that reaches outside the edit). Planner tools (`planner.*`) let it read and change beat structure; Source Hub tools (`hub.search`) let it request candidates, with downloads always asking first. Transcripts and clip text stay labeled as untrusted data. The prompt for the mode tells it the person may be editing too, so it re-reads before changing, and that it describes what it changed and leaves the commit to them.
 
-**Done when.** "Tighten the middle section by 20 seconds" returns a proposal with a correct diff and an explanation; rejecting it changes nothing.
+**Done when.** "Tighten the middle section by 20 seconds" in Edit mode opens a version, makes the cuts, and says what it did; the banner shows the changes and the diff; **See original** shows the edit as it was; Discard changes nothing.
 
 ### F16 VO-first rough cut · Must · L · ⬜
 
@@ -633,7 +637,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **How it works.** Narration audio plus word times (Whisper, or the known script) → sentences → planner beats and slots. Per sentence: take your shortlisted pick, else the top candidate marked *tentative*; duration is the sentence plus handles, within the format pack's shot-length range; long sentences split into two shots; stills get a camera move (F07.8); unsourced slots become offline placeholders named after the visual intent. The output is one proposal you can accept per beat.
 
-**Done when.** A two-minute narration with a filled planner yields a proposal that places every shot, previews against the empty timeline, and accepts as one undo step.
+**Done when.** A two-minute narration with a filled planner yields a version that places every shot, can be compared with the empty timeline, and commits as one undo step.
 
 **Notes.** It assists; you choose the footage. Tentative picks stay flagged until you confirm them.
 
@@ -641,7 +645,7 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 
 **Needs:** F13, F14, F05 (audio sources).
 
-**What it does.** The second half of the sound design assistant: concrete, explained suggestions delivered as proposals.
+**What it does.** The second half of the sound design assistant: concrete, explained suggestions made as a version.
 - **Ambience and room tone** under stretches that have none (from your library or Source Hub audio), faded and leveled from the sound plan.
 - **Ducking** music under narration (`essentialSound.generateDucking`) and a **loudness plan** (`essentialSound.autoMatch`) to your target.
 - **Cut sweeteners**: a short ambience crossfade or audio lead (J/L cut) at hard cuts between very different scenes, in place of whooshes; optional effects at hit points you mark.

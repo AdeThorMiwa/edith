@@ -72,6 +72,7 @@ pub mod source_monitor;
 pub mod sync;
 pub mod transcript;
 pub mod trim;
+pub mod version;
 pub mod voiceover;
 
 use std::sync::Arc;
@@ -479,6 +480,8 @@ pub struct Session {
     pub reference: reference::Hub,
     /// The look library (fork; roadmap F12.7).
     pub look: look::Hub,
+    /// The open version, if any (fork; roadmap F14).
+    pub versions: version::Versions,
 }
 
 /// An export advanced a batch at a time on the host's thread ([`Session::pump_jobs`]).
@@ -578,6 +581,7 @@ impl Session {
             analysis: Default::default(),
             reference: Default::default(),
             look: Default::default(),
+            versions: Default::default(),
         }
     }
 
@@ -730,6 +734,13 @@ impl Session {
     /// Run a command by id.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
         let spec = commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if let Some(why) = self.version_refuses(id) {
+            let e = EngineError::Other(why);
+            if self.exec_depth == 0 {
+                self.log.push(panels::Level::Warning, id, e.to_string());
+            }
+            return Err(e);
+        }
         if self.exec_depth == 0 && spec.journal && self.trim_play.active() {
             self.settle_trim_playback(id);
         }
@@ -763,6 +774,7 @@ impl Session {
         // playback reads the newest snapshot (mixer moves, mutes… are heard while playing)
         self.previews.live.publish_project(self.project.clone());
         if r.is_ok() && spec.journal {
+            self.version_note_steps();
             self.journal.push((id.to_string(), params));
             if self.journal.len() > 10_000 {
                 self.journal.drain(..1000);
@@ -872,6 +884,9 @@ impl Session {
 
     /// Apply an undoable project edit. The closure gets a mutable copy; on error nothing changes.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Project, &mut EditorState) -> Result<R>) -> Result<R> {
+        if let Some(e) = self.version_peek_refusal() {
+            return Err(e);
+        }
         let mut p = (*self.project).clone();
         let mut st = self.state.clone();
         let r = f(&mut p, &mut st)?;
@@ -892,6 +907,9 @@ impl Session {
     /// Like [`Session::edit`], but consecutive calls with the same `key` (and no other edit in
     /// between) share one undo step: dragging a control is one undoable change.
     pub fn edit_merged<R>(&mut self, label: &str, key: &str, f: impl FnOnce(&mut Project, &mut EditorState) -> Result<R>) -> Result<R> {
+        if let Some(e) = self.version_peek_refusal() {
+            return Err(e);
+        }
         let merge = self.history.merge_key.as_deref() == Some(key) && self.history.undo.last().is_some_and(|u| u.0 == label);
         if !merge {
             let r = self.edit(label, f)?;
@@ -1020,6 +1038,9 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> Option<String> {
+        if self.versions.is_peeking() {
+            return None;
+        }
         let (label, prev) = self.history.undo.pop()?;
         self.history.merge_key = None;
         let cur = std::mem::replace(&mut self.project, prev);
@@ -1030,6 +1051,9 @@ impl Session {
     }
 
     pub fn redo(&mut self) -> Option<String> {
+        if self.versions.is_peeking() {
+            return None;
+        }
         let (label, next) = self.history.redo.pop()?;
         self.history.merge_key = None;
         let cur = std::mem::replace(&mut self.project, next);
@@ -1384,6 +1408,8 @@ mod track_params_tests;
 mod transcript_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod version_tests;
 #[cfg(test)]
 mod vfx_tests;
 #[cfg(test)]
