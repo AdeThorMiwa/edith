@@ -2,6 +2,7 @@
 //! effects) is carried in egui temp data so the timeline/monitors can accept drops.
 
 pub mod assistant;
+pub mod assistant_cards;
 pub mod assistant_view;
 pub mod assistant_views;
 pub mod assistant_widgets;

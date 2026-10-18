@@ -37,6 +37,8 @@ pub enum Entry {
 #[derive(Default)]
 pub struct ChatLog {
     pub entries: Vec<Entry>,
+    /// What each question card that was sent was answered with, by card id (fork roadmap F16.1).
+    pub answers: std::collections::HashMap<String, String>,
     /// The next event index to ask `assistant.thread` for.
     pub next: u64,
     /// Where the current step's entries begin: a restarted step discards them.
@@ -118,6 +120,13 @@ impl ChatLog {
                 }
             }
             "notice" => self.push_note(&s("text"), false),
+            "cards_answered" => {
+                for a in ev.get("answers").and_then(Value::as_array).into_iter().flatten().take(64) {
+                    if let (Some(card), Some(answer)) = (a.get("card").and_then(Value::as_str), a.get("answer").and_then(Value::as_str)) {
+                        self.answers.insert(card.chars().take(40).collect(), answer.chars().take(2000).collect());
+                    }
+                }
+            }
             "finished" => {
                 let f = ev.get("finish").cloned().unwrap_or(Value::Null);
                 match f.get("kind").and_then(Value::as_str).unwrap_or("") {

@@ -131,6 +131,35 @@ fn texture(app: &mut FilmcraftApp, ctx: &egui::Context, st: &mut State, id: &str
     Some(tex)
 }
 
+/// A texture for a result's picture, for places outside this panel (the assistant's download cards): the
+/// same decoded picture the grid uses. `None` while it loads, or when this session does not have the result.
+pub fn card_texture(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str) -> Option<TextureHandle> {
+    let shared: Arc<Mutex<State>> =
+        ctx.data_mut(|d| d.get_temp_mut_or_insert_with(egui::Id::new("find-media-state"), || Arc::new(Mutex::new(State::default()))).clone());
+    let mut st = shared.lock().unwrap_or_else(PoisonError::into_inner);
+    let tex = texture(app, ctx, &mut st, id);
+    if tex.is_none() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    tex
+}
+
+/// Types a search into the panel and marks it as searched (the caller starts the search): "Show me others" on
+/// the assistant's download card.
+pub fn prefill(ctx: &egui::Context, text: &str, kind: &str) {
+    let shared: Arc<Mutex<State>> =
+        ctx.data_mut(|d| d.get_temp_mut_or_insert_with(egui::Id::new("find-media-state"), || Arc::new(Mutex::new(State::default()))).clone());
+    let mut st = shared.lock().unwrap_or_else(PoisonError::into_inner);
+    st.query = text.chars().take(300).collect();
+    st.kinds = [kind == "video", kind == "image", kind == "audio"];
+    if !st.kinds.iter().any(|b| *b) {
+        st.kinds[0] = true;
+    }
+    st.searched = true;
+    st.shortlist_only = false;
+    st.read_at = f64::NEG_INFINITY;
+}
+
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let now = ui.input(|i| i.time);

@@ -63,6 +63,10 @@ struct Chat {
     finish_kind: String,
     /// The message whose Copy / Retry / Edit links are showing.
     hover_entry: Option<usize>,
+    /// The engine's `assistant.cards` answer for the open thread (the question and download cards waiting for
+    /// the person), and when it was read (fork roadmap F16.1).
+    cards: Value,
+    cards_at: f64,
 }
 
 impl Chat {
@@ -90,6 +94,8 @@ impl Chat {
             focus_input: true,
             finish_kind: String::new(),
             hover_entry: None,
+            cards: Value::Null,
+            cards_at: f64::NEG_INFINITY,
         }
     }
 
@@ -143,6 +149,13 @@ enum Action {
     Copy(String),
     /// Move the playhead to a place a view pointed at (ticks).
     Seek(i64),
+    /// An answer chosen on a card (`assistant.card`).
+    CardChoose {
+        card: String,
+        params: Value,
+    },
+    /// Send the cards' answers as one message (`assistant.answerCards`).
+    CardsSend,
 }
 
 /// Brings the panel's picture of the engine up to date: status, models, and the open thread's new
@@ -188,6 +201,25 @@ fn refresh(app: &mut FilmcraftApp, chat: &mut Chat, now: f64, ctx: &egui::Contex
             chat.finish_kind = v["finish"]["kind"].as_str().unwrap_or("").to_string();
             chat.usage_text = v["usageText"].as_str().unwrap_or("").to_string();
         }
+    }
+    // the question and download cards waiting for an answer: cheap, and only while the thread has any
+    let has_cards = chat
+        .logs
+        .get(&thread)
+        .is_some_and(|l| l.entries.iter().any(|e| matches!(e, Entry::Tool { view: Some(v), .. } if matches!(v["kind"].as_str(), Some("ask" | "download")))));
+    if has_cards {
+        let downloading = chat.cards["waiting"].as_u64().unwrap_or(0) > 0;
+        if now - chat.cards_at >= if downloading || chat.running { 0.2 } else { 0.5 }
+            && let Ok(v) = app.session.execute("assistant.cards", json!({"thread": thread}))
+        {
+            chat.cards = v;
+            chat.cards_at = now;
+        }
+        if downloading {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
+    } else if !chat.cards.is_null() {
+        chat.cards = Value::Null;
     }
     if chat.running {
         ctx.request_repaint_after(std::time::Duration::from_millis(40));
@@ -560,6 +592,20 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                             });
                         elems.push((format!("assistant.entry.{i}"), h.header_response, text.clone()));
                     }
+                    Entry::Tool { view: Some(view), is_error: false, .. } if matches!(view["kind"].as_str(), Some("ask" | "download")) => {
+                        // a question or a download request: a card, answered here, sent together with its turn's others
+                        ui.add_space(2.0);
+                        let ctx = ui.ctx().clone();
+                        if let Some(th) = thread {
+                            let mut taken = Vec::new();
+                            super::assistant_cards::draw(ui, app, &ctx, view, th, &chat.cards, &log.answers, running, &t, &mut elems, &mut taken);
+                            actions.extend(taken.into_iter().map(|a| match a {
+                                super::assistant_cards::CardAction::Choose { card, params } => Action::CardChoose { card, params },
+                                super::assistant_cards::CardAction::Send => Action::CardsSend,
+                            }));
+                        }
+                        ui.add_space(2.0);
+                    }
                     Entry::Tool { view: Some(view), is_error: false, .. } => {
                         // a view the assistant placed in its answer: drawn in place, between its sentences
                         ui.add_space(2.0);
@@ -894,6 +940,42 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 app.ui.status = tl!("Copied to the clipboard.").to_string();
             }
             Action::Seek(ticks) => app.session.set_playhead(filmcraft_time::Tick(ticks.max(0))),
+            Action::CardChoose { card, params } => {
+                let Some(id) = chat.thread else { continue };
+                let mut p = params;
+                p["thread"] = json!(id);
+                p["card"] = json!(card);
+                match app.session.execute("assistant.card", p) {
+                    Ok(v) => {
+                        chat.error = None;
+                        // Show me others: Find Media opens with Edith's search typed in, and searches
+                        if let Some(text) = v["findMedia"]["text"].as_str() {
+                            let kind = v["findMedia"]["kind"].as_str().unwrap_or("video");
+                            super::find_media::prefill(&ctx, text, kind);
+                            if let Err(e) = app.session.execute("hub.search", json!({"text": text, "kinds": [kind]})) {
+                                chat.error = Some(e.to_string());
+                            }
+                            app.show_panel(PanelKind::FindMedia);
+                        }
+                    }
+                    Err(e) => chat.error = Some(e.to_string()),
+                }
+                chat.cards_at = f64::NEG_INFINITY;
+            }
+            Action::CardsSend => {
+                let Some(id) = chat.thread else { continue };
+                match app.session.execute("assistant.answerCards", json!({"thread": id})) {
+                    Ok(_) => {
+                        chat.running = true;
+                        chat.finish_kind.clear();
+                        chat.error = None;
+                        chat.status_at = f64::NEG_INFINITY;
+                        chat.polled_at = f64::NEG_INFINITY;
+                    }
+                    Err(e) => chat.error = Some(e.to_string()),
+                }
+                chat.cards_at = f64::NEG_INFINITY;
+            }
             Action::Branch { turn, text } => {
                 let Some(from) = chat.thread else { continue };
                 let mut params = json!({"thread": from, "turn": turn, "context": context_blocks(app, chips)});

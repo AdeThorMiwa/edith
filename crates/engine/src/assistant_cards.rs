@@ -89,6 +89,20 @@ fn open_cards(s: &Session, thread: u64) -> Vec<Value> {
     out
 }
 
+/// The words and kind of the latest `media_search` the assistant made in `thread`: what "Show me others" searches again.
+fn last_search(s: &Session, thread: u64) -> Option<(String, String)> {
+    let slot = s.assistant.slot(thread)?;
+    let st = lock(&slot.shared.state);
+    st.events.iter().rev().find_map(|ev| match ev {
+        AgentEvent::ToolCall { name, input, .. } if name == "media_search" => {
+            let text = input.get("text").and_then(|t| clean(t, 300))?;
+            let kind = input.get("kind").and_then(Value::as_str).filter(|k| matches!(*k, "video" | "image" | "audio")).unwrap_or("video");
+            Some((text, kind.to_string()))
+        }
+        _ => None,
+    })
+}
+
 /// The next card id in `thread` (`c1`, `c2`, …), one past the highest in its saved events, so a restored
 /// conversation never reuses one.
 fn next_card_id(s: &Session, thread: u64) -> String {
@@ -259,7 +273,8 @@ fn request_download(s: &Session, thread: u64, input: &Value) -> ToolOutput {
         return ToolOutput::error("a card for that clip is already shown in this turn");
     }
     let card = next_card_id(s, thread);
-    let view = json!({"kind": "download", "id": card, "candidate": candidate_card(&c), "why": why});
+    let (query, kind) = last_search(s, thread).unwrap_or_else(|| (c.title.clone(), c.kind.name().to_string()));
+    let view = json!({"kind": "download", "id": card, "candidate": candidate_card(&c), "why": why, "query": query, "searchKind": kind});
     ToolOutput::ok(format!(
         "Download card {card} is now shown to the person for “{}” ({}). That makes {} card{} this turn (at most {MAX_CARDS}). Nothing is downloaded unless they press Yes. Stop here: their answers to every card arrive together as their next message.",
         c.title,
@@ -523,7 +538,7 @@ fn card_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({"thread": thread, "card": id, "draft": draft_json(&card, &draft)});
     if draft == Draft::Others {
         // the panel opens Find Media with this typed in
-        out["findMedia"] = json!({"text": card["candidate"]["title"], "kind": card["candidate"]["kind"]});
+        out["findMedia"] = json!({"text": card["query"], "kind": card["searchKind"]});
     }
     Ok(out)
 }

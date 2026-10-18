@@ -115,7 +115,8 @@ fn no_and_show_me_others_download_nothing_and_say_so() {
     assert_eq!(cards(&mut s, thread)["cards"].as_array().unwrap().len(), 2);
     s.execute("assistant.card", json!({"thread": thread, "card": "c1", "decision": "no"})).unwrap();
     let others = s.execute("assistant.card", json!({"thread": thread, "card": "c2", "decision": "others"})).unwrap();
-    assert!(others["findMedia"]["text"].as_str().is_some_and(|t| !t.is_empty()) && others["findMedia"]["kind"] == "image", "{others}");
+    // Find Media is opened with the words Edith searched with, not the clip's title
+    assert_eq!((others["findMedia"]["text"].as_str(), others["findMedia"]["kind"].as_str()), (Some("pier"), Some("image")), "{others}");
     s.execute("assistant.answerCards", json!({"thread": thread, "wait": true})).unwrap();
     let said = user_texts(&model).pop().unwrap();
     assert!(said.contains("A pier at dawn") && said.contains(": no\n") && said.contains("look at other options themselves in Find Media"), "{said}");
