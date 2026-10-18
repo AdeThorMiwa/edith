@@ -220,6 +220,7 @@ fn narration_and_transitions_reach_the_sequence_numbers() {
         pace: 1.0,
         take: 0,
         speech_duration: a.duration,
+        words: Vec::new(),
     };
     Arc::make_mut(&mut s.project).narrations.insert(a.item, narration);
     let r = analyse(&mut s, json!({"sequence": true, "shots": false}));

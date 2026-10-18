@@ -88,7 +88,7 @@ fn settings(cmd: &str, p: &Value, base: Option<&Narration>) -> Result<Narration>
             v.as_u64().and_then(|t| u32::try_from(t).ok()).ok_or_else(|| bad(cmd, "`take` must be a whole number from 0 to 99 (0 is the plain reading)"))?
         }
     };
-    let n = Narration { text, language: info.language.to_string(), voice, pitch, pace, take, speech_duration: Tick::ZERO };
+    let n = Narration { text, language: info.language.to_string(), voice, pitch, pace, take, speech_duration: Tick::ZERO, words: Vec::new() };
     n.check().map_err(|e| bad(cmd, e))?;
     Ok(n)
 }
@@ -113,6 +113,23 @@ fn tts_err(cmd: &str, e: tts::TtsError) -> EngineError {
 fn render(n: &Narration, models_dir: Option<&std::path::Path>, pron: &tts::Pronunciations) -> std::result::Result<tts::Audio, tts::TtsError> {
     let voice = tts::voice_in(&n.voice, models_dir)?;
     voice.synthesize_with(&n.text, &tts::Params { semitones: n.pitch.semitones(), pace: n.pace, take: n.take }, pron)
+}
+
+/// The words the voice spoke, as the project keeps them: times in ticks from the start of the file.
+fn spoken_words(audio: &tts::Audio) -> Vec<filmcraft_project::SpokenWord> {
+    let rate = i64::from(audio.sample_rate.max(1));
+    audio
+        .words
+        .iter()
+        .take(filmcraft_project::MAX_WORDS)
+        .map(|w| filmcraft_project::SpokenWord {
+            text: w.text.chars().take(filmcraft_project::MAX_WORD_CHARS).collect(),
+            start: Tick::from_units(i64::try_from(w.start).unwrap_or(i64::MAX), rate),
+            end: Tick::from_units(i64::try_from(w.end).unwrap_or(i64::MAX), rate),
+            sentence: w.sentence,
+            exact: w.exact,
+        })
+        .collect()
 }
 
 fn synthesize(s: &Session, cmd: &str, n: &Narration, p: &Value) -> Result<Arc<tts::Audio>> {
@@ -255,6 +272,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let rate = audio.sample_rate.max(1);
     let dur = Tick::from_units(audio.samples.len() as i64, i64::from(rate));
     n.speech_duration = dur;
+    n.words = spoken_words(&audio);
     let range = TimeRange::new(at, dur);
     let track = placement(s, p, range)?;
     let n0 = s.history.undo.len();
@@ -344,6 +362,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let rate = audio.sample_rate.max(1);
     let speech = audio.samples.len();
     n.speech_duration = Tick::from_units(speech as i64, i64::from(rate));
+    n.words = spoken_words(&audio);
     // the clip keeps its length: pad the file with silence to what the clip plays
     let needed = needed_samples(clip_dur, speed, rate);
     let mut samples = audio.samples.clone();

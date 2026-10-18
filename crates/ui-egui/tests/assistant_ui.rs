@@ -968,6 +968,7 @@ fn measured_edit() -> Session {
         pace: 1.0,
         take: 0,
         speech_duration: filmcraft_time::Tick(60 * filmcraft_time::TICKS_PER_SECOND),
+        words: Vec::new(),
     };
     std::sync::Arc::make_mut(&mut s.project).narrations.insert(tone, n);
     s.execute("analysis.run", json!({"mix": true, "wait": true})).unwrap();

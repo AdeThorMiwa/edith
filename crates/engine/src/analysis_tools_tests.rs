@@ -415,6 +415,7 @@ fn narrate(s: &mut Session, words: usize) {
         pace: 1.0,
         take: 0,
         speech_duration: filmcraft_time::Tick(30 * filmcraft_time::TICKS_PER_SECOND),
+        words: Vec::new(),
     };
     Arc::make_mut(&mut s.project).narrations.insert(filmcraft_project::ItemId(tone), n);
 }

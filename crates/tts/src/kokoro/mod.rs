@@ -59,6 +59,13 @@ impl Kokoro {
     /// [`Self::speak`] as a different take: the voice's prosody style is moved by `sigma` of noise
     /// seeded with `seed`, so timing and stress shift a little. `sigma` 0 is [`Self::speak`].
     pub fn speak_take(&self, phonemes: &str, voice: &VoicePack, speed: f64, seed: u64, sigma: f32) -> Result<Vec<f32>, TtsError> {
+        self.speak_take_timed(phonemes, voice, speed, seed, sigma).map(|(samples, _)| samples)
+    }
+
+    /// [`Self::speak_take`], and for each character of `phonemes` the sample where its sound begins
+    /// (`phonemes.chars().count() + 1` offsets, the last the end of the speech; a character outside the
+    /// vocabulary is dropped from the speech, so it begins where the next one does).
+    pub fn speak_take_timed(&self, phonemes: &str, voice: &VoicePack, speed: f64, seed: u64, sigma: f32) -> Result<(Vec<f32>, Vec<usize>), TtsError> {
         if !(0.5..=2.0).contains(&speed) {
             return Err(TtsError::Invalid("speed must be between 0.5 and 2".into()));
         }
@@ -70,11 +77,21 @@ impl Kokoro {
             return Err(TtsError::Invalid(format!("at most {MAX_PHONEMES} phonemes per pass")));
         }
         let style = weights::style_for_take(&voice.0, ids.len(), sigma, seed, self.model.device())?;
-        let out = self.model.forward(&ids, &style, speed, seed)?;
+        let (out, per_id) = self.model.forward_timed(&ids, &style, speed, seed)?;
         if out.iter().any(|s| !s.is_finite()) {
             return Err(TtsError::Model("the model produced invalid samples".into()));
         }
-        Ok(out)
+        // from ids back to the characters they came from
+        let mut starts = Vec::with_capacity(phonemes.chars().count() + 1);
+        let mut next = 0usize;
+        for c in phonemes.chars() {
+            starts.push(per_id.get(next).copied().unwrap_or(out.len()));
+            if self.vocab.contains_key(&c) {
+                next += 1;
+            }
+        }
+        starts.push(per_id.get(ids.len()).copied().unwrap_or(out.len()));
+        Ok((out, starts))
     }
 }
 

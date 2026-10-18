@@ -132,6 +132,7 @@ fn a_narration_made_here_is_narration_and_the_tags_pick_the_lane() {
             pace: 1.0,
             take: 0,
             speech_duration: filmcraft_time::Tick(filmcraft_time::TICKS_PER_SECOND),
+            words: Vec::new(),
         },
     );
     s.project = Arc::new(p);

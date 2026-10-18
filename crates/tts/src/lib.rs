@@ -97,11 +97,53 @@ impl Params {
     }
 }
 
+/// A word of the narration as the voice spoke it (so "19" is "nineteen"), and where it sits in the
+/// audio. Words are in order and do not overlap; the gaps between them are pauses and breaths.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Word {
+    pub text: String,
+    /// First and last sample of the word's sound (`end` is one past it).
+    pub start: usize,
+    pub end: usize,
+    /// Which sentence of the script it belongs to, counting from 0.
+    pub sentence: u32,
+    /// Whether the voice knew the time (`true`) or it was worked out from the text's length (`false`).
+    pub exact: bool,
+}
+
+/// Words of `text` spread over the samples `from..to` in proportion to their length (the basic voice does not
+/// keep per-word times), numbering sentences from `sentence`; returns the number of the next sentence.
+/// The total is exact for the stretch, the individual words are estimates (`exact: false`).
+pub fn estimate_words(text: &str, from: usize, to: usize, mut sentence: u32, into: &mut Vec<Word>) -> u32 {
+    let spoken: Vec<&str> = text.split_whitespace().filter(|w| w.chars().any(char::is_alphanumeric)).collect();
+    let weight = |w: &str| w.chars().filter(|c| c.is_alphanumeric()).count().max(1) + 1;
+    let total: usize = spoken.iter().map(|w| weight(w)).sum();
+    if total == 0 || to <= from {
+        return sentence;
+    }
+    let span = to - from;
+    let mut used = 0usize;
+    for w in &spoken {
+        let a = from + (span as u128 * used as u128 / total as u128) as usize;
+        used += weight(w);
+        // a word's sound is its letters; the beat after it is the space
+        let b = from + (span as u128 * (used - 1) as u128 / total as u128) as usize;
+        let clean: String = w.chars().filter(|c| c.is_alphanumeric() || *c == '\'' || *c == '-').collect();
+        into.push(Word { text: clean, start: a, end: b.max(a), sentence, exact: false });
+        if w.trim_end_matches(['"', '\'', ')', '”', '’']).ends_with(['.', '!', '?']) {
+            sentence = sentence.saturating_add(1);
+        }
+    }
+    sentence
+}
+
 /// Mono audio at [`SAMPLE_RATE`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Audio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
+    /// When each word is spoken, when the voice can say; empty when it cannot.
+    pub words: Vec<Word>,
 }
 
 impl Audio {

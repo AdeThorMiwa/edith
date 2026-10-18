@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use filmcraft_audio_dsp::AudioEffect;
-use filmcraft_tts_text::{Chunk, Lang, Lexicon, Overrides};
+use filmcraft_tts_text::{Lang, Lexicon, Overrides, TimedChunk};
 
 use crate::catalog;
 use crate::kokoro::{KOKORO_RATE, Kokoro, VoicePack};
-use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, check_text, script};
+use crate::{Audio, MAX_SECONDS, Params, Pronunciations, TtsError, UnknownWord, Voice, VoiceInfo, Word, check_text, script};
 
 /// How far a take moves the voice's prosody style (the style values have a spread of about 0.15):
 /// timing shifts a few percent and stress moves, while the voice stays itself.
@@ -129,20 +129,25 @@ impl Voice for NeuralVoice {
         let rate = KOKORO_RATE;
         let max = (MAX_SECONDS * f64::from(rate)) as usize;
         let mut all: Vec<f32> = Vec::new();
+        let mut words: Vec<Word> = Vec::new();
         let mut spoke = false;
         // sentences are numbered across the whole script so a take keeps its seeds
         let mut sentence_base = 0u64;
+        // and numbered the same way for the words
+        let mut sentence_no_base = 0u64;
         for run in &runs {
             let here = params.directed(run.pace, run.semitones);
-            let chunks = filmcraft_tts_text::phonemize(&run.text, Lang::EnUs, &self.lexicon, &overrides).map_err(|e| TtsError::Invalid(e.to_string()))?;
+            let chunks = filmcraft_tts_text::phonemize_timed(&run.text, Lang::EnUs, &self.lexicon, &overrides).map_err(|e| TtsError::Invalid(e.to_string()))?;
             let mut out: Vec<f32> = Vec::new();
+            // words of this stretch, in samples from its start; sentences are numbered across the script
+            let mut run_words: Vec<Word> = Vec::new();
             for (i, c) in chunks.iter().enumerate() {
                 match c {
-                    Chunk::Pause { millis } => {
+                    TimedChunk::Pause { millis } => {
                         let n = (u64::from(*millis) * u64::from(rate) / 1000) as usize;
                         out.resize(out.len().saturating_add(n), 0.0);
                     }
-                    Chunk::Phonemes(p) => {
+                    TimedChunk::Phonemes { phonemes: p, words: spoken } => {
                         if self.model.ids(p).is_empty() {
                             continue;
                         }
@@ -153,7 +158,20 @@ impl Voice for NeuralVoice {
                         // sentence's style by its own noise, seeded by the take and the sentence
                         let seed = sentence_base + i as u64 + 1 + u64::from(here.take) * TAKE_SEED_STEP;
                         let sigma = if here.take == 0 { 0.0 } else { TAKE_SIGMA };
-                        let s = self.model.speak_take(p, &self.pack, here.pace, seed, sigma)?;
+                        let (s, starts) = self.model.speak_take_timed(p, &self.pack, here.pace, seed, sigma)?;
+                        let at = out.len();
+                        for w in spoken {
+                            // the model's offsets are per character; a word is a byte range of the string
+                            let (from, to) = (p.get(..w.start).map_or(0, |h| h.chars().count()), p.get(..w.end).map_or(0, |h| h.chars().count()));
+                            let (Some(a), Some(b)) = (starts.get(from), starts.get(to)) else { continue };
+                            run_words.push(Word {
+                                text: w.text.clone(),
+                                start: at.saturating_add(*a),
+                                end: at.saturating_add((*b).max(*a)),
+                                sentence: (sentence_no_base + u64::from(w.sentence)).min(u64::from(u32::MAX)) as u32,
+                                exact: true,
+                            });
+                        }
                         out.extend_from_slice(&s);
                         spoke = true;
                     }
@@ -163,9 +181,19 @@ impl Voice for NeuralVoice {
                 }
             }
             sentence_base += chunks.len() as u64;
+            sentence_no_base += chunks
+                .iter()
+                .filter_map(|c| match c {
+                    TimedChunk::Phonemes { words, .. } => words.iter().map(|w| u64::from(w.sentence) + 1).max(),
+                    TimedChunk::Pause { .. } => None,
+                })
+                .max()
+                .unwrap_or(0);
             if here.semitones.abs() > 1e-6 {
                 out = pitch_shift(out, here.semitones, rate);
             }
+            let base = all.len();
+            words.extend(run_words.into_iter().map(|w| Word { start: w.start.saturating_add(base), end: w.end.saturating_add(base), ..w }));
             all.extend_from_slice(&out);
         }
         if !spoke {
@@ -178,7 +206,7 @@ impl Voice for NeuralVoice {
             let g = 0.98 / peak;
             out.iter_mut().for_each(|x| *x *= g);
         }
-        Ok(Audio { samples: out, sample_rate: rate })
+        Ok(Audio { samples: out, sample_rate: rate, words })
     }
 }
 

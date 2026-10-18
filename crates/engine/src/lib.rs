@@ -18,6 +18,7 @@ mod assistant_edit;
 mod assistant_store;
 mod assistant_tools;
 pub mod autosave;
+mod beats_and_silence;
 pub mod camera_moves;
 pub mod captions;
 pub mod clip_ops;
@@ -42,6 +43,7 @@ pub mod media_watch;
 pub mod mixer;
 pub mod multicam;
 pub mod narration;
+mod narration_timings;
 pub mod narrator;
 pub mod net_commands;
 pub mod panels;
@@ -1300,6 +1302,8 @@ mod autosave_tests;
 #[cfg(test)]
 mod avi_import_tests;
 #[cfg(test)]
+mod beats_and_silence_tests;
+#[cfg(test)]
 mod camera_moves_tests;
 #[cfg(test)]
 mod clip_ops_tests;
@@ -1345,6 +1349,8 @@ mod mixer_tests;
 mod multicam_tests;
 #[cfg(test)]
 mod narration_tests;
+#[cfg(test)]
+mod narration_timings_tests;
 #[cfg(test)]
 mod narrator_tests;
 #[cfg(test)]

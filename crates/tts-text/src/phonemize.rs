@@ -219,34 +219,65 @@ pub enum Chunk {
     },
 }
 
+/// A word as spoken, and where its sounds sit in its chunk's phoneme string.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpokenWord {
+    /// The word after normalization ("nineteen", not "19").
+    pub text: String,
+    /// Byte range of the word's phonemes in the chunk's string (without the punctuation after it).
+    pub start: usize,
+    pub end: usize,
+    /// Which sentence of the script it is in, counting from 0 (a chunk split for length stays in its sentence).
+    pub sentence: u32,
+}
+
+/// [`Chunk`] with the words that make up each stretch of speech.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TimedChunk {
+    Phonemes { phonemes: String, words: Vec<SpokenWord> },
+    Pause { millis: u32 },
+}
+
 /// Script → chunks: normalize, then phonemize each sentence (one
 /// [`Chunk::Phonemes`] per sentence, split when over [`MAX_CHUNK_CHARS`]).
 /// Never crashes; hostile input degrades (AGENTS.md §0).
 pub fn phonemize(text: &str, lang: Lang, lex: &Lexicon, overrides: &Overrides) -> Result<Vec<Chunk>, NormalizeError> {
+    Ok(phonemize_timed(text, lang, lex, overrides)?
+        .into_iter()
+        .map(|c| match c {
+            TimedChunk::Phonemes { phonemes, .. } => Chunk::Phonemes(phonemes),
+            TimedChunk::Pause { millis } => Chunk::Pause { millis },
+        })
+        .collect())
+}
+
+/// [`phonemize`], also saying which words each chunk holds (for word times from the voice).
+pub fn phonemize_timed(text: &str, lang: Lang, lex: &Lexicon, overrides: &Overrides) -> Result<Vec<TimedChunk>, NormalizeError> {
     let tokens = normalize::normalize(text, lang)?;
     let overrides = bounded_overrides(overrides);
-    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut chunks: Vec<TimedChunk> = Vec::new();
+    let mut sentence_no = 0u32;
     let mut sentence: Vec<Token> = Vec::new();
     for token in tokens {
         match token {
             Token::SentenceEnd => {
                 // The sentence terminator attaches to the last word as a period.
                 sentence.push(Token::Punct('.'));
-                flush_sentence(&mut sentence, &mut chunks, lex, &overrides, lang);
+                flush_sentence(&mut sentence, &mut chunks, &mut sentence_no, lex, &overrides, lang);
             }
             Token::SentenceEndWith(c) => {
                 // `?` and `!` shape Kokoro's intonation; keep them.
                 sentence.push(Token::Punct(c));
-                flush_sentence(&mut sentence, &mut chunks, lex, &overrides, lang);
+                flush_sentence(&mut sentence, &mut chunks, &mut sentence_no, lex, &overrides, lang);
             }
             Token::Pause { millis } => {
-                flush_sentence(&mut sentence, &mut chunks, lex, &overrides, lang);
-                chunks.push(Chunk::Pause { millis });
+                flush_sentence(&mut sentence, &mut chunks, &mut sentence_no, lex, &overrides, lang);
+                chunks.push(TimedChunk::Pause { millis });
             }
             other => sentence.push(other),
         }
     }
-    flush_sentence(&mut sentence, &mut chunks, lex, &overrides, lang);
+    flush_sentence(&mut sentence, &mut chunks, &mut sentence_no, lex, &overrides, lang);
     Ok(chunks)
 }
 
@@ -335,9 +366,17 @@ fn bounded_overrides(overrides: &Overrides) -> BTreeMap<String, String> {
 }
 
 /// Phonemize one buffered sentence into zero or more `Phonemes` chunks.
-fn flush_sentence(sentence: &mut Vec<Token>, chunks: &mut Vec<Chunk>, lex: &Lexicon, overrides: &BTreeMap<String, String>, lang: Lang) {
+fn flush_sentence(
+    sentence: &mut Vec<Token>,
+    chunks: &mut Vec<TimedChunk>,
+    sentence_no: &mut u32,
+    lex: &Lexicon,
+    overrides: &BTreeMap<String, String>,
+    lang: Lang,
+) {
     let tokens = std::mem::take(sentence);
     let mut out = String::new();
+    let mut words: Vec<SpokenWord> = Vec::new();
     for token in &tokens {
         match token {
             Token::Word(w) => {
@@ -345,7 +384,9 @@ fn flush_sentence(sentence: &mut Vec<Token>, chunks: &mut Vec<Chunk>, lex: &Lexi
                 if !out.is_empty() {
                     out.push(' ');
                 }
+                let start = out.len();
                 out.push_str(&p);
+                words.push(SpokenWord { text: w.clone(), start, end: out.len(), sentence: *sentence_no });
             }
             Token::Punct(c) => {
                 if KEPT_PUNCT.contains(c) {
@@ -355,29 +396,44 @@ fn flush_sentence(sentence: &mut Vec<Token>, chunks: &mut Vec<Chunk>, lex: &Lexi
             Token::Pause { .. } | Token::SentenceEnd | Token::SentenceEndWith(_) => {}
         }
     }
-    for piece in split_long_chunk(out) {
-        if !piece.is_empty() {
-            chunks.push(Chunk::Phonemes(piece));
+    let mut any = false;
+    for (offset, piece) in split_long_chunk(out) {
+        if piece.is_empty() {
+            continue;
         }
+        any = true;
+        let end = offset.saturating_add(piece.len());
+        let mine: Vec<SpokenWord> = words
+            .iter()
+            .filter(|w| w.start >= offset && w.start < end)
+            .map(|w| SpokenWord { text: w.text.clone(), start: w.start - offset, end: w.end.min(end) - offset, sentence: w.sentence })
+            .collect();
+        chunks.push(TimedChunk::Phonemes { phonemes: piece, words: mine });
+    }
+    if any {
+        *sentence_no = sentence_no.saturating_add(1);
     }
 }
 
 /// Split a phoneme string longer than [`MAX_CHUNK_CHARS`] at the last `,` `;` `:`
-/// before the limit, else at the last space, else hard-split at the limit.
-fn split_long_chunk(s: String) -> Vec<String> {
+/// before the limit, else at the last space, else hard-split at the limit. Each piece comes with
+/// the byte offset of its start in `s`.
+fn split_long_chunk(s: String) -> Vec<(usize, String)> {
     if s.chars().count() <= MAX_CHUNK_CHARS {
-        return vec![s];
+        return vec![(0, s)];
     }
     let limit = s.char_indices().map(|(i, _)| i).nth(MAX_CHUNK_CHARS).unwrap_or(s.len());
     let head_boundary = s.get(..limit).and_then(|head| {
         head.char_indices().rev().find(|&(_, c)| matches!(c, ',' | ';' | ':')).map(|(i, _)| i + 1).or_else(|| head.rfind(' ').map(|i| i + 1)).or(Some(limit))
     });
-    let Some(cut) = head_boundary else { return vec![s] };
+    let Some(cut) = head_boundary else { return vec![(0, s)] };
     let head = s.get(..cut).unwrap_or("").trim_end().to_string();
-    let tail = s.get(cut..).unwrap_or("").trim_start().to_string();
-    let mut out = vec![head];
-    out.extend(split_long_chunk(tail));
-    out.retain(|p| !p.is_empty());
+    let rest = s.get(cut..).unwrap_or("");
+    let tail = rest.trim_start().to_string();
+    let tail_at = cut + (rest.len() - tail.len());
+    let mut out = vec![(0, head)];
+    out.extend(split_long_chunk(tail).into_iter().map(|(o, p)| (o + tail_at, p)));
+    out.retain(|(_, p)| !p.is_empty());
     out
 }
 
@@ -1620,5 +1676,79 @@ PERCENT  P ER0 S EH1 N T
             prev = cur;
         }
         prev[b.len()]
+    }
+
+    // ---------------------------------------------------------------- word positions (F16.2)
+
+    fn timed(text: &str) -> Vec<TimedChunk> {
+        phonemize_timed(text, Lang::EnUs, &test_lex(), &Overrides::default()).unwrap()
+    }
+
+    #[test]
+    fn every_word_says_where_its_sounds_are_in_the_chunk() {
+        let chunks = timed("Hello world. Hello, world!");
+        let found: Vec<(&str, &[SpokenWord])> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                TimedChunk::Phonemes { phonemes, words } => Some((phonemes.as_str(), words.as_slice())),
+                TimedChunk::Pause { .. } => None,
+            })
+            .collect();
+        assert_eq!(found.len(), 2, "{chunks:?}");
+        for (k, (ph, words)) in found.iter().enumerate() {
+            assert_eq!(words.iter().map(|w| w.text.to_lowercase()).collect::<Vec<_>>(), ["hello", "world"]);
+            assert!(words.iter().all(|w| w.sentence == k as u32), "sentences count from 0: {words:?}");
+            assert!(words[0].start == 0 && words[0].end <= words[1].start && words[1].end <= ph.len());
+            // the stretch of a word is its sounds, not the punctuation after it
+            assert!(!ph[words[1].start..words[1].end].contains(['.', '!', ',']));
+            assert!(ph.is_char_boundary(words[0].end) && ph.is_char_boundary(words[1].start));
+        }
+        // the plain version agrees
+        let plain = phonemize("Hello world. Hello, world!", Lang::EnUs, &test_lex(), &Overrides::default()).unwrap();
+        assert_eq!(plain.len(), chunks.len());
+    }
+
+    #[test]
+    fn pauses_are_not_words_and_do_not_count_as_sentences() {
+        let chunks = timed("One. [pause 1s] Two.");
+        assert!(chunks.iter().any(|c| matches!(c, TimedChunk::Pause { millis: 1000 })), "{chunks:?}");
+        let sentences: Vec<u32> = chunks
+            .iter()
+            .filter_map(|c| match c {
+                TimedChunk::Phonemes { words, .. } => words.first().map(|w| w.sentence),
+                TimedChunk::Pause { .. } => None,
+            })
+            .collect();
+        assert_eq!(sentences, [0, 1]);
+    }
+
+    #[test]
+    fn a_sentence_split_for_length_keeps_its_words_in_their_own_pieces() {
+        let text = format!("{}.", vec!["hello world"; 120].join(" "));
+        let chunks = timed(&text);
+        let mut total = 0;
+        for c in &chunks {
+            let TimedChunk::Phonemes { phonemes, words } = c else { continue };
+            assert!(phonemes.chars().count() <= MAX_CHUNK_CHARS);
+            for w in words {
+                assert!(w.start < w.end && w.end <= phonemes.len(), "{w:?} in {} bytes", phonemes.len());
+                assert!(phonemes.is_char_boundary(w.start) && phonemes.is_char_boundary(w.end));
+                assert_eq!(w.sentence, 0, "one sentence however many pieces");
+            }
+            total += words.len();
+        }
+        assert!(chunks.len() > 1, "it was long enough to split");
+        assert_eq!(total, 240, "no word lost or doubled across the split");
+    }
+
+    #[test]
+    fn odd_text_gives_no_words_and_never_crashes() {
+        for t in ["", "   ", "...", "[pause 1s]", "\u{0}\u{1}", "😀 😀", "12345", "a.b.c.", &"x ".repeat(3000)] {
+            for c in timed(t) {
+                if let TimedChunk::Phonemes { phonemes, words } = c {
+                    assert!(words.iter().all(|w| w.start <= w.end && w.end <= phonemes.len()));
+                }
+            }
+        }
     }
 }

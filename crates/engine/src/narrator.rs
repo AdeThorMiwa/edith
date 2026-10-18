@@ -404,7 +404,8 @@ pub(crate) fn run_effects(audio: &tts::Audio, effects: &[EffectInstance]) -> tts
         let g = 0.98 / peak;
         out.iter_mut().for_each(|x| *x *= g);
     }
-    tts::Audio { samples: out, sample_rate: audio.sample_rate }
+    // the effects keep every sample where it was (latency taken out), so the words stay where they are
+    tts::Audio { samples: out, sample_rate: audio.sample_rate, words: audio.words.clone() }
 }
 
 // ---------------------------------------------------------------------------- commands

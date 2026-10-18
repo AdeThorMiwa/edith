@@ -411,16 +411,19 @@ fn running_audio_through_effects_is_safe_for_tiny_silent_and_long_audio() {
     let chain: Vec<filmcraft_project::EffectInstance> =
         builtins()[0].inserts.iter().filter_map(|i| filmcraft_project::find_effect(&i.effect)).map(|d| d.instance()).collect();
     for samples in [vec![], vec![0.5f32], vec![0.0; 24_000], vec![f32::NAN, 1.0, -1.0, 50.0]] {
-        let out = run_effects(&filmcraft_tts::Audio { samples: samples.clone(), sample_rate: 24_000 }, &chain);
+        let out = run_effects(&filmcraft_tts::Audio { samples: samples.clone(), sample_rate: 24_000, words: Vec::new() }, &chain);
         assert!(out.samples.iter().all(|x| x.is_finite() && x.abs() <= 0.98 + 1e-6), "{:?}", samples.len());
         assert_eq!(out.sample_rate, 24_000);
     }
     // an empty chain returns the same audio (apart from the headroom rule)
-    let a = filmcraft_tts::Audio { samples: (0..2400).map(|i| (i as f32 * 0.05).sin() * 0.5).collect(), sample_rate: 24_000 };
+    let a = filmcraft_tts::Audio { samples: (0..2400).map(|i| (i as f32 * 0.05).sin() * 0.5).collect(), sample_rate: 24_000, words: Vec::new() };
     assert_eq!(run_effects(&a, &[]).samples, a.samples);
     // sixty seconds of speech-like audio is processed in a few seconds at most
-    let long =
-        filmcraft_tts::Audio { samples: (0..24_000 * 60).map(|i| (i as f32 * 0.03).sin() * 0.4 * ((i / 6000) % 2) as f32).collect(), sample_rate: 24_000 };
+    let long = filmcraft_tts::Audio {
+        samples: (0..24_000 * 60).map(|i| (i as f32 * 0.03).sin() * 0.4 * ((i / 6000) % 2) as f32).collect(),
+        sample_rate: 24_000,
+        words: Vec::new(),
+    };
     let t = std::time::Instant::now();
     let out = run_effects(&long, &chain);
     assert!(t.elapsed().as_secs() < 20, "{:?}", t.elapsed());

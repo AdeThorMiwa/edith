@@ -349,8 +349,11 @@ impl Model {
         &self.dev
     }
 
-    /// Phoneme ids (without the boundary tokens; at most 510) and a 256-value style → samples.
-    pub(crate) fn forward(&self, ids: &[u32], style: &Tensor, speed: f64, seed: u64) -> R<Vec<f32>> {
+    /// Phoneme ids (without the boundary tokens; at most 510) and a 256-value style → samples, and
+    /// where each id's sound begins: `ids.len() + 1` sample offsets, the last being where the final
+    /// id ends. The model already works out how many frames every sound lasts (600 samples each)
+    /// to build the speech; this is that, kept.
+    pub(crate) fn forward_timed(&self, ids: &[u32], style: &Tensor, speed: f64, seed: u64) -> R<(Vec<f32>, Vec<usize>)> {
         let mut padded = Vec::with_capacity(ids.len() + 2);
         padded.push(0u32);
         padded.extend_from_slice(ids);
@@ -380,6 +383,15 @@ impl Model {
         let (f0, n) = self.pred.f0_n(&en, &s_pro)?;
         let t_en = self.text.fwd(&ids_t)?; // [1, 512, T]
         let asr = t_en.matmul(&aln).map_err(err)?; // [1, 512, F]
-        self.dec.fwd(&asr, &f0, &n, &s_dec, seed)
+        let samples = self.dec.fwd(&asr, &f0, &n, &s_dec, seed)?;
+        // `dur` has a boundary token at each end; the ids sit between them
+        let mut starts = Vec::with_capacity(ids.len() + 1);
+        let mut at = dur.first().copied().unwrap_or(0).saturating_mul(SAMPLES_PER_FRAME);
+        for n in dur.iter().skip(1).take(ids.len()) {
+            starts.push(at.min(samples.len()));
+            at = at.saturating_add(n.saturating_mul(SAMPLES_PER_FRAME));
+        }
+        starts.push(at.min(samples.len()));
+        Ok((samples, starts))
     }
 }

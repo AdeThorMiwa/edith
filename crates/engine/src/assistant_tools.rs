@@ -51,6 +51,9 @@ pub(crate) fn tools() -> Vec<ToolDef> {
     all.extend(crate::assistant_edit::tools());
     // the media in the project, with where each came from (fork; roadmap F16 spike)
     all.extend(crate::project_items::tools());
+    // when each word of the narration is spoken (fork; roadmap F16.2)
+    all.extend(crate::narration_timings::tools());
+    all.extend(crate::beats_and_silence::tools());
     all
 }
 

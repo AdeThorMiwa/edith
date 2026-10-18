@@ -15,7 +15,7 @@
 //! no-download fallback, not the main voice.
 
 use crate::script::{self, Segment};
-use crate::{Audio, Gender, MAX_SECONDS, Params, SAMPLE_RATE, TtsError, Voice, VoiceInfo, check_text};
+use crate::{Audio, Gender, MAX_SECONDS, Params, SAMPLE_RATE, TtsError, Voice, VoiceInfo, Word, check_text, estimate_words};
 
 /// A built-in voice: catalogue entry plus its speaking parameters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,7 +109,7 @@ impl Voice for FormantVoice {
                     spoken |= ph.iter().any(|p| p.kind != Kind::Silence);
                     let here = params.directed(pace_by, pitch_by);
                     total_ms += ph.iter().map(|p| f64::from(p.dur_ms)).sum::<f64>() / here.pace;
-                    plan.push(Piece::Speech(ph, here));
+                    plan.push(Piece::Speech(ph, here, s.to_string()));
                 }
             }
             if total_ms > MAX_SECONDS * 1000.0 {
@@ -122,13 +122,19 @@ impl Voice for FormantVoice {
         let estimate = (total_ms / 1000.0 * f64::from(SAMPLE_RATE)).ceil() as usize;
         let mut out: Vec<f32> = Vec::new();
         out.try_reserve(estimate.saturating_add(SAMPLE_RATE as usize)).map_err(|e| TtsError::Invalid(format!("unable to allocate the narration: {e}")))?;
+        let mut words: Vec<Word> = Vec::new();
+        let mut sentence = 0u32;
         for piece in &plan {
             match piece {
                 Piece::Pause(ms) => {
                     let n = (f64::from(*ms) / 1000.0 * f64::from(SAMPLE_RATE)).round() as usize;
                     out.resize(out.len().saturating_add(n), 0.0);
                 }
-                Piece::Speech(ph, here) => render(&self.spec, ph, here, &mut out),
+                Piece::Speech(ph, here, text) => {
+                    let from = out.len();
+                    render(&self.spec, ph, here, &mut out);
+                    sentence = estimate_words(text, from, out.len(), sentence, &mut words);
+                }
             }
         }
         // one gain for the whole narration so loudness doesn't jump between pieces
@@ -141,13 +147,13 @@ impl Voice for FormantVoice {
         } else if !peak.is_finite() {
             return Err(TtsError::Invalid("synthesis produced invalid samples".into()));
         }
-        Ok(Audio { samples: out, sample_rate: SAMPLE_RATE })
+        Ok(Audio { samples: out, sample_rate: SAMPLE_RATE, words })
     }
 }
 
 enum Piece {
     Pause(u32),
-    Speech(Vec<Phone>, Params),
+    Speech(Vec<Phone>, Params, String),
 }
 
 // ------------------------------------------------------------------------------------- phones
@@ -773,5 +779,34 @@ mod tests {
         let fast = say("basic-female", "[pace 100] Nobody woke.", Params { pace: 2.0, ..Default::default() });
         assert!(n(&fast) > 0.0 && n(&fast) <= n(&second) / 1.9);
         let _ = say("basic-female", "[pitch 99] Nobody woke.", Params { semitones: 12.0, ..Default::default() });
+    }
+
+    #[test]
+    fn the_basic_voice_spreads_the_words_over_what_it_spoke_and_says_they_are_estimates() {
+        let a = say("basic-female", "Hello there. How are you today? Fine!", Params::default());
+        assert_eq!(a.words.len(), 7, "{:?}", a.words.iter().map(|w| &w.text).collect::<Vec<_>>());
+        assert!(a.words.iter().all(|w| !w.exact), "the basic voice does not know per-word times");
+        let mut at = 0;
+        for w in &a.words {
+            assert!(w.start >= at && w.start < w.end && w.end <= a.samples.len(), "{w:?}");
+            at = w.end;
+        }
+        assert_eq!(a.words.iter().map(|w| w.sentence).collect::<Vec<_>>(), [0, 0, 1, 1, 1, 1, 2]);
+        // all of the speech is covered, within a word's gap at each end
+        assert!(a.words[0].start < a.samples.len() / 20 && a.words[6].end > a.samples.len() * 9 / 10);
+    }
+
+    #[test]
+    fn pauses_push_the_words_after_them_later_and_odd_text_gives_no_words() {
+        let a = say("basic-female", "One two. [pause 2s] Three four.", Params::default());
+        let gap = a.words[2].start - a.words[1].end;
+        assert!(gap >= 2 * SAMPLE_RATE as usize, "the two seconds of pause are between the sentences: {gap}");
+        let mut out = Vec::new();
+        assert_eq!(estimate_words("", 0, 100, 0, &mut out), 0);
+        assert_eq!(estimate_words("... !!! ---", 0, 100, 3, &mut out), 3);
+        assert_eq!(estimate_words("word", 50, 10, 0, &mut out), 0);
+        assert!(out.is_empty());
+        assert_eq!(estimate_words(&"a ".repeat(100_000), 0, usize::MAX, 0, &mut out), 0);
+        assert!(out.iter().all(|w| w.start <= w.end));
     }
 }

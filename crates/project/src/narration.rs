@@ -15,6 +15,10 @@ pub const MIN_PACE: f64 = 0.5;
 pub const MAX_PACE: f64 = 2.0;
 /// The highest take (0 is the voice's plain reading).
 pub const MAX_TAKE: u32 = 99;
+/// Most spoken words kept with a narration (a script of [`MAX_TEXT_BYTES`] has fewer).
+pub const MAX_WORDS: usize = 40_000;
+/// Longest word text kept, in characters.
+pub const MAX_WORD_CHARS: usize = 64;
 
 /// Text to Speech ▸ Advanced ▸ Vocal pitch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -69,6 +73,20 @@ impl VocalPitch {
     }
 }
 
+/// A word as the voice spoke it ("nineteen", for a script that says "19"), timed from the start of the
+/// generated file (fork roadmap F16.2). Words are in order and do not overlap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpokenWord {
+    pub text: String,
+    pub start: Tick,
+    pub end: Tick,
+    /// Which sentence of the script it belongs to, counting from 0.
+    pub sentence: u32,
+    /// Whether the voice knew the time, or it was worked out from the length of the text.
+    pub exact: bool,
+}
+
 /// The script and voice settings a narration was generated from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +108,10 @@ pub struct Narration {
     /// Length of the speech in the generated file. The file can be longer: when an edit made the
     /// speech shorter than its clip, the file is padded with silence to the clip's length.
     pub speech_duration: Tick,
+    /// When each word is spoken, from the voice, for the assistant and the cut checks. Empty for files saved
+    /// before it existed, and for a voice that cannot say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<SpokenWord>,
 }
 
 impl Narration {
@@ -106,6 +128,12 @@ impl Narration {
         }
         if self.speech_duration < Tick::ZERO {
             return Err("negative speech duration".into());
+        }
+        if self.words.len() > MAX_WORDS {
+            return Err(format!("more than {MAX_WORDS} spoken words"));
+        }
+        if self.words.iter().any(|w| w.start < Tick::ZERO || w.end < w.start || w.text.chars().count() > MAX_WORD_CHARS) {
+            return Err("a spoken word has a negative or backwards time, or is too long".into());
         }
         Ok(())
     }
@@ -124,6 +152,7 @@ mod tests {
             pace: 1.25,
             take: 0,
             speech_duration: Tick::from_seconds_f64(2.5),
+            words: Vec::new(),
         }
     }
 
@@ -144,6 +173,25 @@ mod tests {
         let with = Narration { take: 7, ..n.clone() };
         assert_eq!(serde_json::from_str::<Narration>(&serde_json::to_string(&with).unwrap()).unwrap().take, 7);
         assert!(Narration { take: MAX_TAKE + 1, ..n }.check().is_err());
+    }
+
+    #[test]
+    fn spoken_words_round_trip_stay_out_of_old_files_and_hostile_ones_are_refused() {
+        let word = |t: &str, a: i64, b: i64| SpokenWord { text: t.into(), start: Tick(a), end: Tick(b), sentence: 0, exact: true };
+        let mut n = sample();
+        assert!(!serde_json::to_string(&n).unwrap().contains("words"), "nothing to say, nothing written");
+        n.words = vec![word("hello", 0, 10), word("there", 12, 20)];
+        let s = serde_json::to_string(&n).unwrap();
+        assert_eq!(serde_json::from_str::<Narration>(&s).unwrap(), n);
+        assert!(n.check().is_ok());
+        n.words.push(word("back", 30, 25));
+        assert!(n.check().is_err(), "backwards");
+        n.words = vec![word("neg", -1, 5)];
+        assert!(n.check().is_err(), "negative");
+        n.words = vec![word(&"x".repeat(MAX_WORD_CHARS + 1), 0, 1)];
+        assert!(n.check().is_err(), "long");
+        n.words = vec![word("w", 0, 1); MAX_WORDS + 1];
+        assert!(n.check().is_err(), "too many");
     }
 
     #[test]

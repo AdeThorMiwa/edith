@@ -155,6 +155,7 @@ fn a_changed_word_changes_what_a_narration_is_rendered_from_and_a_trial_word_is_
         pace: 1.0,
         take: 0,
         speech_duration: filmcraft_time::Tick::ZERO,
+        words: Vec::new(),
     };
     let none = effective(&s);
     set(&mut s, "kubrick", "koo brick", "project");
