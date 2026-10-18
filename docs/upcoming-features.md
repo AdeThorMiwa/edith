@@ -72,7 +72,7 @@ Phases are the suggested order. Within a phase, items can swap if their *Needs* 
 | | **Phase 3: human-in-the-loop automation** | | | |
 | F14 | Versions (the proposals engine) | Must | M | F01 |
 | F15 | Assistant v2: Edit mode and edit tools in versions | Must | M | F03, F14 (F08) |
-| F16 | VO-first rough cut | Must | L | F14, F05, F08, F06 |
+| F16 | Assistant workflows: the rough cut is the first | Must | L | F14, F15, F05, F08, F06 |
 | F17 | ★ Sound design suggestions | Must | L | F13, F14, F05 |
 | F18 | Consistency checker and shot matcher | Must | M | F10, F14 |
 | | **Phase 4: voices** | | | |
@@ -630,21 +630,40 @@ F12 adds the *look bible* view and F13 the *sound plan* view.
 - **The tools.** `begin_version {title}` opens a version (or says one is already open and works in that one); `edit {command, params}` runs any editor command inside it, recorded as the assistant's; `undo_steps {steps?}` takes back its **own** latest steps and stops at one the person made; `redo_step` puts one back. Read-only, and in every mode: `version_status` (the title, who started it, the steps with who made each, what it changes against the original in plain words), `planner_get` (the plan with the beat ids the planner commands take) and `command_list {query?}` (the commands it may run, with their parameters).
 - **Layers of safety.** The agent offers the four editing tools only in Edit mode, and the engine asks again when one runs (a mode switched mid-turn stops them). A command has to be on the allowlist (the families that edit the project: timeline, clips, effects, markers, trimming, the plan, sound, colour, graphics, captions, the mixer, masks, multicam, the project; anything not listed is refused), cannot name a risky action (export, save, import, download, record, capture, render, relink…), and its parameters cannot name a file or an address, at any depth. It cannot run `version.*` (so cannot commit, discard or open another), `edit.undo` or `edit.redo` (its own undo steps have a tool that never reaches yours), `sound.sheet` or `planner.export` or `planner.import` (they write or read a file), or anything that changes the shared look library. Files, exports, downloads and settings always ask the person directly.
 - **In the interface.** The picker shows Edit; the version the assistant opens appears as the banner above the editor (F14.3) with its steps marked as the assistant's; the chat names the editing tools "Changed the edit with …", not "Looked at …".
-- **Hub tools** (Source Hub search and downloads) are not part of this: downloads always ask, and they come with F16.
+- **Hub tools** (Source Hub search and downloads) are not part of this: downloads always ask, and they come with F16 as the download request card.
 
 **Done when.** "Tighten the middle section by 20 seconds" in Edit mode opens a version, makes the cuts, and says what it did; the banner shows the changes and the diff; **See original** shows the edit as it was; Discard changes nothing. Tested: the gate (the other modes refuse every editing tool), a full flow with a scripted model (it opens a version, edits, and the commit is left to the person, one undo step), its own undo that stops at the person's step, the allowlist across every registered command, parameters naming a file at any depth, and the picker and banner in the interface.
 
-### F16 VO-first rough cut · Must · L · ⬜
+### F16 Assistant workflows: the rough cut is the first · Must · L · 🟡
 
-**Needs:** F14, F05, F08, F06 (and the existing transcripts).
+**Needs:** F14, F15, F05, F08, F06 (and the existing transcripts).
 
-**What it does.** The faceless workflow in one step. From the narration and its word timings it proposes a first cut: shot changes on sentence boundaries, a B-roll candidate per slot, audio leading picture slightly at beat changes, ambience under, music ducked.
+*(Rewritten 2026-10-18 at the architect's direction. The first design was a fixed pipeline: sentences in, cut out. It only worked for narrated content and could not use judgment. This replaces it with an assistant that makes the editing decisions.)*
 
-**How it works.** Narration audio plus word times (Whisper, or the known script) → sentences → planner beats and slots. Per sentence: take your shortlisted pick, else the top candidate marked *tentative*; duration is the sentence plus handles, within the format pack's shot-length range; long sentences split into two shots; stills get a camera move (F07.8); unsourced slots become offline placeholders named after the visual intent. The output is one proposal you can accept per beat.
+**What it does.** The assistant makes the editing decisions, using tools and **workflow files** that say which stages to go through, when to ask you, and what "done" means. It cuts by **ideas**, not sentences (an idea can span several sentences; a planner beat is an idea), it works beyond narration (a music montage, an interview, silent b-roll), and it decides for itself how much to do at once. Everything happens inside a **version** (F14): you compare with the original, and commit or discard. The first workflow is the faceless one: a **rough cut from a narration**.
 
-**Done when.** A two-minute narration with a filled planner yields a version that places every shot, can be compared with the empty timeline, and commits as one undo step.
+**How it works.**
+- **Judgment from the assistant, precision from code.** The assistant decides where ideas begin and end and what footage fits. Code gives it exact times (words, pauses, music beats) and checks its work. It never invents a time.
+- **How much at once is the assistant's call, earned.** It cuts one idea first, runs the checks, looks at a few frames of its own work, then takes bigger chunks while the checks pass; after two failed checks it shrinks back or asks. The cut-list command takes any number of entries.
+- **Asking you.** Inline cards in the chat. A download request shows the clip's thumbnail, source, licence and size with **Yes / No / Show me others**; *Show me others* opens Find Media with the search already typed. Nothing downloads without a Yes.
+- **Attaching files.** The chat's picker lists only files already in the project; importing and where a file came from stay in the Project and Media panels.
+- **Workflow files.** Skill-style files (a name, a one-line description, then stages: what to do, when to ask and what kind of input, what done means as named checks). Shipped defaults, plus your own in a folder, like Format Packs. The assistant sees only the descriptions and loads a workflow's full text when it picks one; the current stage is saved in the project.
+- **What "quality" means**, in three layers, never one score:
+  1. **Must pass** (code checks it; done is blocked until it does): every stretch of narration has picture, no gaps; no flash frames; every cut lands on a word or pause boundary, never mid-word; cuts are inside an idea or on an idea boundary; shots within the video type's length range; every clip has a known licence; no unplanned dead air.
+  2. **Should** (code measures, the assistant reports): pace against the plan or an adopted reference; variety (no near-identical shots back to back, footage not reused too closely); camera moves on stills; loudness.
+  3. **Taste** (only the person decides; the assistant gives its reasons): does the picture illustrate or contrast with the idea; does something carry across the cut; does it feel right.
 
-**Notes.** It assists; you choose the footage. Tentative picks stay flagged until you confirm them.
+**Steps** (planned 2026-10-18; each a commit).
+- F16.0 **Spike**: the first workflow written as plain text (`docs/workflows/rough-cut-from-narration.md`) and tried with a real model on a real narration, to see how good its idea-splitting and cut choices are before building much. Needs the architect's go and a connected provider.
+- F16.1 **Talking to you**: `ask_user` and `request_download` tools that wait for the answer; the inline cards; attach project files; nothing downloads without Yes.
+- F16.2 **Measurements as data**: `narration_timings` (words, pauses, sentences, marked exact or estimated: exact from in-app text-to-speech, exact from a transcript for a recorded voice, otherwise a flagged estimate), `music_beats`, `silence_map`. Ideas are beats.
+- F16.3 **The cut-list executor and the checks**: `timeline.placeCutList` (any number of entries, each with a reason, boundaries validated against the word times, one undo step per call), `clip.audioLead` (a J/L cut on clips already placed), and `edit_checks` (the three layers). Format Pack shot-length limits as data.
+- F16.4 **Workflow files and the loader**: `workflow_list|load|progress`, the stage saved in the project, the Assistant panel shows it, the prompt tells the assistant to use a workflow, ask only for the person's decisions, and never claim done while a must-pass check fails.
+- F16.5 **The first workflow**: rough cut from a narration (understand, segment into ideas, find footage and ask before downloads, calibrate, scale, finish), with evaluation tasks.
+
+**Done when.** A two-minute narration with a filled planner, cut by the assistant in several calls inside a version, places every shot, is compared with the empty timeline using See original, passes every must-pass check, and commits as one undo step.
+
+**Notes.** It assists; you choose the footage, and the commit is yours. The taste layer cannot be tested by machine, so it is judged by the architect on the spike and on real footage. Placing music and ambience themselves is F17.
 
 ### F17 ★ Sound design suggestions · Must · L · yours · ⬜
 
