@@ -18,6 +18,7 @@ mod assistant_cards;
 mod assistant_edit;
 mod assistant_store;
 mod assistant_tools;
+mod audio_lead;
 pub mod autosave;
 mod beats_and_silence;
 pub mod camera_moves;
@@ -25,7 +26,9 @@ pub mod captions;
 pub mod clip_ops;
 pub mod color;
 pub mod commands;
+mod cutlist;
 pub mod demo;
+mod edit_checks;
 pub mod essential_sound;
 pub mod export_tools;
 pub mod graphic_templates;
@@ -1301,6 +1304,8 @@ mod assistant_tests;
 #[cfg(test)]
 mod audio_effects_tests;
 #[cfg(test)]
+mod audio_lead_tests;
+#[cfg(test)]
 mod audio_placement_tests;
 #[cfg(test)]
 mod autosave_tests;
@@ -1314,6 +1319,10 @@ mod camera_moves_tests;
 mod clip_ops_tests;
 #[cfg(test)]
 mod color_tests;
+#[cfg(test)]
+mod cutlist_tests;
+#[cfg(test)]
+mod edit_checks_tests;
 #[cfg(test)]
 mod essential_sound_tests;
 #[cfg(test)]

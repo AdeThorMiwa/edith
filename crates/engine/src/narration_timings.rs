@@ -149,6 +149,20 @@ fn strip_markers(text: &str) -> String {
     out
 }
 
+/// Every spoken word on the active sequence's audio tracks as `(start, end, text)` on the timeline, in time order:
+/// from narrations (the voice's own times) and transcribed recordings. Empty when nothing on the timeline speaks.
+pub(crate) fn spoken_spans(s: &Session) -> Vec<(Tick, Tick, String)> {
+    let Some(q) = s.active_sequence() else { return Vec::new() };
+    let mut out: Vec<(Tick, Tick, String)> = Vec::new();
+    for it in q.audio_tracks.iter().filter(|t| !t.muted).flat_map(|t| t.items.iter()).filter(|it| it.enabled && timed_source(s, it)) {
+        if let Some((words, _)) = words_of(s, it) {
+            out.extend(words.into_iter().map(|w| (w.start, w.end, w.text)));
+        }
+    }
+    out.sort_by_key(|w| (w.0, w.1));
+    out
+}
+
 fn clip_label(s: &Session, it: &TrackItem) -> String {
     let name = s.project.items.get(&it.item).map_or(it.name.as_str(), |i| i.name.as_str());
     format!("clip {} “{}”", it.id.0, name)
