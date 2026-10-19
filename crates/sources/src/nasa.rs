@@ -127,6 +127,7 @@ fn one(v: &Value) -> Option<Candidate> {
         author_url: String::new(),
         source_url: format!("https://images.nasa.gov/details/{}", encode_path(&nasa_id).replace('/', "%2F")),
         thumb,
+        previews: Vec::new(),
         width: None,
         height: None,
         seconds: None,
@@ -175,6 +176,29 @@ pub fn pick_file(manifest: &[u8], kind: Kind) -> Result<String, SourceError> {
         }
     }
     Err(SourceError::Unavailable("this NASA item has no file Edith can use".to_string()))
+}
+
+/// The stills NASA made from inside a film (`~small_1.jpg`, `~small_2.jpg`…), from its list of
+/// renditions: what Edith looks at before offering it. In order, at most 8.
+pub fn preview_urls(manifest: &[u8]) -> Vec<String> {
+    let Ok(v) = serde_json::from_slice::<Value>(manifest) else { return Vec::new() };
+    let mut stills: Vec<String> = v
+        .get("collection")
+        .and_then(|c| c.get("items"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(200)
+        .filter_map(|i| i.get("href").and_then(Value::as_str))
+        .filter(|h| {
+            let l = h.to_ascii_lowercase();
+            l.contains("~small_") && l.ends_with(".jpg")
+        })
+        .filter_map(asset_url)
+        .collect();
+    stills.sort();
+    stills.truncate(8);
+    stills
 }
 
 #[cfg(test)]
@@ -250,6 +274,16 @@ mod tests {
             assert!(pick_file(bad.as_bytes(), Kind::Video).is_err(), "{bad}");
         }
         assert!(pick_file(MANIFEST.as_bytes(), Kind::Audio).is_err());
+    }
+
+    #[test]
+    fn the_stills_made_from_inside_a_film_are_listed_in_order() {
+        let m = br#"{"collection":{"items":[{"href":"http://images-assets.nasa.gov/video/X Y/X Y~small_3.jpg"},{"href":"http://images-assets.nasa.gov/video/X Y/X Y~small_1.jpg"},
+          {"href":"http://images-assets.nasa.gov/video/X Y/X Y~small_2.jpg"},{"href":"http://images-assets.nasa.gov/video/X Y/X Y~medium.mp4"},{"href":"http://elsewhere.example/a~small_1.jpg"}]}}"#;
+        let urls = preview_urls(m);
+        assert_eq!(urls.len(), 3, "{urls:?}");
+        assert!(urls[0].ends_with("X%20Y~small_1.jpg") && urls[2].ends_with("X%20Y~small_3.jpg"), "{urls:?}");
+        assert!(preview_urls(b"nope").is_empty() && preview_urls(br#"{"collection":{}}"#).is_empty());
     }
 
     #[test]

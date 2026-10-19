@@ -113,7 +113,7 @@ impl Hub {
     }
 
     #[cfg(feature = "net")]
-    fn sources(&mut self) -> Arc<edith_sources::Sources> {
+    pub(crate) fn sources(&mut self) -> Arc<edith_sources::Sources> {
         self.sources
             .get_or_insert_with(|| {
                 let client = edith_net::http::Client::new(edith_net::http::ClientConfig::default(), edith_net::shared().clone());

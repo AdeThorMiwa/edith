@@ -246,6 +246,7 @@ fn a_licence_that_is_unknown_or_forbids_commercial_use_is_not_offered() {
         author_url: String::new(),
         source_url: String::new(),
         thumb: String::new(),
+        previews: Vec::new(),
         width: None,
         height: None,
         seconds: None,

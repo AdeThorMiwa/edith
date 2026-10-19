@@ -160,6 +160,10 @@ pub struct Candidate {
     pub source_url: String,
     /// A small picture to show in the grid (empty when the source has none).
     pub thumb: String,
+    /// More pictures from inside a video, spread through it, where the site gives them (Pexels):
+    /// what Edith looks at before offering a clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previews: Vec<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub seconds: Option<f64>,

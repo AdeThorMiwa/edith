@@ -126,6 +126,7 @@ fn one(v: &Value, kind: Kind) -> Option<Candidate> {
         author_url: url(v, "creator_url"),
         source_url: url(v, "foreign_landing_url"),
         thumb: if kind == Kind::Image { url(v, "thumbnail") } else { String::new() },
+        previews: Vec::new(),
         width: crate::util::dim(v, "width"),
         height: crate::util::dim(v, "height"),
         // Openverse gives a length in milliseconds

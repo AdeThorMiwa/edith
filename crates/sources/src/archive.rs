@@ -86,6 +86,7 @@ fn one(v: &Value) -> Option<Candidate> {
         author_url: String::new(),
         source_url: format!("https://archive.org/details/{id}"),
         thumb: format!("https://archive.org/services/img/{id}"),
+        previews: Vec::new(),
         width: None,
         height: None,
         seconds: runtime(&first(v, "runtime", 20)),

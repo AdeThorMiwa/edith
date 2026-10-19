@@ -87,10 +87,11 @@ fn rights(info: &Value) -> Rights {
     r
 }
 
-/// A smaller picture from the same server: the grid shows 320 px wide thumbnails, not the 1920 px one.
-fn small(thumb: &str) -> String {
+/// `thumb` (asked for at [`WIDE`]) at `width` pixels instead. Wikimedia serves only a short list of widths (330 and
+/// 500 are on it, 320 is not and answers 400), so `width` must be one of those.
+fn sized(thumb: &str, width: u32) -> String {
     let marker = format!("/{WIDE}px-");
-    if thumb.contains(&marker) { thumb.replacen(&marker, "/320px-", 1) } else { thumb.to_string() }
+    if thumb.contains(&marker) { thumb.replacen(&marker, &format!("/{width}px-"), 1) } else { thumb.to_string() }
 }
 
 fn extension(u: &str) -> String {
@@ -138,7 +139,9 @@ fn one(page: &Value) -> Option<Candidate> {
         author: artist,
         author_url: String::new(),
         source_url: url(info, "descriptionurl"),
-        thumb: if kind == Kind::Audio || thumb.is_empty() { String::new() } else { small(&thumb) },
+        thumb: if kind == Kind::Audio || thumb.is_empty() { String::new() } else { sized(&thumb, 330) },
+        // a larger one to look at before offering it
+        previews: if kind == Kind::Audio || thumb.is_empty() { Vec::new() } else { vec![sized(&thumb, 500)] },
         width: dim(info, "width"),
         height: dim(info, "height"),
         seconds: seconds(info, "duration"),
@@ -211,7 +214,7 @@ mod tests {
         );
         assert_eq!(sa.rights.url, "https://creativecommons.org/licenses/by-sa/4.0");
         assert!(sa.download.as_ref().unwrap().url.contains("/1920px-"), "a big picture is fetched at 1920 px, not at 9 MB");
-        assert!(sa.thumb.contains("/320px-"), "{}", sa.thumb);
+        assert!(sa.thumb.contains("/330px-"), "{}", sa.thumb);
         assert_eq!(sa.source_url, "https://commons.wikimedia.org/wiki/File:Fog_on_the_lake.jpg");
     }
 
@@ -223,7 +226,7 @@ mod tests {
             (v.kind, v.seconds, v.download.as_ref().unwrap().ext.as_str(), v.download.as_ref().unwrap().bytes),
             (Kind::Video, Some(31.5), "webm", Some(22_000_000))
         );
-        assert!(v.download.as_ref().unwrap().url.ends_with("Morning_mist.webm") && v.thumb.contains("/320px-"));
+        assert!(v.download.as_ref().unwrap().url.ends_with("Morning_mist.webm") && v.thumb.contains("/330px-"));
         assert_eq!(v.rights.name, "CC0 1.0".replace(" 1.0", ""), "the site's own short name is shown");
         let a = &p.candidates[3];
         assert_eq!((a.kind, a.download.as_ref().unwrap().ext.as_str(), a.thumb.as_str()), (Kind::Audio, "ogg", ""));

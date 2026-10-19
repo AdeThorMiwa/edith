@@ -16,6 +16,7 @@ mod analysis_tools;
 pub mod assistant;
 mod assistant_cards;
 mod assistant_edit;
+mod assistant_look;
 mod assistant_narration;
 mod assistant_store;
 mod assistant_tools;
@@ -1304,6 +1305,8 @@ mod assistant_cards_net_tests;
 mod assistant_cards_tests;
 #[cfg(test)]
 mod assistant_edit_tests;
+#[cfg(test)]
+mod assistant_look_tests;
 #[cfg(test)]
 mod assistant_narration_tests;
 #[cfg(test)]

@@ -69,6 +69,8 @@ struct PendingSearch {
 pub(crate) struct Cards {
     drafts: HashMap<(u64, String), Draft>,
     searches: Vec<PendingSearch>,
+    /// What `media_look` has fetched this session, and the sounds `media_listen` is fetching (fork roadmap F29).
+    pub(crate) looks: crate::assistant_look::Looks,
     /// Narrations being made for cards the person said Yes to (fork roadmap F16.7).
     pub(crate) voicing: crate::assistant_narration::VoicingMap,
 }
@@ -159,6 +161,14 @@ pub(crate) fn serve(s: &mut Session, req: ToolRequest) -> Option<ToolRequest> {
             }
             None
         }
+        "media_look" | "media_listen" => {
+            let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::assistant_look::serve(s, &req)))
+                .unwrap_or_else(|_| Some(ToolOutput::error("the look could not be taken")));
+            if let Some(out) = started {
+                let _ = req.reply.send(out);
+            }
+            None
+        }
         _ => Some(req),
     }
 }
@@ -217,7 +227,7 @@ fn source_label(source: &str) -> String {
 }
 
 /// What a candidate's licence says, in one line, as the site states it.
-fn rights_line(c: &edith_sources::Candidate) -> String {
+pub(crate) fn rights_line(c: &edith_sources::Candidate) -> String {
     let r = &c.rights;
     let name = if r.name.trim().is_empty() { "licence not stated" } else { r.name.trim() };
     let commercial = match r.commercial {
@@ -341,6 +351,25 @@ pub(crate) fn finish_searches(s: &mut Session) {
     s.assistant.cards.searches.extend(keep);
 }
 
+/// One result in a line: id, title, author, kind, size, length, file size and licence.
+pub(crate) fn candidate_line(c: &edith_sources::Candidate) -> String {
+    let d = c.download.as_ref();
+    let size = d.and_then(|d| d.bytes).map_or(String::new(), |b| format!(", {:.1} MB", b as f64 / 1_048_576.0));
+    let dims = match (d.and_then(|d| d.width).or(c.width), d.and_then(|d| d.height).or(c.height)) {
+        (Some(w), Some(h)) => format!(", {w}x{h}"),
+        _ => String::new(),
+    };
+    let len = c.seconds.map_or(String::new(), |x| format!(", {x:.0} s"));
+    format!(
+        "{} | “{}” by {} | {}{dims}{len}{size} | licence: {}",
+        c.id,
+        c.title,
+        if c.author.is_empty() { "unknown" } else { &c.author },
+        c.kind.name(),
+        rights_line(c)
+    )
+}
+
 fn search_text(s: &Session, p: &PendingSearch, results: &Value, still_running: bool) -> ToolOutput {
     let sources: Vec<String> = results["sources"]
         .as_array()
@@ -369,21 +398,7 @@ fn search_text(s: &Session, p: &PendingSearch, results: &Value, still_running: b
         return ToolOutput::ok(out);
     }
     for c in &list {
-        let d = c.download.as_ref();
-        let size = d.and_then(|d| d.bytes).map_or(String::new(), |b| format!(", {:.1} MB", b as f64 / 1_048_576.0));
-        let dims = match (d.and_then(|d| d.width).or(c.width), d.and_then(|d| d.height).or(c.height)) {
-            (Some(w), Some(h)) => format!(", {w}x{h}"),
-            _ => String::new(),
-        };
-        let len = c.seconds.map_or(String::new(), |x| format!(", {x:.0} s"));
-        out.push_str(&format!(
-            "- {} | “{}” by {} | {}{dims}{len}{size} | licence: {}\n",
-            c.id,
-            c.title,
-            if c.author.is_empty() { "unknown" } else { &c.author },
-            c.kind.name(),
-            rights_line(c)
-        ));
+        out.push_str(&format!("- {}\n", candidate_line(c)));
     }
     out.push_str("Nothing has been downloaded. To offer one, call request_download with its id: the person decides with Yes, No or Show me others. Offer only results whose licence allows commercial use.");
     ToolOutput::ok(out)

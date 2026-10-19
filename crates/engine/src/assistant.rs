@@ -401,6 +401,7 @@ impl Session {
         crate::analysis_tools::finish_pending(self);
         crate::assistant_cards::finish_searches(self);
         crate::assistant_narration::pump(self);
+        crate::assistant_look::pump(self);
         let rx = self.assistant.tool_rx.clone();
         let mut first = true;
         loop {
@@ -1055,7 +1056,11 @@ fn send(s: &mut Session, p: &Value) -> Result<Value> {
     let defs = assistant_tools::tools();
     let env = Arc::new(ChannelEnvironment {
         thread: id,
-        specs: defs.iter().filter(|d| can_see || !matches!(d.spec.name.as_str(), "frame_view" | "look_see")).map(|d| (d.spec.clone(), d.read_only)).collect(),
+        specs: defs
+            .iter()
+            .filter(|d| can_see || !matches!(d.spec.name.as_str(), "frame_view" | "look_see" | "media_look"))
+            .map(|d| (d.spec.clone(), d.read_only))
+            .collect(),
         tx: Mutex::new(s.assistant.tool_tx.clone()),
     });
     let mut assistant = Assistant::new(model, env, &settings, info.as_ref(), profile);

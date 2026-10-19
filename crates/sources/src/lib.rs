@@ -36,4 +36,4 @@ pub use util::apply_request;
 #[cfg(feature = "keychain")]
 pub use client::keychain_keys;
 #[cfg(feature = "net")]
-pub use client::{Cancel, Keys, Sources};
+pub use client::{Cancel, Keys, Picture, Sources};

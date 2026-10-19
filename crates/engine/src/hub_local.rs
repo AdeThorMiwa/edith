@@ -123,6 +123,7 @@ pub fn find(folders: &[Folder], req: &Request) -> Page {
                         author_url: String::new(),
                         source_url: String::new(),
                         thumb: if kind == Kind::Image && meta.len() <= 12 * 1024 * 1024 { format!("file://{full}") } else { String::new() },
+                        previews: Vec::new(),
                         width: None,
                         height: None,
                         seconds: None,

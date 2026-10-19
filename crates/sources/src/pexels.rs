@@ -75,6 +75,11 @@ fn video(v: &Value) -> Option<Candidate> {
         author_url: url(user, "url"),
         source_url: url(v, "url"),
         thumb: url(v, "image"),
+        previews: v
+            .get("video_pictures")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().take(30).map(|p| url(p, "picture")).filter(|u| !u.is_empty()).collect())
+            .unwrap_or_default(),
         width: dim(v, "width"),
         height: dim(v, "height"),
         seconds: seconds(v, "duration"),
@@ -105,6 +110,7 @@ fn photo(v: &Value) -> Option<Candidate> {
         author_url: url(v, "photographer_url"),
         source_url: url(v, "url"),
         thumb: ["medium", "small", "tiny"].iter().map(|k| url(src, k)).find(|u| !u.is_empty()).unwrap_or_default(),
+        previews: Vec::new(),
         width: dim(v, "width"),
         height: dim(v, "height"),
         seconds: None,
@@ -167,6 +173,8 @@ mod tests {
             "Full HD mp4, not the 4K one and not the webm"
         );
         assert_eq!(c.thumb, "https://images.pexels.com/videos/3571264/pic.jpeg");
+        assert_eq!(c.previews, ["https://images.pexels.com/p.jpeg"], "the stills from inside the video are kept to look at");
+        assert!(p.candidates[1].previews.is_empty());
     }
 
     #[test]

@@ -327,8 +327,8 @@ fn context_blocks_are_sent_in_the_user_message() {
     assert!(!req.system[0].text.contains("#29"), "context never goes in the cached system prompt");
     assert_eq!(
         req.tools.len(),
-        33,
-        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, the two sound tools, the three that read a version, the plan and the commands, the project's media, the narration's word times, the beats of a score, where nothing sounds, and the three for talking to the person (a question, a download request, a media search), the checks that say whether a cut is done, the three for workflows (list, load, progress), and the voice-it offer"
+        35,
+        "overview, sequence view, clip detail, frame view, transcript, the four analysis and coach tools, show, the three reference tools, the four look tools, the two sound tools, the three that read a version, the plan and the commands, the project's media, the narration's word times, the beats of a score, where nothing sounds, and the three for talking to the person (a question, a download request, a media search), the checks that say whether a cut is done, the three for workflows (list, load, progress), and the voice-it offer, and the two for seeing and hearing a stock result before offering it (media_look, media_listen)"
     );
     assert_eq!(req.model, "claude-haiku-5-5");
 }
@@ -903,7 +903,9 @@ fn a_model_that_cannot_see_is_refused_a_frame_and_is_not_offered_the_frame_tool(
     s.execute("assistant.send", json!({"text": "look", "wait": true})).unwrap();
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "frame_view"));
     assert!(!model.requests()[0].tools.iter().any(|t| t.name == "look_see"));
-    assert_eq!(model.requests()[0].tools.len(), 31, "every tool but the two that need to see pictures");
+    assert!(!model.requests()[0].tools.iter().any(|t| t.name == "media_look"), "she cannot look at stock pictures without eyes");
+    assert!(model.requests()[0].tools.iter().any(|t| t.name == "media_listen"), "listening needs no eyes");
+    assert_eq!(model.requests()[0].tools.len(), 32, "every tool but the three that need to see pictures");
     // and the engine would refuse to run it anyway if asked
     let out = s.run_assistant_tool("frame_view", &json!({}));
     assert!(!out.is_error, "the tool itself is still a valid read-only tool when a host asks for it directly");

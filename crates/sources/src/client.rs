@@ -30,6 +30,44 @@ pub fn keychain_keys() -> Keys {
 
 const MAX_BYTES: [(Kind, u64); 3] = [(Kind::Video, 700 * 1024 * 1024), (Kind::Image, 80 * 1024 * 1024), (Kind::Audio, 120 * 1024 * 1024)];
 
+/// The biggest picture shown to Edith, bytes.
+const MAX_LOOK_BYTES: usize = 500_000;
+
+/// A picture to look at: its kind and its bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+/// What kind of picture `b` is, from its first bytes; `None` for anything a model cannot be shown.
+fn sniff_picture(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() >= 12 && b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+/// `n` of `list`, evenly spread from the first to the last (the middle one when `n` is 1).
+fn spread(list: &[String], n: usize) -> Vec<String> {
+    if list.len() <= n {
+        return list.to_vec();
+    }
+    (0..n)
+        .filter_map(|i| {
+            let at = if n == 1 { list.len() / 2 } else { i * (list.len() - 1) / (n - 1) };
+            list.get(at).cloned()
+        })
+        .collect()
+}
+
 pub struct Sources {
     client: Arc<Client>,
     keys: Keys,
@@ -173,10 +211,64 @@ impl Sources {
         Ok(resp.body)
     }
 
+    /// Up to `frames` small pictures of a result, to look at before it is offered: the stills the
+    /// site gives from inside a video (spread through it), else the result's thumbnail. A picture
+    /// that is not a JPEG, PNG, GIF or WebP, or is over 500 KB, is left out; a result that has no
+    /// picture gives an empty list, and a picture that cannot be fetched is an error only when it
+    /// was the one there was.
+    pub fn look_pictures(&self, c: &Candidate, frames: usize, cancel: &Cancel) -> Result<Vec<Picture>, SourceError> {
+        let frames = frames.clamp(1, 3);
+        let mut urls = spread(&c.previews, frames);
+        // NASA gives the stills of a film in the item's list of files, not in the search
+        if urls.is_empty()
+            && c.source == nasa::ID
+            && c.kind == Kind::Video
+            && let Some(manifest) = c.download.as_ref().map(|d| d.url.clone()).filter(|u| u.starts_with("https://images-api.nasa.gov/asset/"))
+        {
+            let body = self.get_up_to(&c.source, &self.at(manifest), &[], cancel, 1024 * 1024)?;
+            urls = spread(&nasa::preview_urls(&body), frames).into_iter().map(|u| self.at(u)).collect();
+        }
+        if urls.is_empty() && c.thumb.starts_with("http") {
+            urls.push(c.thumb.clone());
+        }
+        let mut out = Vec::new();
+        let mut last_error = None;
+        for url in urls {
+            match self.thumbnail(&url, cancel) {
+                Ok(bytes) if bytes.len() <= MAX_LOOK_BYTES => {
+                    if let Some(mime) = sniff_picture(&bytes) {
+                        out.push(Picture { mime, bytes });
+                    }
+                }
+                Ok(_) => {}
+                Err(SourceError::Cancelled) => return Err(SourceError::Cancelled),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        match (out.is_empty(), last_error) {
+            (true, Some(e)) => Err(e),
+            _ => Ok(out),
+        }
+    }
+
     /// Fetches the chosen file to `path`. Returns what was written, with its SHA-256.
     pub fn download(&self, c: &Candidate, path: &Path, cancel: &Cancel, progress: impl FnMut(u64, Option<u64>)) -> Result<Downloaded, SourceError> {
+        self.download_up_to(c, path, cancel, None, progress)
+    }
+
+    /// Like [`Self::download`] but never more than `cap` bytes (a sound fetched only to be listened
+    /// to): a larger file is refused, and a source that can pick between copies picks a small one.
+    pub fn download_up_to(
+        &self,
+        c: &Candidate,
+        path: &Path,
+        cancel: &Cancel,
+        cap: Option<u64>,
+        progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<Downloaded, SourceError> {
         let d = c.download.as_ref().ok_or_else(|| SourceError::Unavailable("this result has no file to download".to_string()))?;
         let max = MAX_BYTES.iter().find(|(k, _)| *k == c.kind).map_or(100 * 1024 * 1024, |(_, m)| *m);
+        let max = cap.map_or(max, |c| c.min(max));
         // An Internet Archive or NASA result names the item, not a file: pick the best file now.
         let url = if d.resolve {
             let body = self.get_up_to(&c.source, &self.at(d.url.clone()), &[], cancel, 16 * 1024 * 1024)?;
@@ -508,6 +600,94 @@ mod tests {
         let e = Sources::new(client(), keys()).with_origin(&bare.url).download(&c, &dir.join("no.mp4"), &cancel(), |_, _| {}).unwrap_err();
         assert!(matches!(e, SourceError::Unavailable(_)), "{e:?}");
         assert!(!dir.join("no.mp4").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn jpeg() -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        b.extend_from_slice(&[7u8; 300]);
+        b
+    }
+
+    #[test]
+    fn a_result_is_shown_as_its_own_stills_spread_through_it_or_its_thumbnail_and_only_real_pictures_pass() {
+        let s = serve(move |_, req| {
+            if req.starts_with("GET /still") {
+                response(200, &[], &jpeg())
+            } else if req.starts_with("GET /text") {
+                response(200, &[], b"<html>not a picture</html>")
+            } else if req.starts_with("GET /big") {
+                let mut b = jpeg();
+                b.resize(600_000, 1);
+                response(200, &[], &b)
+            } else {
+                response(404, &[], b"")
+            }
+        });
+        let sources = Sources::new(client(), keys());
+        let mut c = crate::pexels::parse(Kind::Video, PEXELS_VIDEOS.as_bytes()).unwrap().candidates.remove(0);
+        c.thumb = format!("{}/still-thumb.jpg", s.url);
+        // five stills in the video: three are asked for, the first, the middle and the last
+        c.previews = (1..=5).map(|i| format!("{}/still{i}.jpg", s.url)).collect();
+        let got = sources.look_pictures(&c, 3, &cancel()).unwrap();
+        assert_eq!(got.len(), 3);
+        assert!(got.iter().all(|p| p.mime == "image/jpeg"));
+        let seen: Vec<String> = s.requests.lock().unwrap().iter().map(|r| r.lines().next().unwrap_or("").to_string()).collect();
+        assert!(seen[0].starts_with("GET /still1.jpg") && seen[1].starts_with("GET /still3.jpg") && seen[2].starts_with("GET /still5.jpg"), "{seen:?}");
+        // no stills: the thumbnail
+        c.previews.clear();
+        assert_eq!(sources.look_pictures(&c, 2, &cancel()).unwrap().len(), 1);
+        // something that is not a picture, or is too big to be one worth sending, is left out
+        c.thumb = format!("{}/text", s.url);
+        assert!(sources.look_pictures(&c, 1, &cancel()).unwrap().is_empty());
+        c.thumb = format!("{}/big.jpg", s.url);
+        assert!(sources.look_pictures(&c, 1, &cancel()).unwrap().is_empty());
+        // a picture that cannot be had is an error when it was the only one, and nothing when there is no picture at all
+        c.thumb = format!("{}/missing", s.url);
+        assert!(sources.look_pictures(&c, 1, &cancel()).is_err());
+        c.thumb = String::new();
+        assert!(sources.look_pictures(&c, 1, &cancel()).unwrap().is_empty());
+        assert_eq!(spread(&["a".into(), "b".into(), "c".into(), "d".into()], 1), ["c"]);
+        assert_eq!(sniff_picture(b"RIFF\x00\x00\x00\x00WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_picture(b"GIF89a"), Some("image/gif"));
+    }
+
+    #[test]
+    fn a_nasa_films_stills_come_from_its_list_of_files() {
+        let manifest = r#"{"collection":{"items":[{"href":"http://images-assets.nasa.gov/video/M/M~small_1.jpg"},{"href":"http://images-assets.nasa.gov/video/M/M~small_2.jpg"},{"href":"http://images-assets.nasa.gov/video/M/M~medium.mp4"}]}}"#;
+        let s = serve(move |_, req| {
+            if req.starts_with("GET /asset/") {
+                response(200, &[], manifest.as_bytes())
+            } else if req.starts_with("GET /video/M/M~small_") {
+                response(200, &[], &jpeg())
+            } else {
+                response(404, &[], b"")
+            }
+        });
+        let found = r#"{"collection":{"metadata":{"total_hits":1},"items":[{"data":[{"media_type":"video","nasa_id":"M","title":"Moon"}],"links":[]}]}}"#;
+        let fake = serve(move |_, _| response(200, &[], found.as_bytes()));
+        let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
+        let c = Sources::new(client(), no_key.clone())
+            .with_origin(&fake.url)
+            .search("nasa", &Request { text: "moon".into(), ..Request::default() }, &cancel())
+            .unwrap()
+            .candidates
+            .remove(0);
+        let got = Sources::new(client(), no_key).with_origin(&s.url).look_pictures(&c, 2, &cancel()).unwrap();
+        assert_eq!(got.len(), 2, "two stills from inside the film, not its poster");
+    }
+
+    #[test]
+    fn a_sound_fetched_to_be_listened_to_is_capped() {
+        let s = serve(|_, _| response(200, &[], &[5u8; 9000]));
+        let sources = Sources::new(client(), keys());
+        let doc = r#"{"result_count":1,"results":[{"id":"aaaaaaaa-0000-0000-0000-000000000001","title":"Rain","url":"FILE","license":"cc0","license_version":"1.0","filetype":"mp3"}]}"#;
+        let c = crate::openverse::parse(Kind::Audio, doc.replace("FILE", &format!("{}/rain.mp3", s.url)).as_bytes()).unwrap().candidates.remove(0);
+        let dir = std::env::temp_dir().join(format!("edith-listen-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(sources.download_up_to(&c, &dir.join("a.mp3"), &cancel(), Some(10_000), |_, _| {}).unwrap().bytes, 9000);
+        assert!(sources.download_up_to(&c, &dir.join("b.mp3"), &cancel(), Some(5_000), |_, _| {}).is_err(), "over the cap is refused");
+        assert!(!dir.join("b.mp3").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

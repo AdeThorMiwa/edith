@@ -53,6 +53,7 @@ fn one(v: &Value) -> Option<Candidate> {
         author,
         source_url: url(v, "url"),
         thumb: ["waveform_m", "waveform_l", "spectral_m"].iter().map(|k| url(images, k)).find(|u| !u.is_empty()).unwrap_or_default(),
+        previews: Vec::new(),
         width: None,
         height: None,
         seconds: seconds(v, "duration"),
