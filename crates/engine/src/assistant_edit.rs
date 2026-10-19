@@ -206,6 +206,9 @@ fn planner_get(s: &Session, _p: &Value) -> ToolOutput {
         plan.beat_count(),
         if plan.beat_count() == 1 { "" } else { "s" }
     );
+    if let Some(style) = crate::planner::pack_title_style(s, &plan) {
+        out.push_str(&format!("Title style of the pack: {}\n", style.trim().replace('\n', " ")));
+    }
     let mut shown = 0usize;
     for sec in &plan.sections {
         out.push_str(&format!("\n{}:\n", sec.name));
@@ -235,6 +238,17 @@ fn planner_get(s: &Session, _p: &Value) -> ToolOutput {
             }
             if !b.shots.is_empty() {
                 out.push_str(&format!("    {} shot{}\n", b.shots.len(), if b.shots.len() == 1 { "" } else { "s" }));
+            }
+            let sound: Vec<String> = [
+                (!b.sound.ambience.trim().is_empty()).then(|| format!("bed: {}", b.sound.ambience.trim().replace('\n', " "))),
+                b.sound.music.as_ref().map(|m| format!("music: {}", m.mood.trim())),
+                (!b.sound.cues.is_empty()).then(|| format!("{} cue{}", b.sound.cues.len(), if b.sound.cues.len() == 1 { "" } else { "s" })),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !sound.is_empty() {
+                out.push_str(&format!("    sound plan: {}\n", sound.join("; ")));
             }
         }
     }

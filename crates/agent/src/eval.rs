@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 const BUILTIN: &str = include_str!("../suites/core.json");
 const ROUGH_CUT: &str = include_str!("../suites/rough_cut.json");
+const WHOLE_VIDEO: &str = include_str!("../suites/whole_video.json");
 /// Most characters of an answer kept in a report.
 const MAX_ANSWER: usize = 4000;
 
@@ -33,6 +34,12 @@ pub enum Grader {
         #[serde(default)]
         none: Vec<String>,
     },
+    /// Called `first` and, only after it, `then`: looked before it offered, listened before it chose. Fails when
+    /// either was never called, or `then` came first.
+    CallsInOrder { first: String, then: String },
+    /// What was built passes these checks of the edit (`edit.checks`, including the should-checks): each id named must
+    /// read `pass`. Fails when nothing was built to check, so an assistant that does nothing never passes.
+    ChecksPass { ids: Vec<String> },
     /// The answer names something from each group: every inner list is alternatives (any one will
     /// do), and every group must be satisfied. Matching ignores case, `_` and `-`; a phrase that is
     /// only digits must match a whole number, so `6` is not found inside `26`.
@@ -113,11 +120,13 @@ impl Suite {
     }
 
     /// A suite that ships with the app, by name: `core` (questions about a project) or `rough-cut` (the rough-cut
-    /// workflow: finding media, asking, cutting on word edges, checking, recording progress).
+    /// workflow: finding media, asking, cutting on word edges, checking, recording progress) or `whole-video` (looking
+    /// before offering, sound, titles, polish).
     pub fn named(name: &str) -> Option<Suite> {
         match name {
             "core" => Some(Self::builtin()),
             "rough-cut" => Self::parse(ROUGH_CUT).ok(),
+            "whole-video" => Self::parse(WHOLE_VIDEO).ok(),
             _ => None,
         }
     }
@@ -180,6 +189,9 @@ pub struct GradeContext<'a> {
     /// How many must-pass checks of the finished edit failed; `None` when there was nothing to check or the runner
     /// did not measure.
     pub must_fail: Option<u32>,
+    /// What each check of the finished edit read (`pass`, `fail`, `note`, `needsYou`, `na`), by id; `None` when
+    /// nothing was built to check or the runner did not measure.
+    pub checks: Option<&'a [(String, String)]>,
     pub seconds: f64,
 }
 
@@ -325,6 +337,30 @@ fn grade_one(g: &Grader, events: &[AgentEvent], answer: &str, usage: &Usage, ste
             };
             ("calls_tools", missing.is_empty() && forbidden.is_empty(), detail)
         }
+        Grader::CallsInOrder { first, then } => {
+            let called = tools_called(events);
+            let a = called.iter().position(|t| t == first);
+            let b = called.iter().position(|t| t == then);
+            let detail = match (a, b) {
+                (Some(a), Some(b)) if a < b => format!("{first} came before {then}"),
+                (Some(_), Some(_)) => format!("{then} was called before {first}"),
+                (None, Some(_)) => format!("{then} was called without {first} first"),
+                (Some(_), None) => format!("{then} was never called"),
+                (None, None) => format!("neither {first} nor {then} was called"),
+            };
+            ("calls_in_order", matches!((a, b), (Some(a), Some(b)) if a < b), detail)
+        }
+        Grader::ChecksPass { ids } => match cx.checks {
+            None => ("checks_pass", false, "nothing was built to check, or the runner did not measure it".to_string()),
+            Some(got) => {
+                let not: Vec<String> = ids
+                    .iter()
+                    .filter(|id| got.iter().find(|(i, _)| i == *id).is_none_or(|(_, st)| st != "pass"))
+                    .map(|id| format!("{id} ({})", got.iter().find(|(i, _)| i == id).map_or("not run", |(_, st)| st.as_str())))
+                    .collect();
+                ("checks_pass", not.is_empty(), if not.is_empty() { format!("{} pass", ids.join(", ")) } else { format!("not passing: {}", not.join(", ")) })
+            }
+        },
         Grader::Mentions { groups } => {
             let lacking: Vec<String> = groups.iter().filter(|g| !g.iter().any(|p| phrase_found(answer, p))).map(|g| g.join(" / ")).collect();
             (
@@ -617,7 +653,7 @@ mod tests {
     }
 
     fn cx(unchanged: Option<bool>) -> GradeContext<'static> {
-        GradeContext { read_only: &|n| Some(n != "delete_clip"), price: None, project_unchanged: unchanged, must_fail: None, seconds: 1.5 }
+        GradeContext { read_only: &|n| Some(n != "delete_clip"), price: None, project_unchanged: unchanged, must_fail: None, checks: None, seconds: 1.5 }
     }
 
     fn task(graders: Vec<Grader>) -> Task {
@@ -679,6 +715,58 @@ mod tests {
         assert_eq!((r.steps, r.finish.as_str(), r.tools.clone()), (1, "done", vec!["sequence_view".to_string()]));
         assert!((r.cost_usd.unwrap() - 0.00015).abs() < 1e-9);
         assert_eq!(r.grades.len(), 7, "two always-on checks and five of the task's own");
+    }
+
+    /// A run that called these tools in this order.
+    fn run_in_order(tools: &[&str]) -> Trace {
+        run(tools, "done", Finish::Done)
+    }
+
+    #[test]
+    fn looking_has_to_come_before_offering_and_both_have_to_happen() {
+        let g = Grader::CallsInOrder { first: "media_look".into(), then: "request_download".into() };
+        let t = task(vec![g]);
+        let detail = |tools: &[&str]| {
+            let r = grade(&t, &run_in_order(tools), &cx(None));
+            let c = r.grades.iter().find(|g| g.check == "calls_in_order").unwrap().clone();
+            (c.passed, c.detail)
+        };
+        assert_eq!(detail(&["media_search", "media_look", "request_download"]), (true, "media_look came before request_download".to_string()));
+        assert_eq!(detail(&["media_search", "request_download", "media_look"]), (false, "request_download was called before media_look".to_string()));
+        assert_eq!(detail(&["media_search", "request_download"]), (false, "request_download was called without media_look first".to_string()));
+        assert_eq!(detail(&["media_look"]), (false, "request_download was never called".to_string()));
+        assert_eq!(detail(&[]), (false, "neither media_look nor request_download was called".to_string()));
+    }
+
+    #[test]
+    fn checks_that_must_pass_are_read_from_what_was_built_and_nothing_built_never_passes() {
+        let t = task(vec![Grader::ChecksPass { ids: vec!["musicDucked".into(), "soundUnderIdeas".into()] }]);
+        let got = |c: Option<&[(String, String)]>| {
+            let r = grade(&t, &run(&[], "x", Finish::Done), &GradeContext { checks: c, ..cx(None) });
+            let g = r.grades.iter().find(|g| g.check == "checks_pass").unwrap().clone();
+            (g.passed, g.detail)
+        };
+        let pass = vec![
+            ("musicDucked".to_string(), "pass".to_string()),
+            ("soundUnderIdeas".to_string(), "pass".to_string()),
+            ("pace".to_string(), "note".to_string()),
+        ];
+        assert_eq!(got(Some(&pass)), (true, "musicDucked, soundUnderIdeas pass".to_string()));
+        let note = vec![("musicDucked".to_string(), "note".to_string()), ("soundUnderIdeas".to_string(), "pass".to_string())];
+        assert_eq!(got(Some(&note)), (false, "not passing: musicDucked (note)".to_string()));
+        // `na` is not a pass: nothing there to be ducked is not the same as ducked
+        let na = vec![("musicDucked".to_string(), "na".to_string())];
+        assert_eq!(got(Some(&na)), (false, "not passing: musicDucked (na), soundUnderIdeas (not run)".to_string()));
+        assert!(!got(None).0);
+    }
+
+    #[test]
+    fn the_whole_video_suite_ships_and_every_task_names_a_fixture_and_graders() {
+        let suite = Suite::named("whole-video").expect("it ships");
+        assert_eq!(suite.name, "whole-video");
+        assert_eq!(suite.tasks.len(), 5);
+        assert!(suite.tasks.iter().all(|t| !t.graders.is_empty() && !t.question.is_empty()));
+        assert!(Suite::named("nope").is_none());
     }
 
     #[test]
@@ -778,7 +866,7 @@ mod tests {
                 AgentEvent::ToolResult { id: "t".into(), name: "coach_findings".into(), content: tool.into(), is_error: false, pictures: 0, view: None },
                 AgentEvent::Text { text: answer.into() },
             ];
-            let cx = GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: Some(true), must_fail: None, seconds: 1.0 };
+            let cx = GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: Some(true), must_fail: None, checks: None, seconds: 1.0 };
             let usage = Usage::default();
             grade_one(&Grader::NumbersFromTools { min_numbers: min }, &events, answer, &usage, 1, None, &cx)
         };

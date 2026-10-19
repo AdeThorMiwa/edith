@@ -515,7 +515,7 @@ fn a_thread_trace_collects_every_turn_and_replays_to_the_same_answers() {
     let trace = edith_ai::Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(trace.replies.len(), 3, "both turns' replies are in one trace");
     assert!(trace.events.iter().any(|e| matches!(e, AgentEvent::ToolResult { .. })));
-    assert_eq!(trace.meta.prompt_version, "17");
+    assert_eq!(trace.meta.prompt_version, "18");
     // a new session fed the recorded replies gives the same answers, with its own tools run on its own project
     let mut replay = demo();
     replay.assistant.use_model(Arc::new(trace.replay_model()));

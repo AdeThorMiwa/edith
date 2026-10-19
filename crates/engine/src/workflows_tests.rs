@@ -37,7 +37,7 @@ fn names(v: &Value) -> Vec<String> {
 fn the_shipped_workflow_is_listed_and_the_persons_own_files_join_it_with_the_bad_ones_named() {
     let mut s = demo();
     let list = s.execute("workflow.list", json!({})).unwrap();
-    assert_eq!(names(&list), ["rough-cut-from-narration"]);
+    assert_eq!(names(&list), ["rough-cut-from-narration", "video-from-a-script"]);
     assert_eq!(list["workflows"][0]["yours"], false);
     assert!(list["workflows"][0]["stages"].as_array().unwrap().len() >= 5);
     let dir = with_folder(&mut s, "own");
@@ -51,9 +51,12 @@ fn the_shipped_workflow_is_listed_and_the_persons_own_files_join_it_with_the_bad
     let list = s.execute("workflow.list", json!({})).unwrap();
     let mut got = names(&list);
     got.sort();
-    assert_eq!(got, ["my-montage", "rough-cut-from-narration"]);
-    let yours: Vec<bool> = list["workflows"].as_array().unwrap().iter().map(|w| w["yours"].as_bool().unwrap()).collect();
-    assert!(yours.iter().all(|y| *y), "both are the person's now: {list}");
+    assert_eq!(got, ["my-montage", "rough-cut-from-narration", "video-from-a-script"]);
+    let yours = |name: &str| list["workflows"].as_array().unwrap().iter().find(|w| w["name"] == name).unwrap()["yours"].as_bool().unwrap();
+    assert!(
+        yours("my-montage") && yours("rough-cut-from-narration") && !yours("video-from-a-script"),
+        "the person's own and the one of theirs that replaced a shipped one; the other shipped one is ours: {list}"
+    );
     let problems: Vec<&str> = list["problems"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
     assert_eq!(problems.len(), 3, "{problems:?}");
     assert!(problems.iter().any(|p| p.starts_with("broken.md: ") && p.contains("lowercase letters")), "{problems:?}");
@@ -64,12 +67,12 @@ fn the_shipped_workflow_is_listed_and_the_persons_own_files_join_it_with_the_bad
     // a folder that is not there, or a pile of files, is fine
     let mut t = demo();
     t.prefs_path = Some(std::env::temp_dir().join("filmcraft-no-such-folder").join("preferences.json"));
-    assert_eq!(names(&t.execute("workflow.list", json!({})).unwrap()), ["rough-cut-from-narration"]);
+    assert_eq!(names(&t.execute("workflow.list", json!({})).unwrap()), ["rough-cut-from-narration", "video-from-a-script"]);
     let lots = with_folder(&mut t, "lots");
     for k in 0..60 {
         std::fs::write(lots.join(format!("w{k:02}.md")), MINE.replace("my-montage", &format!("flow-{k:02}"))).unwrap();
     }
-    assert!(names(&t.execute("workflow.list", json!({})).unwrap()).len() <= 51, "only the first 50 files are read");
+    assert!(names(&t.execute("workflow.list", json!({})).unwrap()).len() <= 52, "only the first 50 files are read, besides the two that ship");
 }
 
 #[test]

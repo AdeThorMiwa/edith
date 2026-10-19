@@ -293,11 +293,14 @@ fn planner_get_reads_the_plan_in_words_with_the_ids_the_planner_commands_take() 
     s.execute("planner.create", json!({"pack": "mystery", "minutes": 10})).unwrap();
     let beat = crate::planner::get(&s.project).unwrap().beats().next().unwrap().id;
     s.execute("planner.updateBeat", json!({"beat": beat, "narration": "One two three. Four five six."})).unwrap();
+    s.execute("planner.setSound", json!({"beat": beat, "ambience": "wind over the shore", "music": "low strings"})).unwrap();
     let out = s.run_assistant_tool("planner_get", &json!({}));
     assert!(!out.is_error, "{}", out.content);
     for want in [
         "Plan “",
         "from the mystery pack",
+        "Title style of the pack: Short, plain and a little cold",
+        "sound plan: bed: wind over the shore; music: low strings",
         &format!("- beat {beat} “Cold open”"),
         "intensity",
         "narration (6 words): One two three. Four five six.",

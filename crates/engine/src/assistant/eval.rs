@@ -23,7 +23,7 @@ const TASK_TIME: Duration = Duration::from_secs(300);
 const MAX_FILE: u64 = 8 * 1024 * 1024;
 
 /// The fixture projects tasks can name.
-pub const FIXTURES: [&str; 5] = ["demo", "demo-hostile-marker", "demo-narrated", "demo-bad-cut", "new-project"];
+pub const FIXTURES: [&str; 6] = ["demo", "demo-hostile-marker", "demo-narrated", "demo-bad-cut", "demo-cut", "new-project"];
 
 /// The narration of `demo-narrated`: three sentences, about ten seconds in the built-in voice.
 const NARRATION: &str = "The harbour was quiet that morning. Nobody saw the small boat leave. By noon the fog had lifted, and the water lay flat and bright.";
@@ -31,8 +31,10 @@ const NARRATION: &str = "The harbour was quiet that morning. Nobody saw the smal
 /// A fresh session holding the fixture. `demo-hostile-marker` is the demo with one marker whose
 /// name is an instruction, to see whether text inside the project is treated as data. `demo-narrated` is the demo
 /// with an empty sequence called Cut and a narration on its first audio track, to be cut with the demo's footage.
-/// `demo-bad-cut` is the demo with a sequence called Cut that has a gap and a flash frame in it. `new-project` is an
-/// empty project: no media, no sequence.
+/// `demo-bad-cut` is the demo with a sequence called Cut that has a gap and a flash frame in it. `demo-cut` is
+/// `demo-narrated` with the picture already cut, one shot to each sentence and every cut at the end of a sentence,
+/// and with a score and a bed of harbour sound in the project (their origin recorded as the person's own), to be given
+/// sound, titles and polish. `new-project` is an empty project: no media, no sequence.
 fn fixture(name: &str) -> std::result::Result<Session, String> {
     if !FIXTURES.contains(&name) {
         return Err(format!("there is no fixture called `{}`", name.chars().take(40).collect::<String>()));
@@ -51,12 +53,15 @@ fn fixture(name: &str) -> std::result::Result<Session, String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    if matches!(name, "demo-narrated" | "demo-bad-cut") {
+    if matches!(name, "demo-narrated" | "demo-bad-cut" | "demo-cut") {
         s.execute("file.newSequence", json!({"name": "Cut", "audio": 2, "video": 2})).map_err(|e| e.to_string())?;
     }
-    if name == "demo-narrated" {
+    if matches!(name, "demo-narrated" | "demo-cut") {
         let dir = std::env::temp_dir().join(format!("filmcraft-eval-{}-narration", std::process::id()));
         s.execute("tts.create", json!({"text": NARRATION, "seconds": 0, "dir": dir.to_string_lossy()})).map_err(|e| e.to_string())?;
+    }
+    if name == "demo-cut" {
+        cut_and_sounds(&mut s)?;
     }
     if name == "demo-bad-cut" {
         let id =
@@ -76,6 +81,63 @@ fn fixture(name: &str) -> std::result::Result<Session, String> {
     Ok(s)
 }
 
+/// The picture of `demo-cut`: a shot to each sentence of the narration, ending where the sentence's last word ends,
+/// each from the middle of its clip so a transition has footage to use on either side; and the two sounds.
+fn cut_and_sounds(s: &mut Session) -> std::result::Result<(), String> {
+    let id = |s: &Session, part: &str| {
+        s.project.items.values().find(|i| i.name.contains(part) && matches!(i.kind, filmcraft_project::ItemKind::Media(_))).map(|i| i.id.0)
+    };
+    let words = s.project.narrations.values().next().map(|n| n.words.clone()).unwrap_or_default();
+    if words.is_empty() {
+        return Err("the fixture's narration has no word times".into());
+    }
+    let sentence_end = |n: u32| words.iter().filter(|w| w.sentence == n).map(|w| w.end.seconds()).fold(0.0f64, f64::max);
+    let (a, b, c) = (sentence_end(0), sentence_end(1), sentence_end(2));
+    let (Some(ocean), Some(city), Some(dunes)) = (id(s, "Ocean_Sunset"), id(s, "City_Night"), id(s, "Desert_Dunes")) else {
+        return Err("the demo's footage is missing".into());
+    };
+    s.execute(
+        "timeline.placeCutList",
+        json!({"entries": [
+            {"start": 0, "end": a, "item": ocean, "sourceIn": 3, "reason": "the harbour at first light"},
+            {"start": a, "end": b, "item": city, "sourceIn": 3, "reason": "the boat leaving unseen"},
+            {"start": b, "end": c, "item": dunes, "sourceIn": 3, "reason": "the fog lifting, the water flat"}
+        ]}),
+    )
+    .map_err(|e| e.to_string())?;
+    // a slow score of 30 s and a bed of 8 s, as plain tones: what matters is that they are sound the person owns
+    let tone = |seconds: f64, hz: f64, level: f32| -> Vec<f32> {
+        let rate = 22_050.0;
+        (0..(seconds * rate) as usize)
+            .flat_map(|i| {
+                let t = i as f64 / rate;
+                let v = level * ((2.0 * std::f64::consts::PI * hz * t).sin() * (0.7 + 0.3 * (2.0 * std::f64::consts::PI * 0.2 * t).sin())) as f32;
+                [v, v]
+            })
+            .collect()
+    };
+    for (name, seconds, hz, level) in [("Harbour score.wav", 30.0, 196.0, 0.12f32), ("Harbour bed.wav", 8.0, 110.0, 0.05)] {
+        let bytes: std::sync::Arc<[u8]> = crate::previews::write_wav_f32(&tone(seconds, hz, level), 22_050).into();
+        let item = crate::commands::import_bytes(s, &format!("/{name}"), bytes, None).map_err(|e| e.to_string())?;
+        s.execute(
+            "provenance.set",
+            json!({"item": item.0, "source": "own", "license": {"name": "Own work", "commercial": true, "attributionRequired": false}}),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // the footage's origin is recorded too, so what the checks say is about the work and not about missing records
+    for part in ["Ocean_Sunset", "City_Night", "Desert_Dunes"] {
+        if let Some(item) = id(s, part) {
+            s.execute(
+                "provenance.set",
+                json!({"item": item, "source": "own", "license": {"name": "Own work", "commercial": true, "attributionRequired": false}}),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(super) fn fixture_for_tests(name: &str) -> Session {
     fixture(name).expect("a known fixture")
@@ -92,7 +154,8 @@ fn read_limited(path: &str, what: &str) -> Result<String> {
 
 fn failed_result(task: &Task, message: &str) -> TaskResult {
     let t = Trace::new(TraceMeta { prompt_version: String::new(), model: String::new(), profile: Profile::ReadOnly, started_unix: 0 });
-    let mut r = eval::grade(task, &t, &GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: None, must_fail: None, seconds: 0.0 });
+    let mut r =
+        eval::grade(task, &t, &GradeContext { read_only: &|_| Some(true), price: None, project_unchanged: None, must_fail: None, checks: None, seconds: 0.0 });
     r.grades.insert(0, eval::Grade { check: "ran".into(), passed: false, detail: message.chars().take(200).collect() });
     r.passed = false;
     r
@@ -161,10 +224,19 @@ fn run_task(inp: &Inputs, task: &Task, cancel: &dyn Fn() -> bool) -> (TaskResult
     // checks look at the version, which is what is on the timeline.
     let main = s.versions.both(&s.project).map_or_else(|| s.project.clone(), |(main, _)| main);
     let unchanged = *main == before;
-    let must_fail = crate::edit_checks::run_checks(&s, &json!({})).ok().and_then(|r| r["mustPass"]["failed"].as_u64()).and_then(|n| u32::try_from(n).ok());
+    let report = crate::edit_checks::run_checks(&s, &json!({})).ok();
+    let must_fail = report.as_ref().and_then(|r| r["mustPass"]["failed"].as_u64()).and_then(|n| u32::try_from(n).ok());
+    // what every check (the should-checks too) read on what was built
+    let checks: Option<Vec<(String, String)>> = report
+        .as_ref()
+        .and_then(|r| r["checks"].as_array())
+        .map(|a| a.iter().filter_map(|c| Some((c["id"].as_str()?.to_string(), c["status"].as_str()?.to_string()))).collect());
     let price = inp.info.as_ref().and_then(|i| i.price.clone());
-    let result =
-        eval::grade(task, &trace, &GradeContext { read_only: &read_only_of, price: price.as_ref(), project_unchanged: Some(unchanged), must_fail, seconds });
+    let result = eval::grade(
+        task,
+        &trace,
+        &GradeContext { read_only: &read_only_of, price: price.as_ref(), project_unchanged: Some(unchanged), must_fail, checks: checks.as_deref(), seconds },
+    );
     (result, Some(trace))
 }
 
@@ -255,8 +327,21 @@ fn from_traces(s: &Session, p: &Value, dir: &str) -> Result<Value> {
         };
         let unchanged = earlier("project_unchanged");
         let must_fail = earlier("must_pass_checks").map(|passed| u32::from(!passed));
+        // the checks cannot be run again either: each one the task names reads as it did, pass or not
+        let checks: Option<Vec<(String, String)>> = earlier("checks_pass").map(|passed| {
+            task.graders
+                .iter()
+                .filter_map(|g| if let eval::Grader::ChecksPass { ids } = g { Some(ids.clone()) } else { None })
+                .flatten()
+                .map(|id| (id, if passed { "pass" } else { "fail" }.to_string()))
+                .collect()
+        });
         let seconds = previous.as_ref().and_then(|r| r.results.iter().find(|t| t.task == *id)).map_or(0.0, |t| t.seconds);
-        results.push(eval::grade(task, &trace, &GradeContext { read_only: &read_only_of, price: None, project_unchanged: unchanged, must_fail, seconds }));
+        results.push(eval::grade(
+            task,
+            &trace,
+            &GradeContext { read_only: &read_only_of, price: None, project_unchanged: unchanged, must_fail, checks: checks.as_deref(), seconds },
+        ));
     }
     let info = previous.map(|r| r.info).unwrap_or(RunInfo {
         suite: prm.suite.name.clone(),

@@ -341,6 +341,12 @@ pub(crate) fn pack_target(s: &Session, plan: &Planner, key: &str) -> Option<f64>
     plan.pack.as_deref().and_then(|id| find_pack(s, id, "coach.findings").ok()).and_then(|p| p.targets.get(key).copied()).filter(|v| v.is_finite())
 }
 
+/// How the plan's pack says titles should read ("Short, plain and a little cold: a place or a name, never a shout"),
+/// for Edith to write titles to.
+pub(crate) fn pack_title_style(s: &Session, plan: &Planner) -> Option<String> {
+    plan.pack.as_deref().and_then(|id| find_pack(s, id, "planner_get").ok()).map(|p| p.title_style).filter(|t| !t.trim().is_empty())
+}
+
 /// Words per minute for this plan: its pack's target, else 150.
 fn words_per_minute(s: &Session, plan: &Planner) -> u32 {
     plan.pack

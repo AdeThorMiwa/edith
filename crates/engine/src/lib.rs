@@ -1479,6 +1479,8 @@ mod vfx_tests;
 #[cfg(test)]
 mod voiceover_tests;
 #[cfg(test)]
+mod whole_video_eval_tests;
+#[cfg(test)]
 mod workflows_tests;
 
 #[cfg(test)]

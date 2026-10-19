@@ -236,24 +236,28 @@ fn graded_again_from_saved_traces_the_new_graders_give_the_same_verdicts() {
 }
 
 #[test]
-fn the_shipped_workflow_names_only_tools_and_commands_that_exist() {
-    let w = edith_ai::workflow::builtin().into_iter().find(|w| w.name == "rough-cut-from-narration").expect("the rough cut");
+fn every_shipped_workflow_names_only_tools_and_commands_that_exist() {
+    let all = edith_ai::workflow::builtin();
+    assert!(all.iter().any(|w| w.name == "rough-cut-from-narration") && all.iter().any(|w| w.name == "video-from-a-script"));
     let tools: Vec<String> = crate::assistant_tools::tools().into_iter().map(|t| t.spec.name).collect();
     let commands: Vec<&str> = crate::commands::command_specs().iter().map(|c| c.id).collect();
     // words in backticks that are parameters, not tools
-    let parameters = ["beat", "move"];
-    let mut named = 0;
-    for token in w.body.split('`').skip(1).step_by(2) {
-        if token.contains(' ') || token.len() > 40 {
-            continue;
+    let parameters = ["beat", "move", "measure", "dryRun", "loop"];
+    for w in &all {
+        let mut named = 0;
+        for token in w.body.split('`').skip(1).step_by(2) {
+            if token.contains(' ') || token.len() > 40 {
+                continue;
+            }
+            named += 1;
+            assert!(
+                tools.iter().any(|t| t == token) || commands.contains(&token) || parameters.contains(&token),
+                "the workflow {} names `{token}`, which is neither a tool nor a command",
+                w.name
+            );
         }
-        named += 1;
-        assert!(
-            tools.iter().any(|t| t == token) || commands.contains(&token) || parameters.contains(&token),
-            "the workflow names `{token}`, which is neither a tool nor a command"
-        );
+        assert!(named >= 15, "the workflow {} names its tools: {named}", w.name);
     }
-    assert!(named >= 15, "the workflow names its tools: {named}");
 }
 
 #[test]

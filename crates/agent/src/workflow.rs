@@ -156,7 +156,10 @@ pub fn parse(text: &str) -> Result<Workflow, String> {
 
 /// The workflows that ship with Edith.
 pub fn builtin() -> Vec<Workflow> {
-    [include_str!("../workflows/rough-cut-from-narration.md")].into_iter().filter_map(|t| parse(t).ok()).collect()
+    [include_str!("../workflows/rough-cut-from-narration.md"), include_str!("../workflows/video-from-a-script.md")]
+        .into_iter()
+        .filter_map(|t| parse(t).ok())
+        .collect()
 }
 
 #[cfg(test)]

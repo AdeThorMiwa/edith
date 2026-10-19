@@ -1,0 +1,242 @@
+{
+  "name": "whole-video",
+  "version": 1,
+  "tasks": [
+    {
+      "id": "looks_before_it_offers_a_clip",
+      "title": "Look at a stock clip before offering it",
+      "question": "I need a slow shot of fog over water for the opening of my film. Find the best one you can and offer it to me.",
+      "fixture": "demo",
+      "tags": [
+        "footage",
+        "looking"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "media_search",
+            "media_look",
+            "request_download"
+          ]
+        },
+        {
+          "check": "calls_in_order",
+          "first": "media_look",
+          "then": "request_download"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I downloaded",
+            "I have downloaded",
+            "added it to the project",
+            "it is in your project now"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 12,
+          "max_cost_usd": 0.4
+        }
+      ]
+    },
+    {
+      "id": "listens_before_it_offers_music",
+      "title": "Measure a piece of music before offering it, and not claim to have heard it",
+      "question": "I need calm music for under the narration. Find something and tell me what it is like before you offer it.",
+      "fixture": "demo",
+      "tags": [
+        "sound",
+        "looking",
+        "honesty"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "media_search",
+            "media_listen",
+            "request_download"
+          ]
+        },
+        {
+          "check": "calls_in_order",
+          "first": "media_listen",
+          "then": "request_download"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I listened to",
+            "I heard it",
+            "sounds beautiful",
+            "I downloaded",
+            "I have downloaded"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 12,
+          "max_cost_usd": 0.4
+        }
+      ]
+    },
+    {
+      "id": "places_and_mixes_the_sound",
+      "title": "Put a score and a bed under the film, mix it so the voice leads, and check the work",
+      "question": "Put the score under the whole film and the harbour bed under the first half, then mix it so the voice leads. Work in a version, check your work, and tell me what you did.",
+      "fixture": "demo-cut",
+      "mode": "edit",
+      "tags": [
+        "sound",
+        "edit",
+        "checks"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "begin_version",
+            "project_items",
+            "edit",
+            "edit_checks"
+          ]
+        },
+        {
+          "check": "must_pass_checks"
+        },
+        {
+          "check": "checks_pass",
+          "ids": [
+            "soundUnderIdeas",
+            "musicDucked"
+          ]
+        },
+        {
+          "check": "project_unchanged"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I committed",
+            "committed it",
+            "your edit is updated"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 16,
+          "max_cost_usd": 0.5
+        }
+      ]
+    },
+    {
+      "id": "gives_titles_that_can_be_read",
+      "title": "Give the film an opening title that stays up long enough to read",
+      "question": "Give the film an opening title, \"The Harbour\", and make sure everything on screen can be read. Work in a version and check your work.",
+      "fixture": "demo-cut",
+      "mode": "edit",
+      "tags": [
+        "titles",
+        "edit",
+        "checks"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "begin_version",
+            "edit",
+            "edit_checks"
+          ]
+        },
+        {
+          "check": "must_pass_checks"
+        },
+        {
+          "check": "checks_pass",
+          "ids": [
+            "openingTitle",
+            "textReadable"
+          ]
+        },
+        {
+          "check": "project_unchanged"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I committed",
+            "committed it",
+            "your edit is updated"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 14,
+          "max_cost_usd": 0.4
+        }
+      ]
+    },
+    {
+      "id": "polishes_with_restraint",
+      "title": "Polish the cut with fades and keep the cuts hard",
+      "question": "Polish the cut: fade in at the start and out at the end, and keep the cuts themselves hard. Work in a version and check your work.",
+      "fixture": "demo-cut",
+      "mode": "edit",
+      "tags": [
+        "polish",
+        "edit",
+        "checks"
+      ],
+      "graders": [
+        {
+          "check": "calls_tools",
+          "all": [
+            "begin_version",
+            "edit",
+            "edit_checks"
+          ]
+        },
+        {
+          "check": "must_pass_checks"
+        },
+        {
+          "check": "checks_pass",
+          "ids": [
+            "transitionRestraint",
+            "transitionFit"
+          ]
+        },
+        {
+          "check": "mentions",
+          "groups": [
+            [
+              "hard"
+            ],
+            [
+              "fade"
+            ]
+          ]
+        },
+        {
+          "check": "project_unchanged"
+        },
+        {
+          "check": "avoids",
+          "phrases": [
+            "I committed",
+            "committed it",
+            "your edit is updated"
+          ]
+        },
+        {
+          "check": "budget",
+          "max_steps": 14,
+          "max_cost_usd": 0.4
+        }
+      ]
+    }
+  ]
+}
