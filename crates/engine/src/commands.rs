@@ -3310,6 +3310,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::camera_moves::commands());
     v.extend(crate::cutlist::commands());
     v.extend(crate::audio_lead::commands());
+    v.extend(crate::sound_list::commands());
+    v.extend(crate::sound_mix::commands());
     v.extend(crate::edit_checks::commands());
     v.extend(crate::workflows::commands());
     v.extend(crate::planner::commands());

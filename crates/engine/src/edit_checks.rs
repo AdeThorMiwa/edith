@@ -6,7 +6,8 @@
 //!    plan's ideas, every shot's length within the video type's range, no clip with a licence that forbids the
 //!    use, and no dead air the sound plan did not ask for.
 //! 2. **Should.** Measured and reported, not blocking: the pace against the plan, footage used twice in a row or
-//!    too soon again, stills with no camera move.
+//!    too soon again, stills with no camera move, sound under the ideas that want it, music and ambience lowered
+//!    under the voice, and (when asked with `measure`) the loudness of the whole mix near the target.
 //! 3. **Taste.** Whether a picture illustrates the idea, whether something carries across the cut, whether it
 //!    feels right: only the person decides, so the report says so and does not score it.
 //!
@@ -14,11 +15,13 @@
 //! clip whose origin is not recorded: flagged, never a reason to stop), `note` (a should-check worth a look) and
 //! `na` (nothing to check: no narration, no plan placed on the timeline).
 //!
-//! `edit.checks {from?, to?, beat?}` looks at the whole edit, or only the stretch between `from` and `to`, or
-//! one idea of the plan (`beat`: its id), so a single idea can be checked before the next is cut.
+//! `edit.checks {from?, to?, beat?, measure?, targetLufs?}` looks at the whole edit, or only the stretch between `from`
+//! and `to`, or one idea of the plan (`beat`: its id), so a single idea can be checked before the next is cut. The
+//! mix's loudness is measured only when `measure` is true (it plays the mix through the mixer, which takes a moment);
+//! the aim is `targetLufs` (default -16, a YouTube delivery level) within 2 LU.
 //!
-//! Read-only. The numbers are the timeline's own; nothing here measures pixels or audio except the sound map's
-//! dead-air finding, which only reads where clips sit.
+//! Read-only. The numbers are the timeline's own; nothing here measures pixels, and audio only when `measure` is
+//! asked for. Every clip with a licence on record counts for the rights check, pictures and sound alike.
 
 use edith_ai::ToolOutput;
 use filmcraft_project::{ItemId, ItemKind};
@@ -81,6 +84,34 @@ fn shots(s: &Session) -> Vec<Shot> {
                 still,
                 moves: it.effects.iter().any(|e| e.params.iter().any(|(_, p)| !p.keyframes.is_empty())),
             });
+        }
+    }
+    out.sort_by_key(|x| (x.start, x.end));
+    out
+}
+
+/// A clip of the music, ambience or effects lane, in time.
+struct Sound {
+    item: ItemId,
+    name: String,
+    start: i64,
+    end: i64,
+    lane: crate::sound_list::Lane,
+    /// Its level is animated (the ducking writes keyframes there).
+    ducked: bool,
+}
+
+fn sounds(s: &Session) -> Vec<Sound> {
+    let Some(q) = s.active_sequence() else { return Vec::new() };
+    let mut out: Vec<Sound> = Vec::new();
+    for t in q.audio_tracks.iter().filter(|t| t.enabled) {
+        for it in t.items.iter().filter(|it| it.enabled && it.duration.0 > 0) {
+            if s.project.narrations.contains_key(&it.item) {
+                continue;
+            }
+            let Some(lane) = crate::sound_list::lane_of(s, it, &t.name) else { continue };
+            let ducked = it.effect("volume").and_then(|e| e.param("level")).is_some_and(|p| p.is_animated());
+            out.push(Sound { item: it.item, name: it.name.clone(), start: it.start.0, end: it.end().0, lane, ducked });
         }
     }
     out.sort_by_key(|x| (x.start, x.end));
@@ -272,22 +303,28 @@ fn shot_lengths(s: &Session, shots: &[Shot], scope: &Scope) -> Value {
     check("shotLengths", "must", status_of(&issues, "fail"), title, summary, issues)
 }
 
-fn rights(s: &Session, shots: &[Shot], scope: &Scope) -> Value {
+fn rights(s: &Session, shots: &[Shot], sounds: &[Sound], scope: &Scope) -> Value {
     let title = "Every clip's rights are known";
     let mut seen: Vec<ItemId> = Vec::new();
     let mut forbidden = Vec::new();
     let mut unknown = Vec::new();
-    for sh in shots.iter().filter(|x| scope.holds(x.start, x.end)) {
-        if seen.contains(&sh.item) {
+    // pictures and sound alike: music from a stock site has a licence too
+    let mut used: Vec<(ItemId, &str, i64, i64)> = shots
+        .iter()
+        .map(|x| (x.item, x.name.as_str(), x.start, x.end))
+        .chain(sounds.iter().map(|x| (x.item, x.name.as_str(), x.start, x.end)))
+        .filter(|(_, _, a, b)| scope.holds(*a, *b))
+        .collect();
+    used.sort_by_key(|x| x.2);
+    for (item, name, start, _) in used {
+        if seen.contains(&item) {
             continue;
         }
-        seen.push(sh.item);
-        match crate::provenance::get(&s.project, sh.item) {
-            None => unknown.push(issue(
-                sh.start,
-                format!("“{}” has no record of where it came from: the person confirms it is theirs or licensed (Credits and Rights)", sh.name),
-            )),
-            Some(r) if r.status() == Status::Risk => forbidden.push(issue(sh.start, format!("“{}”: {}", sh.name, r.summary()))),
+        seen.push(item);
+        match crate::provenance::get(&s.project, item) {
+            None => unknown
+                .push(issue(start, format!("“{name}” has no record of where it came from: the person confirms it is theirs or licensed (Credits and Rights)"))),
+            Some(r) if r.status() == Status::Risk => forbidden.push(issue(start, format!("“{name}”: {}", r.summary()))),
             Some(_) => {}
         }
     }
@@ -400,6 +437,147 @@ fn stills_move(shots: &[Shot], scope: &Scope) -> Value {
     check("stillsMove", "should", status_of(&issues, "note"), title, summary, issues)
 }
 
+/// The share of `[a, b)` that sound of `lane` covers (the sounds of one lane do not overlap).
+fn covered(sounds: &[Sound], lane: crate::sound_list::Lane, a: i64, b: i64) -> f64 {
+    if b <= a {
+        return 1.0;
+    }
+    let got: i64 = sounds.iter().filter(|x| x.lane == lane).map(|x| (x.end.min(b) - x.start.max(a)).max(0)).sum();
+    got as f64 / (b - a) as f64
+}
+
+fn sound_under_ideas(s: &Session, sounds: &[Sound], scope: &Scope) -> Value {
+    use crate::sound_list::Lane;
+    let title = "Sound under the ideas that want it";
+    let wanting: Vec<crate::soundplan::Place> = crate::soundplan::places(s)
+        .into_iter()
+        .filter(|p| p.beat.link.is_some() && scope.holds(p.start, p.start + p.length))
+        .filter(|p| !p.beat.sound.ambience.trim().is_empty() || p.beat.sound.music.is_some())
+        .collect();
+    let voice = !crate::narration_timings::spoken_spans(s).is_empty();
+    if wanting.is_empty() {
+        let here = sounds.iter().filter(|x| scope.holds(x.start, x.end)).count();
+        return if here == 0 && voice {
+            check(
+                "soundUnderIdeas",
+                "should",
+                "note",
+                title,
+                "nothing sounds but the voice: no music, ambience or effects in the lanes (if silence is meant, say so; otherwise a bed or a score)".into(),
+                Vec::new(),
+            )
+        } else if here == 0 {
+            check("soundUnderIdeas", "should", "na", title, "no sound in the lanes and nothing speaks".into(), Vec::new())
+        } else {
+            check(
+                "soundUnderIdeas",
+                "should",
+                "pass",
+                title,
+                format!("{} in the lanes; the plan names no bed or music for an idea that has none under it", plural(here, "sound", "sounds")),
+                Vec::new(),
+            )
+        };
+    }
+    let mut issues = Vec::new();
+    for p in &wanting {
+        let (a, b) = (p.start, p.start + p.length);
+        if !p.beat.sound.ambience.trim().is_empty() && covered(sounds, Lane::Ambience, a, b) < 0.8 {
+            issues.push(issue(
+                a,
+                format!(
+                    "“{}” plans a bed ({}) but little or nothing sounds under it from {} to {}",
+                    p.beat.name,
+                    p.beat.sound.ambience.trim(),
+                    clock(a),
+                    clock(b)
+                ),
+            ));
+        }
+        if let Some(m) = &p.beat.sound.music {
+            let (ma, mb) = (a + m.enters.0, m.leaves.map_or(b, |l| a + l.0));
+            if covered(sounds, Lane::Music, ma, mb.max(ma)) < 0.8 {
+                issues
+                    .push(issue(ma, format!("“{}” plans music ({}) but little or none plays from {} to {}", p.beat.name, m.mood.trim(), clock(ma), clock(mb))));
+            }
+        }
+    }
+    let summary = if issues.is_empty() {
+        format!("every one of the {} that plan a bed or music has it", plural(wanting.len(), "idea", "ideas"))
+    } else {
+        format!("{} planned sound that is missing", plural(issues.len(), "piece of", "pieces of"))
+    };
+    check("soundUnderIdeas", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
+fn music_ducked(s: &Session, sounds: &[Sound], scope: &Scope) -> Value {
+    use crate::sound_list::Lane;
+    let title = "Music and ambience lowered under the voice";
+    let spoken = crate::narration_timings::spoken_spans(s);
+    let bed: Vec<&Sound> = sounds.iter().filter(|x| matches!(x.lane, Lane::Music | Lane::Ambience) && scope.holds(x.start, x.end)).collect();
+    if spoken.is_empty() || bed.is_empty() {
+        let why = if spoken.is_empty() { "nothing speaks" } else { "there is no music or ambience in the lanes" };
+        return check("musicDucked", "should", "na", title, format!("{why}, so there is nothing to lower"), Vec::new());
+    }
+    let mut issues = Vec::new();
+    for b in bed {
+        let under: Vec<&(filmcraft_time::Tick, filmcraft_time::Tick, String)> = spoken.iter().filter(|(a, z, _)| a.0 < b.end && z.0 > b.start).collect();
+        if let (false, Some(first)) = (b.ducked, under.first()) {
+            let at = first.0.0.max(b.start);
+            issues.push(issue(at, format!("“{}” plays under the voice from {} but its level is not lowered there; sound.autoMix ducks it", b.name, clock(at))));
+        }
+    }
+    let summary = if issues.is_empty() {
+        "every music or ambience clip that plays under the voice dips for it".to_string()
+    } else {
+        format!("{} under the voice at full level", plural(issues.len(), "clip plays", "clips play"))
+    };
+    check("musicDucked", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
+fn mix_loudness(s: &Session, p: &Value, scope: &Scope) -> Result<Value> {
+    let title = "Mix loudness near the target";
+    let target = match p.get("targetLufs").filter(|v| !v.is_null()) {
+        None => crate::sound_mix::DIALOGUE_LUFS,
+        Some(v) => v
+            .as_f64()
+            .filter(|x| x.is_finite() && (-60.0..=0.0).contains(x))
+            .ok_or_else(|| bad("edit.checks", "`targetLufs` must be a loudness from -60 to 0"))?,
+    };
+    if p.get("measure").and_then(Value::as_bool) != Some(true) {
+        return Ok(check(
+            "mixLoudness",
+            "should",
+            "na",
+            title,
+            "not measured; ask with measure: true (it plays the whole mix through the mixer, which takes a moment)".into(),
+            Vec::new(),
+        ));
+    }
+    let (from, to) = (filmcraft_time::Tick(scope.from), filmcraft_time::Tick(scope.to));
+    Ok(match crate::sound_mix::mix_lufs(s, from, to) {
+        None => check("mixLoudness", "should", "na", title, "the mix is silent here, so it has no loudness".into(), Vec::new()),
+        Some(l) if (l - target).abs() <= 2.0 => {
+            check("mixLoudness", "should", "pass", title, format!("the mix measures {l:.1} LUFS; the aim is {target:.0} within 2"), Vec::new())
+        }
+        Some(l) => check(
+            "mixLoudness",
+            "should",
+            "note",
+            title,
+            format!(
+                "the mix measures {l:.1} LUFS; the aim is {target:.0} within 2 ({})",
+                if l < target {
+                    "too quiet: sound.autoMix, or the sequence's master level"
+                } else {
+                    "too loud: sound.autoMix, or lower the sequence's master level"
+                }
+            ),
+            Vec::new(),
+        ),
+    })
+}
+
 // ---------------------------------------------------------------------------- the command
 
 fn scope_of(s: &Session, p: &Value, cmd: &str, end: i64) -> Result<Scope> {
@@ -430,6 +608,7 @@ pub(crate) fn run_checks(s: &Session, p: &Value) -> Result<Value> {
     let cmd = "edit.checks";
     let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let all = shots(s);
+    let lanes = sounds(s);
     let spoken_end = crate::narration_timings::spoken_spans(s).last().map_or(0, |w| w.1.0);
     let end = all.iter().map(|x| x.end).max().unwrap_or(0).max(spoken_end);
     if end <= 0 {
@@ -442,11 +621,14 @@ pub(crate) fn run_checks(s: &Session, p: &Value) -> Result<Value> {
         cuts_on_words(s, &all, &scope),
         idea_boundaries(s, &all, &scope),
         shot_lengths(s, &all, &scope),
-        rights(s, &all, &scope),
+        rights(s, &all, &lanes, &scope),
         dead_air(s, &scope),
         pace(s, &all, &scope),
         variety(&all, &scope),
         stills_move(&all, &scope),
+        sound_under_ideas(s, &lanes, &scope),
+        music_ducked(s, &lanes, &scope),
+        mix_loudness(s, p, &scope)?,
     ];
     let count = |layer: &str, status: &str| checks.iter().filter(|c| c["layer"] == layer && c["status"] == status).count();
     let failed = count("must", "fail");
@@ -475,7 +657,7 @@ pub fn commands() -> Vec<CommandSpec> {
         label: "Check the Edit",
         menu: &[],
         shortcut: None,
-        params: r#"{"from":time?,"to":time?,"beat":id?}"#,
+        params: r#"{"from":time?,"to":time?,"beat":id?,"measure":bool?,"targetLufs":lufs?}"#,
         enabled: has_seq,
         run: checks_cmd,
         journal: false,
@@ -545,11 +727,13 @@ fn edit_checks(s: &Session, input: &Value) -> ToolOutput {
 pub(crate) fn tools() -> Vec<ToolDef> {
     vec![def(
         "edit_checks",
-        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move. Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
+        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move, sound under the ideas that want it, music and ambience lowered under the voice, and with `measure: true` the loudness of the whole mix near -16 LUFS (it plays the mix through the mixer, so ask once the sound is placed and mixed). Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
         json!({
             "beat": {"type": "integer", "description": "Check only this idea of the plan (its beat id, placed on the timeline)."},
             "from": {"type": "string", "description": "Check only from this timeline time (seconds, \"1:25\", or a timecode)."},
             "to": {"type": "string", "description": "Check only up to this timeline time."},
+            "measure": {"type": "boolean", "description": "Also measure the loudness of the mix (takes a moment). Default false."},
+            "targetLufs": {"type": "number", "description": "The loudness the mix should be near, -60 to 0 (default -16)."},
         }),
         edit_checks,
     )]

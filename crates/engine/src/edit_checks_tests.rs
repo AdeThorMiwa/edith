@@ -10,7 +10,10 @@ use serde_json::{Value, json};
 use crate::Session;
 
 fn tmp(name: &str) -> String {
-    let d = std::env::temp_dir().join(format!("filmcraft-checks-{}-{name}", std::process::id()));
+    // tests run side by side: every call gets a folder of its own
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("filmcraft-checks-{}-{name}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     d.to_string_lossy().into_owned()
 }
@@ -60,7 +63,7 @@ fn an_empty_edit_has_nothing_to_check_and_the_command_changes_nothing() {
     let r = checks(&mut s, json!({}));
     assert_eq!((s.revision, s.history.undo.len()), (rev, undo), "checking is not an edit");
     assert!(crate::commands::command_specs().iter().find(|c| c.id == "edit.checks").is_some_and(|c| !c.journal));
-    assert_eq!(r["checks"].as_array().unwrap().len(), 10);
+    assert_eq!(r["checks"].as_array().unwrap().len(), 13);
     assert_eq!(r["scope"], "the whole edit");
 }
 
@@ -347,4 +350,102 @@ fn the_tool_says_the_verdict_first_and_refuses_to_call_a_failing_cut_done() {
     assert!(Session::default().run_assistant_tool("edit_checks", &json!({})).is_error);
     let tool = crate::assistant_tools::tools().into_iter().find(|t| t.spec.name == "edit_checks").unwrap();
     assert!(tool.read_only);
+}
+
+// ------------------------------------------------------------------------------------------------ sound (F17.3)
+
+#[test]
+fn a_voice_with_nothing_under_it_is_worth_a_note_and_planned_sound_must_be_there() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    narrated(&mut s);
+    cut(&mut s, json!([{"start": 0, "end": 8, "item": ocean, "speed": 0.5}]));
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "soundUnderIdeas");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["summary"].as_str().unwrap().contains("nothing sounds but the voice"), "{c}");
+    // the plan asks for a bed and a score under the first idea (0 to 4 s) and none under the second
+    let (first, _) = plan_with_two_ideas(&mut s);
+    s.execute("planner.setSound", json!({"beat": first, "ambience": "wind over the shore", "music": "low strings"})).unwrap();
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "soundUnderIdeas");
+    assert_eq!(c["status"], "note", "{c}");
+    assert_eq!(c["total"], 2, "the bed and the music are both missing: {c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("plans a bed (wind over the shore)"), "{c}");
+    assert!(c["issues"][1]["text"].as_str().unwrap().contains("plans music (low strings)"), "{c}");
+    // a bed under the whole idea, but still no music
+    sound(&mut s, "bed", 2, 0.0, 4.0, "ambience");
+    let c = get(&checks(&mut s, json!({})), "soundUnderIdeas").clone();
+    assert_eq!(c["total"], 1, "{c}");
+    s.execute("sequence.addTracks", json!({"video": 0, "audio": 1, "audioAfter": "last"})).unwrap();
+    sound(&mut s, "score", 3, 0.0, 4.0, "music");
+    let c = get(&checks(&mut s, json!({})), "soundUnderIdeas").clone();
+    assert_eq!(c["status"], "pass", "{c}");
+}
+
+#[test]
+fn music_under_the_voice_at_full_level_is_flagged_until_the_mix_ducks_it() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    assert_eq!(
+        status(
+            &{
+                cut(&mut s, json!([{"start": 0, "end": 8, "item": ocean, "speed": 0.5}]));
+                checks(&mut s, json!({}))
+            },
+            "musicDucked"
+        ),
+        "na"
+    );
+    narrated(&mut s);
+    assert_eq!(status(&checks(&mut s, json!({})), "musicDucked"), "na", "there is a voice but no music or ambience yet");
+    sound(&mut s, "score", 2, 0.0, 8.0, "music");
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "musicDucked");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("sound.autoMix"), "{c}");
+    s.execute("sound.autoMix", json!({})).unwrap();
+    let c = get(&checks(&mut s, json!({})), "musicDucked").clone();
+    assert_eq!(c["status"], "pass", "{c}");
+}
+
+#[test]
+fn sound_from_a_stock_site_has_its_rights_checked_like_a_picture() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    cut(&mut s, json!([{"start": 0, "end": 8, "item": ocean, "speed": 0.5}]));
+    recorded(&mut s, ocean, true);
+    sound(&mut s, "score", 2, 0.0, 8.0, "music");
+    let score = s.project.items.values().find(|i| i.name.contains("score")).map(|i| i.id.0).unwrap();
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "rights");
+    assert_eq!(c["status"], "needsYou", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("score"), "{c}");
+    recorded(&mut s, score, true);
+    assert_eq!(status(&checks(&mut s, json!({})), "rights"), "pass");
+    recorded(&mut s, score, false);
+    let r = checks(&mut s, json!({}));
+    assert_eq!(status(&r, "rights"), "fail", "music that does not allow this use blocks done: {}", get(&r, "rights"));
+    assert_eq!(r["mustPass"]["done"], false);
+}
+
+#[test]
+fn the_loudness_of_the_mix_is_measured_only_when_asked_and_held_to_the_target() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    cut(&mut s, json!([{"start": 0, "end": 4, "item": ocean}]));
+    sound(&mut s, "score", 2, 0.0, 4.0, "music");
+    let r = checks(&mut s, json!({}));
+    assert_eq!(status(&r, "mixLoudness"), "na");
+    assert!(get(&r, "mixLoudness")["summary"].as_str().unwrap().contains("measure: true"));
+    // the test tone is quiet: a long way under -16
+    let r = checks(&mut s, json!({"measure": true}));
+    let c = get(&r, "mixLoudness");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["summary"].as_str().unwrap().contains("too quiet") && c["summary"].as_str().unwrap().contains("LUFS"), "{c}");
+    // against a target it is near, it passes
+    let measured: f64 = c["summary"].as_str().unwrap().split("measures ").nth(1).unwrap().split(' ').next().unwrap().parse().unwrap();
+    let r = checks(&mut s, json!({"measure": true, "targetLufs": measured.round()}));
+    assert_eq!(status(&r, "mixLoudness"), "pass", "{}", get(&r, "mixLoudness"));
+    assert!(s.execute("edit.checks", json!({"measure": true, "targetLufs": 5})).unwrap_err().to_string().contains("-60 to 0"));
 }

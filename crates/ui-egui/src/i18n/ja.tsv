@@ -4140,3 +4140,5 @@
 	voice {name}	声: {name}
 	{n} s	{n} 秒
 	{n} words	{n} 語
+	Place a Sound List	サウンドリストを配置
+	Auto-Mix the Sound	サウンドを自動ミックス

@@ -4116,3 +4116,5 @@
 	voice {name}	声音：{name}
 	{n} s	{n} 秒
 	{n} words	{n} 个词
+	Place a Sound List	放置声音清单
+	Auto-Mix the Sound	自动混合声音

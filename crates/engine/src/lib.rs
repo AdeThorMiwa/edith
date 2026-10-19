@@ -76,6 +76,8 @@ pub mod sequence_tools;
 pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
+mod sound_list;
+mod sound_mix;
 pub mod soundmap;
 pub mod soundplan;
 pub mod source_monitor;
@@ -1439,6 +1441,10 @@ mod sequence_tools_tests;
 mod settings_tests;
 #[cfg(test)]
 mod shortcuts_tests;
+#[cfg(test)]
+mod sound_list_tests;
+#[cfg(test)]
+mod sound_mix_tests;
 #[cfg(test)]
 mod soundmap_tests;
 #[cfg(test)]
