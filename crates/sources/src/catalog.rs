@@ -3,7 +3,7 @@
 use crate::types::Kind;
 
 /// The sources Edith can ask, in the order they are listed.
-pub const SOURCES: [&str; 5] = ["pexels", "pixabay", "wikimedia", "archive", "freesound"];
+pub const SOURCES: [&str; 7] = ["pexels", "pixabay", "wikimedia", "archive", "freesound", "openverse", "nasa"];
 
 pub struct SourceInfo {
     pub id: &'static str,
@@ -56,6 +56,22 @@ pub fn info(id: &str) -> Option<SourceInfo> {
             kinds: &[Kind::Video, Kind::Image, Kind::Audio],
             credit: "Media from the Internet Archive",
             credit_url: "https://archive.org",
+            needs_key: false,
+        },
+        "openverse" => SourceInfo {
+            id: "openverse",
+            label: "Openverse",
+            kinds: &[Kind::Image, Kind::Audio],
+            credit: "Media found with Openverse",
+            credit_url: "https://openverse.org",
+            needs_key: false,
+        },
+        "nasa" => SourceInfo {
+            id: "nasa",
+            label: "NASA Image and Video Library",
+            kinds: &[Kind::Video, Kind::Image],
+            credit: "Media from the NASA Image and Video Library",
+            credit_url: "https://images.nasa.gov",
             needs_key: false,
         },
         _ => return None,

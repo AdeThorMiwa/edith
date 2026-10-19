@@ -20,6 +20,8 @@ mod cc;
 #[cfg(feature = "net")]
 pub mod client;
 pub mod freesound;
+pub mod nasa;
+pub mod openverse;
 pub mod pexels;
 pub mod pixabay;
 pub mod query;

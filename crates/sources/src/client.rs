@@ -4,7 +4,7 @@
 
 use crate::catalog::info;
 use crate::types::{Candidate, Kind, Page, Request, SourceError};
-use crate::{archive, freesound, pexels, pixabay, wikimedia};
+use crate::{archive, freesound, nasa, openverse, pexels, pixabay, wikimedia};
 use edith_net::NetError;
 use edith_net::http::{Client, Downloaded, Request as NetRequest};
 use std::path::Path;
@@ -139,6 +139,23 @@ impl Sources {
                     page.candidates.extend(p.candidates);
                 }
             }
+            "openverse" => {
+                for kind in [Kind::Image, Kind::Audio].into_iter().filter(|k| req.wants(*k)) {
+                    let Some(url) = openverse::search_url(&req, kind) else { continue };
+                    let body = self.get(source, &self.at(url), &[], cancel)?;
+                    let p = openverse::parse(kind, &body)?;
+                    page.total += p.total;
+                    page.candidates.extend(p.candidates);
+                }
+            }
+            "nasa" => {
+                if let Some(url) = nasa::search_url(&req) {
+                    let body = self.get(source, &self.at(url), &[], cancel)?;
+                    let p = nasa::parse(&body)?;
+                    page.total += p.total;
+                    page.candidates.extend(p.candidates);
+                }
+            }
             other => return Err(SourceError::Unavailable(format!("`{}` is not a media source", other.chars().take(30).collect::<String>()))),
         }
         crate::apply_request(&mut page, &req);
@@ -160,12 +177,17 @@ impl Sources {
     pub fn download(&self, c: &Candidate, path: &Path, cancel: &Cancel, progress: impl FnMut(u64, Option<u64>)) -> Result<Downloaded, SourceError> {
         let d = c.download.as_ref().ok_or_else(|| SourceError::Unavailable("this result has no file to download".to_string()))?;
         let max = MAX_BYTES.iter().find(|(k, _)| *k == c.kind).map_or(100 * 1024 * 1024, |(_, m)| *m);
-        // An Internet Archive result names the item, not a file: pick the best file now.
+        // An Internet Archive or NASA result names the item, not a file: pick the best file now.
         let url = if d.resolve {
-            let id = c.id.strip_prefix("archive:").unwrap_or("");
             let body = self.get_up_to(&c.source, &self.at(d.url.clone()), &[], cancel, 16 * 1024 * 1024)?;
-            let (name, _) = archive::pick_file(&body, c.kind, max)?;
-            self.at(archive::file_url(id, &name).ok_or_else(|| SourceError::Unavailable("the Internet Archive item has an unusable name".to_string()))?)
+            match c.source.as_str() {
+                nasa::ID => self.at(nasa::pick_file(&body, c.kind)?),
+                _ => {
+                    let id = c.id.strip_prefix("archive:").unwrap_or("");
+                    let (name, _) = archive::pick_file(&body, c.kind, max)?;
+                    self.at(archive::file_url(id, &name).ok_or_else(|| SourceError::Unavailable("the Internet Archive item has an unusable name".to_string()))?)
+                }
+            }
         } else {
             d.url.clone()
         };
@@ -396,12 +418,17 @@ mod tests {
     /// The two sources that need no key, asked for real (no keychain involved): one search each, and
     /// one real download of a small file from each. `cargo test -p edith-sources --features net -- --ignored real_open_sites`
     #[test]
-    #[ignore = "uses the real network (Wikimedia Commons and the Internet Archive; no key)"]
+    #[ignore = "uses the real network (Wikimedia Commons, the Internet Archive, Openverse and NASA; no key)"]
     fn real_open_sites_answer_and_serve_a_file() {
         let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
         let sources = Sources::new(Arc::new(Client::new(ClientConfig::default(), Arc::new(NetState::new()))), no_key);
         let dir = std::env::temp_dir().join(format!("edith-real-open-{}", std::process::id()));
-        for (id, kinds) in [("wikimedia", vec![Kind::Image, Kind::Video, Kind::Audio]), ("archive", vec![Kind::Video, Kind::Audio])] {
+        for (id, kinds) in [
+            ("wikimedia", vec![Kind::Image, Kind::Video, Kind::Audio]),
+            ("archive", vec![Kind::Video, Kind::Audio]),
+            ("openverse", vec![Kind::Image, Kind::Audio]),
+            ("nasa", vec![Kind::Video, Kind::Image]),
+        ] {
             let req = Request { text: "fog over a valley".into(), kinds, count: 5, ..Request::default() };
             let p = sources.search(id, &req, &cancel()).unwrap();
             eprintln!("{id}: {} results", p.candidates.len());
@@ -427,6 +454,60 @@ mod tests {
                 }
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn openverse_is_asked_once_per_kind_without_a_key_and_a_busy_answer_says_so() {
+        let pics = r#"{"result_count":1,"results":[{"id":"aaaaaaaa-0000-0000-0000-000000000001","title":"Fog","url":"https://live.staticflickr.com/a.jpg","license":"by","license_version":"2.0","width":10,"height":10}]}"#;
+        let sound = r#"{"result_count":1,"results":[{"id":"bbbbbbbb-0000-0000-0000-000000000002","title":"Rain","url":"https://cdn.freesound.org/r.mp3","license":"cc0","license_version":"1.0","filetype":"mp3","duration":5000}]}"#;
+        let s = serve(move |_, req| response(200, &[], if req.starts_with("GET /v1/images/") { pics } else { sound }.as_bytes()));
+        let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
+        let sources = Sources::new(client(), no_key).with_origin(&s.url);
+        let page = sources.search("openverse", &ask(&[Kind::Image, Kind::Audio, Kind::Video]), &cancel()).unwrap();
+        assert_eq!(
+            page.candidates.iter().map(|c| (c.kind, c.rights.name.as_str())).collect::<Vec<_>>(),
+            [(Kind::Image, "CC BY 2.0"), (Kind::Audio, "CC0 1.0")]
+        );
+        let seen = s.requests.lock().unwrap().clone();
+        assert_eq!(seen.len(), 2, "video is not asked of Openverse");
+        assert!(seen[0].starts_with("GET /v1/images/?q=fog%20valley&license_type=commercial"), "{}", seen[0]);
+        assert!(seen.iter().all(|r| !r.to_ascii_lowercase().contains("authorization")), "no key was sent");
+        let busy = serve(|_, _| response(429, &[], b""));
+        let e = Sources::new(client(), keys()).with_origin(&busy.url).search("openverse", &ask(&[Kind::Audio]), &cancel()).unwrap_err();
+        assert!(matches!(e, SourceError::RateLimited(_)) && e.to_string().contains("openverse"), "{e}");
+    }
+
+    #[test]
+    fn a_nasa_item_is_resolved_to_its_medium_copy_when_it_is_added() {
+        let found = r#"{"collection":{"metadata":{"total_hits":1},"items":[{"data":[{"center":"AFRC","media_type":"video","nasa_id":"Moon Film","title":"Moon"}],"links":[]}]}}"#;
+        let manifest = r#"{"collection":{"items":[{"href":"http://images-assets.nasa.gov/video/Moon Film/Moon Film~orig.mp4"},{"href":"http://images-assets.nasa.gov/video/Moon Film/Moon Film~medium.mp4"}]}}"#;
+        let s = serve(move |_, req| {
+            if req.starts_with("GET /search?q=moon") {
+                response(200, &[], found.as_bytes())
+            } else if req.starts_with("GET /asset/Moon%20Film ") {
+                response(200, &[], manifest.as_bytes())
+            } else if req.starts_with("GET /video/Moon%20Film/Moon%20Film~medium.mp4 ") {
+                response(200, &[], &[3u8; 7000])
+            } else {
+                response(404, &[], b"")
+            }
+        });
+        let no_key: Keys = Arc::new(|_| Err(SourceError::Auth("no key".into())));
+        let sources = Sources::new(client(), no_key).with_origin(&s.url);
+        let req = Request { text: "moon".into(), kinds: vec![Kind::Video, Kind::Image], ..Request::default() };
+        let c = sources.search("nasa", &req, &cancel()).unwrap().candidates.remove(0);
+        assert_eq!((c.id.as_str(), c.rights.commercial), ("nasa:Moon Film", Some(true)));
+        let dir = std::env::temp_dir().join(format!("edith-nasa-dl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = sources.download(&c, &dir.join("moon.mp4"), &cancel(), |_, _| {}).unwrap();
+        assert_eq!(d.bytes, 7000, "the medium copy, not the original");
+        // an item whose renditions cannot be read is refused, not guessed at
+        let bare =
+            serve(|_, req| response(200, &[], if req.starts_with("GET /asset/") { br#"{"collection":{"items":[]}}"#.as_slice() } else { b"x".as_slice() }));
+        let e = Sources::new(client(), keys()).with_origin(&bare.url).download(&c, &dir.join("no.mp4"), &cancel(), |_, _| {}).unwrap_err();
+        assert!(matches!(e, SourceError::Unavailable(_)), "{e:?}");
+        assert!(!dir.join("no.mp4").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

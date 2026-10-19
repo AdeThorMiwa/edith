@@ -97,6 +97,10 @@ fn rig_holding(broken: Option<&'static str>, hold: Box<dyn std::any::Any>) -> (S
             json(if req.contains("bitmap") { commons_pages(&furl) } else { r#"{"batchcomplete":true}"#.to_string() })
         } else if req.starts_with("GET /advancedsearch.php") {
             json(r#"{"response":{"numFound":0,"docs":[]}}"#.to_string())
+        } else if req.starts_with("GET /v1/images/") || req.starts_with("GET /v1/audio/") {
+            json(r#"{"result_count":0,"results":[]}"#.to_string())
+        } else if req.starts_with("GET /search?") {
+            json(r#"{"collection":{"items":[],"metadata":{"total_hits":0}}}"#.to_string())
         } else if req.starts_with("GET /apiv2/search") {
             if broken == Some("freesound") {
                 return response(401, &[], b"");
@@ -131,8 +135,13 @@ fn the_providers_are_listed_with_what_each_offers() {
     let mut s = Session::default();
     let p = s.execute("hub.providers", json!({})).unwrap();
     let list = p["providers"].as_array().unwrap();
-    assert_eq!(list.iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay", "wikimedia", "archive", "freesound", "local"]);
+    assert_eq!(
+        list.iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["pexels", "pixabay", "wikimedia", "archive", "freesound", "openverse", "nasa", "local"]
+    );
     assert_eq!(list[4]["kinds"], json!(["audio"]));
+    assert_eq!((list[5]["kinds"].clone(), list[5]["needsKey"].clone(), list[5]["connected"].clone()), (json!(["image", "audio"]), json!(false), json!(true)));
+    assert_eq!((list[6]["kinds"].clone(), list[6]["needsKey"].clone()), (json!(["video", "image"]), json!(false)));
     // the open sources need no key and are always ready; the others say whether a key is stored
     assert_eq!((list[2]["needsKey"].clone(), list[2]["connected"].clone(), list[3]["connected"].clone()), (json!(false), json!(true), json!(true)));
     assert_eq!(list[0]["needsKey"], true);
@@ -146,12 +155,15 @@ fn a_search_asks_every_source_that_offers_the_kinds_and_interleaves_the_answers(
     assert_eq!(r["running"], false);
     assert_eq!(ids(&r), ["pexels:photo-1", "pixabay:image-9", "wikimedia:300", "freesound:77", "pexels:photo-2"], "one from each source in turn: {r}");
     let states: Vec<&str> = r["sources"].as_array().unwrap().iter().map(|x| x["state"].as_str().unwrap()).collect();
-    assert_eq!(states, ["done", "done", "done", "done", "done"], "the open sources answered too, and the Archive had nothing");
+    assert_eq!(states, ["done"; 7], "the open sources answered too; the Archive, Openverse and NASA had nothing");
     let first = &r["candidates"][0];
     assert_eq!((first["rights"]["name"].clone(), first["author"].clone()), (json!("Pexels License"), json!("Sam")));
     // a search for video only skips the audio site
     let v = search(&mut s, json!({"text": "fog", "kinds": ["video"]}));
-    assert_eq!(v["sources"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(), ["pexels", "pixabay", "wikimedia", "archive"]);
+    assert_eq!(
+        v["sources"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["pexels", "pixabay", "wikimedia", "archive", "nasa"]
+    );
     // naming one source asks only it
     let hits = rig.sites.hits();
     let one = search(&mut s, json!({"text": "pier", "kinds": ["image"], "sources": ["pixabay"]}));

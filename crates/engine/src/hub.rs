@@ -287,13 +287,13 @@ fn sources_for(p: &Value, req: &Request, cmd: &str, has_folders: bool) -> Result
         Some(v) => v
             .as_array()
             .filter(|a| !a.is_empty() && a.len() <= 8)
-            .ok_or_else(|| bad(cmd, "`sources` must list source ids (pexels, pixabay, freesound)"))?
+            .ok_or_else(|| bad(cmd, "`sources` must list source ids (pexels, pixabay, wikimedia, archive, freesound, openverse, nasa)"))?
             .iter()
             .map(|s| {
                 s.as_str()
                     .filter(|s| edith_sources::SOURCES.contains(s) || *s == "local")
                     .map(str::to_string)
-                    .ok_or_else(|| bad(cmd, "unknown source in `sources`; use pexels, pixabay, wikimedia, archive, freesound or local"))
+                    .ok_or_else(|| bad(cmd, "unknown source in `sources`; use pexels, pixabay, wikimedia, archive, freesound, openverse, nasa or local"))
             })
             .collect::<Result<_>>()?,
     };
@@ -736,7 +736,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "hub.search",
             "Search for Media",
-            r#"{"text":str,"kinds":["video|image|audio"]?,"sources":["pexels|pixabay|freesound"]?,"orientation":"landscape|portrait|square"?,"minWidth":u32?,"minHeight":u32?,"minSeconds":f64?,"maxSeconds":f64?,"count":1..40?,"page":1..50?,"wait":bool?}"#,
+            r#"{"text":str,"kinds":["video|image|audio"]?,"sources":["pexels|pixabay|wikimedia|archive|freesound|openverse|nasa|local"]?,"orientation":"landscape|portrait|square"?,"minWidth":u32?,"minHeight":u32?,"minSeconds":f64?,"maxSeconds":f64?,"count":1..40?,"page":1..50?,"wait":bool?}"#,
             search,
         ),
         spec("hub.results", "Media Search Results", "{}", results),
