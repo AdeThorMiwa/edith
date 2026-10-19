@@ -7,7 +7,8 @@
 //!    use, and no dead air the sound plan did not ask for.
 //! 2. **Should.** Measured and reported, not blocking: the pace against the plan, footage used twice in a row or
 //!    too soon again, stills with no camera move, sound under the ideas that want it, music and ambience lowered
-//!    under the voice, and (when asked with `measure`) the loudness of the whole mix near the target.
+//!    under the voice, (when asked with `measure`) the loudness of the whole mix near the target, and on-screen text:
+//!    up long enough to read, a title near the start, a chapter title where each section after the first begins.
 //! 3. **Taste.** Whether a picture illustrates the idea, whether something carries across the cut, whether it
 //!    feels right: only the person decides, so the report says so and does not score it.
 //!
@@ -112,6 +113,39 @@ fn sounds(s: &Session) -> Vec<Sound> {
             let Some(lane) = crate::sound_list::lane_of(s, it, &t.name) else { continue };
             let ducked = it.effect("volume").and_then(|e| e.param("level")).is_some_and(|p| p.is_animated());
             out.push(Sound { item: it.item, name: it.name.clone(), start: it.start.0, end: it.end().0, lane, ducked });
+        }
+    }
+    out.sort_by_key(|x| (x.start, x.end));
+    out
+}
+
+/// A title or other on-screen text: a graphic clip with words in it.
+struct Text {
+    words: usize,
+    shown: String,
+    start: i64,
+    end: i64,
+}
+
+fn texts(s: &Session) -> Vec<Text> {
+    let Some(q) = s.active_sequence() else { return Vec::new() };
+    let mut out: Vec<Text> = Vec::new();
+    for t in q.video_tracks.iter().filter(|t| t.enabled) {
+        for it in t.items.iter().filter(|it| it.enabled && it.duration.0 > 0) {
+            let lines: Vec<String> = it
+                .effects
+                .iter()
+                .filter(|e| filmcraft_project::graphic::is_layer(e))
+                .filter_map(|e| {
+                    e.param("text").and_then(|p| if let filmcraft_project::ParamValue::Text(x) = &p.value { Some(x.trim().to_string()) } else { None })
+                })
+                .filter(|x| !x.is_empty())
+                .collect();
+            if lines.is_empty() {
+                continue;
+            }
+            let shown = lines.join(" · ");
+            out.push(Text { words: lines.iter().map(|l| crate::text_list::word_count(l)).sum(), shown, start: it.start.0, end: it.end().0 });
         }
     }
     out.sort_by_key(|x| (x.start, x.end));
@@ -578,6 +612,98 @@ fn mix_loudness(s: &Session, p: &Value, scope: &Scope) -> Result<Value> {
     })
 }
 
+fn text_readable(texts: &[Text], scope: &Scope) -> Value {
+    let title = "On-screen text is up long enough to read";
+    let mine: Vec<&Text> = texts.iter().filter(|x| scope.holds(x.start, x.end)).collect();
+    if mine.is_empty() {
+        return check("textReadable", "should", "na", title, "no titles or on-screen text".into(), Vec::new());
+    }
+    let issues: Vec<Value> = mine
+        .iter()
+        .filter_map(|x| {
+            let (up, need) = (secs(x.end - x.start), crate::text_list::reading_seconds(x.words));
+            (up + 0.05 < need).then(|| {
+                issue(
+                    x.start,
+                    format!(
+                        "“{}” is up for {up:.1} s at {}; {} word{} need about {need:.1} s",
+                        x.shown,
+                        clock(x.start),
+                        x.words,
+                        if x.words == 1 { "" } else { "s" }
+                    ),
+                )
+            })
+        })
+        .collect();
+    let summary = if issues.is_empty() {
+        format!("all {} up for a second and a quarter of a second a word or more", plural(mine.len(), "piece of text is", "pieces of text are"))
+    } else {
+        format!("{} up too briefly to read", plural(issues.len(), "piece of text is", "pieces of text are"))
+    };
+    check("textReadable", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
+/// A title near the start counts as an opening title.
+const OPENING_SECONDS: f64 = 15.0;
+
+fn opening_title(texts: &[Text], scope: &Scope) -> Value {
+    let title = "An opening title";
+    if scope.from > 0 {
+        return check("openingTitle", "should", "na", title, "only the whole edit has an opening".into(), Vec::new());
+    }
+    let limit = (OPENING_SECONDS * TICKS_PER_SECOND as f64) as i64;
+    match texts.iter().find(|x| x.start < limit) {
+        Some(x) => check("openingTitle", "should", "pass", title, format!("“{}” opens it at {}", x.shown, clock(x.start)), Vec::new()),
+        None => check(
+            "openingTitle",
+            "should",
+            "note",
+            title,
+            format!("no title or text in the first {OPENING_SECONDS:.0} seconds (right for a cold open; otherwise the film's name belongs here)"),
+            Vec::new(),
+        ),
+    }
+}
+
+fn chapter_titles(s: &Session, texts: &[Text], scope: &Scope) -> Value {
+    let title = "A chapter title where each section begins";
+    // each section's start: its first idea that is placed on the timeline
+    let mut starts: Vec<(String, i64)> = Vec::new();
+    for p in crate::soundplan::places(s).into_iter().filter(|p| p.beat.link.is_some()) {
+        match starts.iter_mut().find(|(n, _)| *n == p.section) {
+            Some(x) => x.1 = x.1.min(p.start),
+            None => starts.push((p.section.clone(), p.start)),
+        }
+    }
+    starts.sort_by_key(|x| x.1);
+    if starts.len() < 2 {
+        return check(
+            "chapterTitles",
+            "should",
+            "na",
+            title,
+            "the plan has fewer than two sections placed on the timeline, so there are no chapters".into(),
+            Vec::new(),
+        );
+    }
+    let (before, after) = ((1.0 * TICKS_PER_SECOND as f64) as i64, (3.0 * TICKS_PER_SECOND as f64) as i64);
+    // the first section opens the film: its title is the film's
+    let issues: Vec<Value> = starts
+        .iter()
+        .skip(1)
+        .filter(|(_, at)| scope.holds(*at, *at + 1))
+        .filter(|(_, at)| !texts.iter().any(|x| x.start >= at - before && x.start <= at + after))
+        .map(|(name, at)| issue(*at, format!("the section “{name}” begins at {} with no title (a chapter card, if this film has them)", clock(*at))))
+        .collect();
+    let summary = if issues.is_empty() {
+        format!("each of the {} after the first has text where it begins", plural(starts.len() - 1, "section", "sections"))
+    } else {
+        format!("{} with no title where it begins", plural(issues.len(), "section", "sections"))
+    };
+    check("chapterTitles", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
 // ---------------------------------------------------------------------------- the command
 
 fn scope_of(s: &Session, p: &Value, cmd: &str, end: i64) -> Result<Scope> {
@@ -609,6 +735,7 @@ pub(crate) fn run_checks(s: &Session, p: &Value) -> Result<Value> {
     let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let all = shots(s);
     let lanes = sounds(s);
+    let words_on_screen = texts(s);
     let spoken_end = crate::narration_timings::spoken_spans(s).last().map_or(0, |w| w.1.0);
     let end = all.iter().map(|x| x.end).max().unwrap_or(0).max(spoken_end);
     if end <= 0 {
@@ -629,6 +756,9 @@ pub(crate) fn run_checks(s: &Session, p: &Value) -> Result<Value> {
         sound_under_ideas(s, &lanes, &scope),
         music_ducked(s, &lanes, &scope),
         mix_loudness(s, p, &scope)?,
+        text_readable(&words_on_screen, &scope),
+        opening_title(&words_on_screen, &scope),
+        chapter_titles(s, &words_on_screen, &scope),
     ];
     let count = |layer: &str, status: &str| checks.iter().filter(|c| c["layer"] == layer && c["status"] == status).count();
     let failed = count("must", "fail");
@@ -727,7 +857,7 @@ fn edit_checks(s: &Session, input: &Value) -> ToolOutput {
 pub(crate) fn tools() -> Vec<ToolDef> {
     vec![def(
         "edit_checks",
-        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move, sound under the ideas that want it, music and ambience lowered under the voice, and with `measure: true` the loudness of the whole mix near -16 LUFS (it plays the mix through the mixer, so ask once the sound is placed and mixed). Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
+        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move, sound under the ideas that want it, music and ambience lowered under the voice, and with `measure: true` the loudness of the whole mix near -16 LUFS (it plays the mix through the mixer, so ask once the sound is placed and mixed), titles up long enough to read, an opening title, a chapter title where each section after the first begins. Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
         json!({
             "beat": {"type": "integer", "description": "Check only this idea of the plan (its beat id, placed on the timeline)."},
             "from": {"type": "string", "description": "Check only from this timeline time (seconds, \"1:25\", or a timecode)."},

@@ -49,6 +49,7 @@ pub mod media_watch;
 pub mod mixer;
 pub mod multicam;
 pub mod narration;
+mod narration_captions;
 mod narration_timings;
 pub mod narrator;
 pub mod net_commands;
@@ -82,6 +83,7 @@ pub mod soundmap;
 pub mod soundplan;
 pub mod source_monitor;
 pub mod sync;
+mod text_list;
 pub mod transcript;
 pub mod trim;
 pub mod version;
@@ -1376,6 +1378,8 @@ mod mixer_tests;
 #[cfg(test)]
 mod multicam_tests;
 #[cfg(test)]
+mod narration_captions_tests;
+#[cfg(test)]
 mod narration_tests;
 #[cfg(test)]
 mod narration_timings_tests;
@@ -1453,6 +1457,8 @@ mod soundplan_tests;
 mod split_edit_ripple_trim_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_list_tests;
 #[cfg(test)]
 mod timeline_move_tests;
 #[cfg(test)]

@@ -63,7 +63,7 @@ fn an_empty_edit_has_nothing_to_check_and_the_command_changes_nothing() {
     let r = checks(&mut s, json!({}));
     assert_eq!((s.revision, s.history.undo.len()), (rev, undo), "checking is not an edit");
     assert!(crate::commands::command_specs().iter().find(|c| c.id == "edit.checks").is_some_and(|c| !c.journal));
-    assert_eq!(r["checks"].as_array().unwrap().len(), 13);
+    assert_eq!(r["checks"].as_array().unwrap().len(), 16);
     assert_eq!(r["scope"], "the whole edit");
 }
 
@@ -448,4 +448,69 @@ fn the_loudness_of_the_mix_is_measured_only_when_asked_and_held_to_the_target() 
     let r = checks(&mut s, json!({"measure": true, "targetLufs": measured.round()}));
     assert_eq!(status(&r, "mixLoudness"), "pass", "{}", get(&r, "mixLoudness"));
     assert!(s.execute("edit.checks", json!({"measure": true, "targetLufs": 5})).unwrap_err().to_string().contains("-60 to 0"));
+}
+
+// ------------------------------------------------------------------------------------------------ text (F30)
+
+fn titled(s: &mut Session, entries: Value) {
+    s.execute("graphics.placeTextList", json!({"entries": entries})).unwrap();
+}
+
+#[test]
+fn an_opening_title_is_looked_for_in_the_first_fifteen_seconds() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    cut(&mut s, json!([{"start": 0, "end": 18, "item": ocean}]));
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "openingTitle");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["summary"].as_str().unwrap().contains("cold open"), "{c}");
+    assert_eq!(status(&r, "textReadable"), "na");
+    titled(&mut s, json!([{"start": 20, "end": 24, "text": "Too late", "role": "title"}]));
+    assert_eq!(status(&checks(&mut s, json!({})), "openingTitle"), "note", "a title after fifteen seconds is not an opening");
+    titled(&mut s, json!([{"start": 2, "end": 6, "text": "The Long Way Home", "role": "title"}]));
+    let r = checks(&mut s, json!({}));
+    assert_eq!(status(&r, "openingTitle"), "pass");
+    assert!(get(&r, "openingTitle")["summary"].as_str().unwrap().contains("The Long Way Home"));
+    assert_eq!(status(&r, "textReadable"), "pass");
+    // looking at a stretch from the middle says nothing about an opening
+    assert_eq!(status(&checks(&mut s, json!({"from": 5, "to": 15})), "openingTitle"), "na");
+}
+
+#[test]
+fn text_shortened_after_it_was_placed_is_flagged_as_too_brief_to_read() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    cut(&mut s, json!([{"start": 0, "end": 18, "item": ocean}]));
+    titled(&mut s, json!([{"start": 2, "end": 6, "text": "Four words in all", "role": "lowerThird"}]));
+    let clip = s.active_sequence().unwrap().video_tracks.iter().flat_map(|t| t.items.iter()).find(|i| i.graphic.is_some()).unwrap().id;
+    // the person trims it to a second
+    s.edit_sequence("trim", |q, _, _| {
+        q.find_item_mut(clip).unwrap().1.duration = Tick(TICKS_PER_SECOND);
+        Ok(())
+    })
+    .unwrap();
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "textReadable");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("Four words in all"), "{c}");
+    assert_eq!(r["mustPass"]["done"], true, "a note never blocks done");
+}
+
+#[test]
+fn each_section_after_the_first_wants_a_title_where_it_begins() {
+    let mut s = edit();
+    let ocean = media(&s, "Ocean_Sunset");
+    cut(&mut s, json!([{"start": 0, "end": 18, "item": ocean}]));
+    assert_eq!(status(&checks(&mut s, json!({})), "chapterTitles"), "na", "no plan");
+    // the plan's first section ("Opening") has its ideas at 0 and 4 s; the second ("Setup") begins at 8 s
+    plan_with_two_ideas(&mut s);
+    let setup = crate::planner::get(&s.project).unwrap().sections[1].beats[0].id;
+    s.execute("planner.link", json!({"beat": setup, "startSeconds": 8, "durationSeconds": 4})).unwrap();
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "chapterTitles");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("begins at 0:08.0"), "{c}");
+    titled(&mut s, json!([{"start": 8, "end": 12, "text": "Part two", "role": "chapter"}]));
+    assert_eq!(status(&checks(&mut s, json!({})), "chapterTitles"), "pass");
 }
