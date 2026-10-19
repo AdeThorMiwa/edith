@@ -12,6 +12,11 @@ typical_minutes = { min = 10, max = 20 }
 words_per_minute = 140
 average_shot_seconds = 7
 silence_share_percent = 12
+# Restraint for edit.polish: a cut is the default; a dip where a section ends, a slow dissolve between quiet ideas.
+dissolve_seconds = 0.8
+dip_seconds = 1.0
+dissolve_max_intensity = 5
+transition_share_percent = 15
 
 [[section]]
 name = "Opening"

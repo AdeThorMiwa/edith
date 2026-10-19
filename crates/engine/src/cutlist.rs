@@ -17,7 +17,14 @@
 //! Shots go in as an overwrite on the track (they replace what is under them), picture only. The reason is kept
 //! on the clip as a marker named "Why this shot".
 //!
-//! `timeline.placeCutList {entries: [{start, end, item, sourceIn?, speed?, move?, amount?, seed?, reason?}], track?}`:
+//! `transition` says how a shot **comes in** (or, for `fadeOut`, goes out): `"dissolve"`, `"dipToBlack"`, `"fadeIn"`,
+//! `"fadeOut"` or `"none"` (the default: a hard cut), or an object `{kind, seconds?}`. A dissolve or a dip is centred
+//! on the cut with the shot before it when that touches, and fades up from nothing when nothing touches; `fadeIn` and
+//! `fadeOut` are for a shot with nothing touching on that side (use a dip between two shots). The default length
+//! comes from the plan's Format Pack (0.8 s a dissolve, 1 s a dip or fade). Refused, naming the entry, when the
+//! transition is longer than half a shot it joins, or a shot has not the spare picture it would use.
+//!
+//! `timeline.placeCutList {entries: [{start, end, item, sourceIn?, speed?, move?, amount?, seed?, transition?, reason?}], track?}`:
 //! times are seconds, `"1:25"` or a timecode; `speed` is a multiple (0.5 plays at half speed); `move` is one of
 //! the camera moves (`motion.cameraMove`).
 
@@ -43,6 +50,49 @@ struct Shot {
     speed: f64,
     camera: Option<(String, Option<f64>, Option<u64>)>,
     reason: String,
+    transition: Option<Trans>,
+    /// Picture to spare before the first frame and after the last, in the clip's own time.
+    before: Tick,
+    after: Tick,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TKind {
+    Dissolve,
+    Dip,
+    FadeIn,
+    FadeOut,
+}
+
+#[derive(Clone, Copy)]
+struct Trans {
+    kind: TKind,
+    seconds: f64,
+}
+
+/// A `transition` entry: a kind as a word, or `{kind, seconds?}`.
+fn read_transition(v: &Value, pol: &crate::polish::Policy) -> std::result::Result<Option<Trans>, String> {
+    let (word, seconds) = match v {
+        Value::String(w) => (w.as_str(), None),
+        Value::Object(o) => (
+            o.get("kind").and_then(Value::as_str).ok_or("`transition.kind` must be dissolve, dipToBlack, fadeIn, fadeOut or none")?,
+            match o.get("seconds").filter(|x| !x.is_null()) {
+                None => None,
+                Some(x) => Some(x.as_f64().filter(|d| d.is_finite() && (0.1..=5.0).contains(d)).ok_or("`transition.seconds` must be from 0.1 to 5")?),
+            },
+        ),
+        _ => return Err("`transition` must be a word such as \"dissolve\" or {kind, seconds?}".into()),
+    };
+    let kind = match word.trim().to_ascii_lowercase().as_str() {
+        "none" | "cut" | "" => return Ok(None),
+        "dissolve" | "crossdissolve" => TKind::Dissolve,
+        "diptoblack" | "dip" => TKind::Dip,
+        "fadein" => TKind::FadeIn,
+        "fadeout" => TKind::FadeOut,
+        _ => return Err("`transition` must be dissolve, dipToBlack, fadeIn, fadeOut or none".into()),
+    };
+    let default = if kind == TKind::Dissolve { pol.dissolve } else { pol.dip };
+    Ok(Some(Trans { kind, seconds: seconds.unwrap_or(default) }))
 }
 
 fn secs(t: Tick) -> f64 {
@@ -95,6 +145,11 @@ fn read_shots(s: &Session, p: &Value) -> Result<Vec<Shot>> {
                 .filter(|x| x.is_finite() && (0.1..=4.0).contains(x))
                 .ok_or_else(|| no("`speed` must be a multiple from 0.1 to 4 (0.5 is half speed)".into()))?,
         };
+        let pol = crate::polish::policy(s);
+        let transition = match e.get("transition").filter(|v| !v.is_null()) {
+            None => None,
+            Some(v) => read_transition(v, &pol).map_err(&no)?,
+        };
         let (mark_in, still) = match &pi.kind {
             ItemKind::Media(m) => (m.mark_in.unwrap_or_default(), matches!(m.info.kind, filmcraft_media::MediaKind::Still)),
             ItemKind::Subclip { range, .. } => (range.start, false),
@@ -103,6 +158,17 @@ fn read_shots(s: &Session, p: &Value) -> Result<Vec<Shot>> {
         let source_in = match e.get("sourceIn").filter(|v| !v.is_null()) {
             None => mark_in,
             Some(v) => rate.snap_nearest(parse_time(v, q, "sourceIn").map_err(no)?),
+        };
+        // the picture to spare on either side of what the shot shows, for a transition to use
+        let (media_start, media_end) = match &pi.kind {
+            ItemKind::Subclip { range, .. } => (range.start, range.end()),
+            _ => (Tick::ZERO, crate::commands::full_duration(s, pi)),
+        };
+        let used = Tick((((end - start).0 as f64) * speed).round() as i64);
+        let (before, after) = if still {
+            (Tick(i64::MAX / 4), Tick(i64::MAX / 4))
+        } else {
+            ((source_in - media_start).max(Tick::ZERO), (media_end - (source_in + used)).max(Tick::ZERO))
         };
         // a still is as long as the stretch needs; footage must have enough left from `sourceIn`
         if !still {
@@ -145,9 +211,72 @@ fn read_shots(s: &Session, p: &Value) -> Result<Vec<Shot>> {
         if reason.chars().count() > MAX_REASON {
             return Err(no(format!("`reason` is longer than {MAX_REASON} characters; keep it to a sentence")));
         }
-        shots.push(Shot { n, start, end, item, source_in, speed, camera, reason });
+        shots.push(Shot { n, start, end, item, source_in, speed, camera, reason, transition, before, after });
     }
     Ok(shots)
+}
+
+/// Each transition fits: no longer than half a shot it joins, with spare picture to use, and a fade only where nothing touches.
+fn check_transitions(s: &Session, shots: &[Shot]) -> Result<()> {
+    let tol = s.sequence_rate().frame_duration().0 / 2;
+    let touching = |a: &Shot, b: &Shot| (a.end - b.start).0.abs() <= tol;
+    for shot in shots {
+        let Some(t) = shot.transition else { continue };
+        let no = |why: String| bad("timeline.placeCutList", format!("entry {}: {why}", shot.n));
+        let prev = shots.iter().find(|p| p.n != shot.n && touching(p, shot));
+        let next = shots.iter().find(|x| x.n != shot.n && touching(shot, x));
+        let long = |len: Tick| t.seconds > secs(len) / 2.0 + 1e-9;
+        if long(shot.end - shot.start) {
+            return Err(no(format!(
+                "a {:.1} s transition is longer than half of this {:.1} s shot; shorten it (`transition.seconds`) or keep the cut hard",
+                t.seconds,
+                secs(shot.end - shot.start)
+            )));
+        }
+        match t.kind {
+            TKind::FadeIn if prev.is_some() => {
+                return Err(no("`fadeIn` is for a shot with nothing touching before it; use `dipToBlack` between two shots".into()));
+            }
+            TKind::FadeOut if next.is_some() => {
+                return Err(no("`fadeOut` is for a shot with nothing touching after it; use `dipToBlack` on the next shot".into()));
+            }
+            TKind::Dissolve | TKind::Dip => {
+                if let Some(p) = prev {
+                    if long(p.end - p.start) {
+                        return Err(no(format!(
+                            "a {:.1} s transition is longer than half of the shot before it ({:.1} s, entry {})",
+                            t.seconds,
+                            secs(p.end - p.start),
+                            p.n
+                        )));
+                    }
+                    let half = Tick::from_seconds_f64(t.seconds / 2.0);
+                    let need = |sp: f64| Tick((half.0 as f64 * sp).round() as i64);
+                    if p.after < need(p.speed) {
+                        return Err(no(format!(
+                            "a {:.1} s {} needs {:.2} s of spare picture after entry {}, which has {:.2} s; end it earlier in the clip (`sourceIn`) or keep the cut hard",
+                            t.seconds,
+                            if t.kind == TKind::Dip { "dip" } else { "dissolve" },
+                            secs(need(p.speed)),
+                            p.n,
+                            secs(p.after)
+                        )));
+                    }
+                    if shot.before < need(shot.speed) {
+                        return Err(no(format!(
+                            "a {:.1} s {} needs {:.2} s of spare picture before this shot, which has {:.2} s; start it later in the clip (`sourceIn`) or keep the cut hard",
+                            t.seconds,
+                            if t.kind == TKind::Dip { "dip" } else { "dissolve" },
+                            secs(need(shot.speed)),
+                            secs(shot.before)
+                        )));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// No two shots overlap.
@@ -206,6 +335,7 @@ fn place_cut_list(s: &mut Session, p: &Value) -> Result<Value> {
     let seq_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
     let shots = read_shots(s, p)?;
     check_overlaps(&shots)?;
+    check_transitions(s, &shots)?;
     let track = match crate::commands::track_p(s, p, "track", cmd)? {
         Some(t) => t,
         None => {
@@ -275,6 +405,19 @@ fn place_cut_list(s: &mut Session, p: &Value) -> Result<Value> {
             }
             placed.push(clip);
         }
+        // transitions last: they need the shots on either side already in place
+        for (shot, clip) in shots.iter().zip(&placed) {
+            let Some(t) = shot.transition else { continue };
+            let (edge, effect) = match t.kind {
+                TKind::Dissolve => ("in", "cross_dissolve"),
+                TKind::Dip | TKind::FadeIn => ("in", "dip_to_black"),
+                TKind::FadeOut => ("out", "dip_to_black"),
+            };
+            let rate = s.sequence_rate();
+            let frames = (rate.snap_nearest(Tick::from_seconds_f64(t.seconds)).0 / rate.frame_duration().0.max(1)).max(1);
+            s.execute("sequence.applyVideoTransition", json!({"clip": clip.0, "edge": edge, "frames": frames, "effect": effect}))
+                .map_err(|e| bad(cmd, format!("entry {}: the transition could not be made: {e}", shot.n)))?;
+        }
         Ok(placed)
     })?;
     let mut notes: Vec<&str> = Vec::new();
@@ -290,7 +433,7 @@ pub fn commands() -> Vec<CommandSpec> {
         label: "Place a Cut List",
         menu: &[],
         shortcut: None,
-        params: r#"{"entries":[{"start":time,"end":time,"item":id,"sourceIn":time?,"speed":0.1..4?,"move":"pushIn|pullOut|driftLeft|driftRight|sway"?,"amount":0..100?,"seed":u64?,"reason":str?}],"track":"V1"?}"#,
+        params: r#"{"entries":[{"start":time,"end":time,"item":id,"sourceIn":time?,"speed":0.1..4?,"move":"pushIn|pullOut|driftLeft|driftRight|sway"?,"amount":0..100?,"seed":u64?,"transition":"dissolve|dipToBlack|fadeIn|fadeOut|none"|{"kind":str,"seconds":0.1..5?}?,"reason":str?}],"track":"V1"?}"#,
         enabled: has_seq,
         run: place_cut_list,
         journal: true,

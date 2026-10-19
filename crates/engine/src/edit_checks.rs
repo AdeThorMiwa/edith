@@ -8,7 +8,8 @@
 //! 2. **Should.** Measured and reported, not blocking: the pace against the plan, footage used twice in a row or
 //!    too soon again, stills with no camera move, sound under the ideas that want it, music and ambience lowered
 //!    under the voice, (when asked with `measure`) the loudness of the whole mix near the target, and on-screen text:
-//!    up long enough to read, a title near the start, a chapter title where each section after the first begins.
+//!    up long enough to read, a title near the start, a chapter title where each section after the first begins, and
+//!    transitions: few (within the pack's share of the cuts), none longer than half a shot, dissolves all one length.
 //! 3. **Taste.** Whether a picture illustrates the idea, whether something carries across the cut, whether it
 //!    feels right: only the person decides, so the report says so and does not score it.
 //!
@@ -704,6 +705,91 @@ fn chapter_titles(s: &Session, texts: &[Text], scope: &Scope) -> Value {
     check("chapterTitles", "should", status_of(&issues, "note"), title, summary, issues)
 }
 
+/// A cut may carry a transition for this many seconds of picture at most, on average: one a minute and a half is
+/// plenty; more than eight a minute is a slideshow.
+const MAX_PER_MINUTE: f64 = 8.0;
+
+fn transition_restraint(s: &Session, scope: &Scope) -> Value {
+    let title = "Transitions are rare";
+    let pics = crate::polish::pictures(s);
+    let all: Vec<crate::polish::Cut> = crate::polish::cuts(s, &pics).into_iter().filter(|c| scope.holds(c.into.start.0, c.into.start.0 + 1)).collect();
+    if all.is_empty() {
+        return check("transitionRestraint", "should", "na", title, "no cuts between shots here".into(), Vec::new());
+    }
+    let used = all.iter().filter(|c| c.has_transition).count();
+    let pol = crate::polish::policy(s);
+    // a small edit may have one: 20% of five cuts
+    let allowed = ((all.len() as f64 * pol.share / 100.0).ceil() as usize).max(1);
+    let minutes = secs(scope.to.min(all.iter().map(|c| c.into.end.0).max().unwrap_or(0)) - scope.from) / 60.0;
+    let rate = if minutes > 0.0 { used as f64 / minutes } else { 0.0 };
+    let mut issues = Vec::new();
+    if used > allowed {
+        issues.push(issue(
+            scope.from,
+            format!(
+                "{used} of the {} cuts carry a transition ({:.0}%): the plan's pack allows about {:.0}%; the rest are better hard",
+                all.len(),
+                used as f64 * 100.0 / all.len() as f64,
+                pol.share
+            ),
+        ));
+    }
+    if rate > MAX_PER_MINUTE && minutes >= 0.5 {
+        issues.push(issue(scope.from, format!("{rate:.1} transitions a minute: more than {MAX_PER_MINUTE:.0} a minute reads as a slideshow")));
+    }
+    let summary = if issues.is_empty() {
+        format!("{} of {} carry a transition (up to {} may, by the pack's {:.0}%)", plural(used, "cut", "cuts"), all.len(), allowed, pol.share)
+    } else {
+        format!("too many transitions: {used} of {} cuts", all.len())
+    };
+    check("transitionRestraint", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
+fn transition_fit(s: &Session, scope: &Scope) -> Value {
+    let title = "Transitions fit their shots and match each other";
+    let pics = crate::polish::pictures(s);
+    let length_of = |id: filmcraft_project::ClipId| pics.iter().flatten().find(|p| p.id == id).map(|p| p.end.0 - p.start.0);
+    let frame = s.sequence_rate().frame_duration().0;
+    let trs: Vec<crate::polish::Tr> = crate::polish::transitions(s).into_iter().filter(|t| scope.holds(t.start.0, t.start.0 + t.duration.0)).collect();
+    if trs.is_empty() {
+        return check("transitionFit", "should", "na", title, "no transitions here".into(), Vec::new());
+    }
+    let mut issues = Vec::new();
+    for t in &trs {
+        for (side, id) in [("before", t.from), ("after", t.to)] {
+            if let Some(len) = id.and_then(length_of)
+                && t.duration.0 > len / 2 + frame
+            {
+                issues.push(issue(
+                    t.start.0,
+                    format!("the {:.1} s transition at {} is longer than half of the {:.1} s shot {side} it", secs(t.duration.0), clock(t.start.0), secs(len)),
+                ));
+            }
+        }
+    }
+    // the dissolves between two shots are all one length
+    let dissolves: Vec<&crate::polish::Tr> = trs.iter().filter(|t| t.effect == "cross_dissolve" && t.from.is_some() && t.to.is_some()).collect();
+    if let Some(first) = dissolves.first() {
+        for d in dissolves.iter().skip(1).filter(|d| (d.duration.0 - first.duration.0).abs() > frame) {
+            issues.push(issue(
+                d.start.0,
+                format!(
+                    "the dissolve at {} runs {:.1} s; the first runs {:.1} s: pick one length",
+                    clock(d.start.0),
+                    secs(d.duration.0),
+                    secs(first.duration.0)
+                ),
+            ));
+        }
+    }
+    let summary = if issues.is_empty() {
+        format!("{} fit their shots, and the dissolves are all one length", plural(trs.len(), "transition", "transitions"))
+    } else {
+        format!("{} that do not fit or match", plural(issues.len(), "transition", "transitions"))
+    };
+    check("transitionFit", "should", status_of(&issues, "note"), title, summary, issues)
+}
+
 // ---------------------------------------------------------------------------- the command
 
 fn scope_of(s: &Session, p: &Value, cmd: &str, end: i64) -> Result<Scope> {
@@ -759,6 +845,8 @@ pub(crate) fn run_checks(s: &Session, p: &Value) -> Result<Value> {
         text_readable(&words_on_screen, &scope),
         opening_title(&words_on_screen, &scope),
         chapter_titles(s, &words_on_screen, &scope),
+        transition_restraint(s, &scope),
+        transition_fit(s, &scope),
     ];
     let count = |layer: &str, status: &str| checks.iter().filter(|c| c["layer"] == layer && c["status"] == status).count();
     let failed = count("must", "fail");
@@ -857,7 +945,7 @@ fn edit_checks(s: &Session, input: &Value) -> ToolOutput {
 pub(crate) fn tools() -> Vec<ToolDef> {
     vec![def(
         "edit_checks",
-        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move, sound under the ideas that want it, music and ambience lowered under the voice, and with `measure: true` the loudness of the whole mix near -16 LUFS (it plays the mix through the mixer, so ask once the sound is placed and mixed), titles up long enough to read, an opening title, a chapter title where each section after the first begins. Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
+        "Check the cut against what \"done\" means. Must pass (blocks done): every moment has picture, no flash frames, no cut inside a spoken word, no shot spanning two ideas, shot lengths in the Format Pack's range, every clip's rights known and allowing the use, no unplanned dead air. Should (measured only): pace against the plan, footage not reused too soon, stills with a camera move, sound under the ideas that want it, music and ambience lowered under the voice, and with `measure: true` the loudness of the whole mix near -16 LUFS (it plays the mix through the mixer, so ask once the sound is placed and mixed), titles up long enough to read, an opening title, a chapter title where each section after the first begins, few transitions (within the pack's share of the cuts), none longer than half a shot, dissolves all one length. Taste is the person's. Run it after each idea you cut and before you say you are done; narrow it with `beat` (one idea of the plan) or `from` and `to`. Never claim done while a must-pass check fails. A clip with no recorded origin is for the person to confirm, not a reason to stop.",
         json!({
             "beat": {"type": "integer", "description": "Check only this idea of the plan (its beat id, placed on the timeline)."},
             "from": {"type": "string", "description": "Check only from this timeline time (seconds, \"1:25\", or a timecode)."},

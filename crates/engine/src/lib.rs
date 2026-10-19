@@ -57,6 +57,7 @@ pub mod panels;
 pub mod paste_media;
 pub mod perf;
 pub mod planner;
+mod polish;
 pub mod presets;
 pub mod previews;
 mod project_items;
@@ -1403,6 +1404,8 @@ mod paste_media_tests;
 mod place_items_tests;
 #[cfg(test)]
 mod planner_tests;
+#[cfg(test)]
+mod polish_tests;
 #[cfg(test)]
 mod presets_tests;
 #[cfg(test)]

@@ -210,3 +210,83 @@ fn the_assistant_can_place_a_cut_list_inside_a_version_and_the_person_sees_it_as
     assert!(v1(&s).is_empty());
     let _ = ClipId(0);
 }
+
+// ------------------------------------------------------------------------------------------------ transitions (F31)
+
+fn effects_on_v1(s: &Session) -> Vec<(String, bool, bool)> {
+    s.active_sequence().unwrap().video_tracks[0].transitions.iter().map(|t| (t.effect.effect.clone(), t.from.is_some(), t.to.is_some())).collect()
+}
+
+#[test]
+fn a_shot_can_come_in_with_a_dissolve_a_dip_or_a_fade_and_go_out_with_one_in_the_same_undo_step() {
+    let mut s = edit();
+    let (ocean, city) = (media(&s, "Ocean_Sunset"), media(&s, "City_Night"));
+    let before = s.active_sequence().unwrap().clone();
+    place(
+        &mut s,
+        json!([
+            {"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": "fadeIn"},
+            {"start": 4, "end": 8, "item": city, "sourceIn": 3, "transition": "dissolve"},
+            {"start": 8, "end": 12, "item": ocean, "sourceIn": 8, "transition": {"kind": "dipToBlack", "seconds": 1.5}},
+            {"start": 12, "end": 16, "item": city, "sourceIn": 4, "transition": "none"},
+            {"start": 16, "end": 20, "item": ocean, "sourceIn": 6, "transition": "dissolve"},
+            {"start": 22, "end": 26, "item": city, "sourceIn": 1, "transition": "fadeOut"},
+        ]),
+    )
+    .unwrap();
+    let got = effects_on_v1(&s);
+    assert_eq!(got.len(), 5, "{got:?}");
+    assert!(got.contains(&("dip_to_black".to_string(), false, true)), "a fade in from nothing: {got:?}");
+    assert_eq!(got.iter().filter(|(e, f, t)| e == "cross_dissolve" && *f && *t).count(), 2, "{got:?}");
+    assert!(got.contains(&("dip_to_black".to_string(), true, true)), "a dip through black between two shots: {got:?}");
+    assert!(got.contains(&("dip_to_black".to_string(), true, false)), "a fade out to nothing: {got:?}");
+    let dip = s.active_sequence().unwrap().video_tracks[0]
+        .transitions
+        .iter()
+        .find(|t| t.from.is_some() && t.to.is_some() && t.effect.effect == "dip_to_black")
+        .unwrap()
+        .duration;
+    assert!((secs(dip) - 1.5).abs() < 0.05, "{}", secs(dip));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(*s.active_sequence().unwrap(), before, "the shots and their transitions are one step");
+}
+
+#[test]
+fn a_transition_that_does_not_fit_refuses_the_whole_call_and_names_the_entry() {
+    let mut s = edit();
+    let (ocean, city) = (media(&s, "Ocean_Sunset"), media(&s, "City_Night"));
+    let before = s.active_sequence().unwrap().clone();
+    let refuse = |s: &mut Session, entries: Value, needle: &str| {
+        let e = place(s, entries).unwrap_err().to_string();
+        assert!(e.contains(needle), "wanted “{needle}” in: {e}");
+    };
+    refuse(
+        &mut s,
+        json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": {"kind": "dissolve", "seconds": 3}}]),
+        "longer than half of this 4.0 s shot",
+    );
+    refuse(
+        &mut s,
+        json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2}, {"start": 4, "end": 8, "item": city, "sourceIn": 0, "transition": "dissolve"}]),
+        "spare picture before this shot",
+    );
+    refuse(
+        &mut s,
+        json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 14}, {"start": 4, "end": 8, "item": city, "sourceIn": 4, "transition": "dissolve"}]),
+        "spare picture after entry 1",
+    );
+    refuse(
+        &mut s,
+        json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2}, {"start": 4, "end": 8, "item": city, "sourceIn": 4, "transition": "fadeIn"}]),
+        "use `dipToBlack` between two shots",
+    );
+    refuse(
+        &mut s,
+        json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": "fadeOut"}, {"start": 4, "end": 8, "item": city, "sourceIn": 4}]),
+        "use `dipToBlack` on the next shot",
+    );
+    refuse(&mut s, json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": "wipe"}]), "dissolve, dipToBlack, fadeIn, fadeOut or none");
+    refuse(&mut s, json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": {"kind": "dissolve", "seconds": 0.01}}]), "0.1 to 5");
+    refuse(&mut s, json!([{"start": 0, "end": 4, "item": ocean, "sourceIn": 2, "transition": 7}]), "must be a word");
+    assert_eq!(*s.active_sequence().unwrap(), before, "no refused call left a shot or a transition");
+}

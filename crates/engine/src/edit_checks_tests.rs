@@ -63,7 +63,7 @@ fn an_empty_edit_has_nothing_to_check_and_the_command_changes_nothing() {
     let r = checks(&mut s, json!({}));
     assert_eq!((s.revision, s.history.undo.len()), (rev, undo), "checking is not an edit");
     assert!(crate::commands::command_specs().iter().find(|c| c.id == "edit.checks").is_some_and(|c| !c.journal));
-    assert_eq!(r["checks"].as_array().unwrap().len(), 16);
+    assert_eq!(r["checks"].as_array().unwrap().len(), 18);
     assert_eq!(r["scope"], "the whole edit");
 }
 
@@ -513,4 +513,64 @@ fn each_section_after_the_first_wants_a_title_where_it_begins() {
     assert!(c["issues"][0]["text"].as_str().unwrap().contains("begins at 0:08.0"), "{c}");
     titled(&mut s, json!([{"start": 8, "end": 12, "text": "Part two", "role": "chapter"}]));
     assert_eq!(status(&checks(&mut s, json!({})), "chapterTitles"), "pass");
+}
+
+// ------------------------------------------------------------------------------------------------ transitions (F31)
+
+/// Ten four-second shots touching each other, the second of each pair coming in as `transitions[i]` says.
+fn shots_with(s: &mut Session, with: &[(usize, Value)]) {
+    let (ocean, city) = (media(s, "Ocean_Sunset"), media(s, "City_Night"));
+    let entries: Vec<Value> = (0..10)
+        .map(|k| {
+            let mut e = json!({"start": k as f64 * 4.0, "end": k as f64 * 4.0 + 4.0, "item": if k % 2 == 0 { ocean } else { city }, "sourceIn": 2.0 + (k % 3) as f64 * 2.0});
+            if let Some((_, t)) = with.iter().find(|(i, _)| *i == k) {
+                e["transition"] = t.clone();
+            }
+            e
+        })
+        .collect();
+    cut(s, Value::Array(entries));
+}
+
+#[test]
+fn transitions_on_most_of_the_cuts_are_worth_a_note() {
+    let mut s = edit();
+    shots_with(&mut s, &[(3, json!("dissolve"))]);
+    let r = checks(&mut s, json!({}));
+    assert_eq!(status(&r, "transitionRestraint"), "pass", "{}", get(&r, "transitionRestraint"));
+    let mut s = edit();
+    shots_with(&mut s, &(1..8).map(|k| (k, json!("dissolve"))).collect::<Vec<_>>());
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "transitionRestraint");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("7 of the 9 cuts carry a transition"), "{c}");
+    assert_eq!(r["mustPass"]["done"], true, "a note never blocks done");
+    // no transitions at all: nothing to be restrained about, and nothing to fit
+    let mut s = edit();
+    shots_with(&mut s, &[]);
+    let r = checks(&mut s, json!({}));
+    assert_eq!(status(&r, "transitionRestraint"), "pass");
+    assert_eq!(status(&r, "transitionFit"), "na");
+}
+
+#[test]
+fn a_transition_longer_than_half_its_shot_or_a_second_length_of_dissolve_is_flagged() {
+    let mut s = edit();
+    shots_with(&mut s, &[(3, json!({"kind": "dissolve", "seconds": 0.8})), (7, json!({"kind": "dissolve", "seconds": 1.2}))]);
+    let r = checks(&mut s, json!({}));
+    let c = get(&r, "transitionFit");
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("pick one length"), "{c}");
+    // the person trims a shot under its dissolve to a second: the dissolve is more than half of it
+    let mut s = edit();
+    shots_with(&mut s, &[(3, json!({"kind": "dissolve", "seconds": 0.8}))]);
+    let clip = s.active_sequence().unwrap().video_tracks[0].items[3].id;
+    s.edit_sequence("trim", |q, _, _| {
+        q.find_item_mut(clip).unwrap().1.duration = Tick(TICKS_PER_SECOND);
+        Ok(())
+    })
+    .unwrap();
+    let c = get(&checks(&mut s, json!({})), "transitionFit").clone();
+    assert_eq!(c["status"], "note", "{c}");
+    assert!(c["issues"][0]["text"].as_str().unwrap().contains("longer than half of the 1.0 s shot"), "{c}");
 }
