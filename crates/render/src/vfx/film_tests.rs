@@ -13,6 +13,7 @@ fn cx_at(t: i64) -> FxCtx<'static> {
         t: Tick(t),
         px_scale: 1.0,
         seconds: 0.0,
+        frame_rate: 24.0,
         timecode: "01:00:00:00",
         clip_name: "clip",
         project: None,
