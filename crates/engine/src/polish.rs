@@ -339,10 +339,9 @@ fn make_plan(s: &Session, p: &Value, q: &Sequence) -> Result<Plan> {
     }
     // stills held with no move
     if bool_p(p, "moves").unwrap_or(true) {
-        let mut turn = 0usize;
-        for pic in pics.iter().flatten().filter(|x| x.still && !x.moves && in_scope(x.start) && secs(x.end - x.start) >= STILL_MOVE_SECONDS) {
+        let held = pics.iter().flatten().filter(|x| x.still && !x.moves && in_scope(x.start) && secs(x.end - x.start) >= STILL_MOVE_SECONDS);
+        for (turn, pic) in held.enumerate() {
             plan.moves.push((pic.id, MOVES[turn % MOVES.len()], pic.name.clone()));
-            turn += 1;
         }
     }
     Ok(plan)

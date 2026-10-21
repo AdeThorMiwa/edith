@@ -148,7 +148,7 @@ fn read_shots(s: &Session, p: &Value) -> Result<Vec<Shot>> {
         let pol = crate::polish::policy(s);
         let transition = match e.get("transition").filter(|v| !v.is_null()) {
             None => None,
-            Some(v) => read_transition(v, &pol).map_err(&no)?,
+            Some(v) => read_transition(v, &pol).map_err(no)?,
         };
         let (mark_in, still) = match &pi.kind {
             ItemKind::Media(m) => (m.mark_in.unwrap_or_default(), matches!(m.info.kind, filmcraft_media::MediaKind::Still)),

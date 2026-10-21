@@ -172,14 +172,14 @@ fn tile(start: Tick, end: Tick, source: Tick, available: Tick, frame: Tick, loop
         if left < seam {
             // too little for its own crossfade: the clip before gives it up, so this one is a whole seam long
             let last = pieces.last_mut()?;
-            last.length = last.length - (seam - left);
-            pos = pos - (seam - left);
+            last.length -= seam - left;
+            pos -= seam - left;
             pieces.push(Piece { at: pos, length: seam, source: source + half });
             break;
         }
         let length = left.min(body);
         pieces.push(Piece { at: pos, length, source: source + half });
-        pos = pos + length;
+        pos += length;
         if pieces.len() > MAX_PIECES {
             return None;
         }

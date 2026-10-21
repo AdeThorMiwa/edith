@@ -50,7 +50,7 @@ const SHORT: [(&str, f64, f64); 4] = [("One", 0.1, 0.4), ("two", 0.5, 0.9), ("Th
 fn the_voices_words_become_the_narrations_transcript_and_a_transcript_already_there_is_kept() {
     let mut s = edit();
     let item = narrated(&mut s, &SHORT);
-    assert!(s.project.transcripts.get(&item).is_none());
+    assert!(!s.project.transcripts.contains_key(&item));
     let r = s.execute("transcript.fromNarration", json!({})).unwrap();
     assert_eq!(r["written"], json!([item.0]), "{r}");
     let t = s.project.transcripts.get(&item).unwrap();
@@ -66,7 +66,7 @@ fn the_voices_words_become_the_narrations_transcript_and_a_transcript_already_th
     // a call that wrote something is one undo step
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
-    assert!(s.project.transcripts.get(&item).is_none(), "the call that wrote nothing left no step, so two undos take both writes back");
+    assert!(!s.project.transcripts.contains_key(&item), "the call that wrote nothing left no step, so two undos take both writes back");
 }
 
 #[test]

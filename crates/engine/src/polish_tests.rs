@@ -156,7 +156,7 @@ fn a_cut_with_no_spare_picture_is_skipped_and_said_and_a_bad_scope_is_refused() 
 /// The mean brightness of the picture at `t` seconds.
 fn brightness(s: &Session, t: f64) -> f32 {
     let img = s.try_render_program_at(0.25, filmcraft_time::Tick::from_seconds_f64(t)).unwrap();
-    let rgb: Vec<f32> = img.px.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let rgb: Vec<f32> = img.px.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     rgb.iter().sum::<f32>() / rgb.len().max(1) as f32
 }
 
