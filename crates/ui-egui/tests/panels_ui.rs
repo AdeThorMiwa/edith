@@ -764,20 +764,25 @@ fn effects_are_indented_under_their_folders() {
     let mut d = Driver::demo();
     d.ok("ui.panel.show", json!({"panel": "Effects"}));
     d.frames(3);
-    for folder in ["Video Effects", "Video Effects/Blur & Sharpen", "Presets", "Lumetri Presets", "Lumetri Presets/Monochrome"] {
+    for folder in ["Video Effects", "Video Effects/Blur & Sharpen", "Presets"] {
         d.click(&format!("effects.folder.{folder}"));
     }
     d.frames(2);
     let preset = d.app().session.presets.all()[0].name.clone();
     let lumetri = filmcraft_render::lumetri_presets::presets().into_iter().find(|p| p.folder == "Monochrome").unwrap().name;
-    for (outer, inner) in [
-        ("Video Effects", "Blur & Sharpen"),
-        ("Blur & Sharpen", "Gaussian Blur"),
-        ("Presets", preset.as_str()),
-        ("Lumetri Presets", "Monochrome"),
-        ("Monochrome", lumetri),
-    ] {
-        let (a, b) = (text_x(&mut d, outer), text_x(&mut d, inner));
-        assert!(b >= a + 12.0, "`{inner}` ({b}) is not indented under `{outer}` ({a})");
+    let mut check = |d: &mut Driver, pairs: &[(&str, &str)]| {
+        for (outer, inner) in pairs {
+            let (a, b) = (text_x(d, outer), text_x(d, inner));
+            assert!(b >= a + 12.0, "`{inner}` ({b}) is not indented under `{outer}` ({a})");
+        }
+    };
+    check(&mut d, &[("Video Effects", "Blur & Sharpen"), ("Blur & Sharpen", "Gaussian Blur"), ("Presets", preset.as_str())]);
+    // The fork's list is longer than upstream's (a built-in Cinema Look preset), which pushes the Lumetri folders
+    // below the panel's last visible row while Presets is open: close Presets before opening them.
+    d.click("effects.folder.Presets");
+    for folder in ["Lumetri Presets", "Lumetri Presets/Monochrome"] {
+        d.click(&format!("effects.folder.{folder}"));
     }
+    d.frames(2);
+    check(&mut d, &[("Lumetri Presets", "Monochrome"), ("Monochrome", lumetri)]);
 }
