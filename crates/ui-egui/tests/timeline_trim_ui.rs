@@ -475,6 +475,9 @@ fn locked_edges_do_not_preview_a_trim() {
 
 fn move_existing_clip_to_a_new_track(audio: bool, linked: bool) {
     let mut d = Driver::demo();
+    // The fork's default workspace has an 84 px Beat Lane strip above the Timeline; closed, the Timeline has the room
+    // upstream's layout gives it, which these drops (8 px outside the outermost track) need.
+    d.ok("ui.panel.close", json!({"panel": "BeatLane"}));
     d.exec("sequence.linkedSelection", json!({"on": linked}));
     d.exec("sequence.snap", json!({"on": false}));
     d.ok("ui.set", json!({"timeline":{"videoTrackHeight":32,"audioTrackHeight":32}}));

@@ -770,7 +770,7 @@ fn effects_are_indented_under_their_folders() {
     d.frames(2);
     let preset = d.app().session.presets.all()[0].name.clone();
     let lumetri = filmcraft_render::lumetri_presets::presets().into_iter().find(|p| p.folder == "Monochrome").unwrap().name;
-    let mut check = |d: &mut Driver, pairs: &[(&str, &str)]| {
+    let check = |d: &mut Driver, pairs: &[(&str, &str)]| {
         for (outer, inner) in pairs {
             let (a, b) = (text_x(d, outer), text_x(d, inner));
             assert!(b >= a + 12.0, "`{inner}` ({b}) is not indented under `{outer}` ({a})");
