@@ -104,7 +104,7 @@ impl Chat {
             editing: None,
             hist_pos: None,
             last_shown: f64::NEG_INFINITY,
-            focus_input: true,
+            focus_input: false,
             finish_kind: String::new(),
             hover_entry: None,
             cards: Value::Null,
@@ -359,10 +359,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let shared: Shared = ui.data_mut(|d| d.get_temp_mut_or_insert_with(egui::Id::new("assistant-chat"), || Arc::new(Mutex::new(Chat::new()))).clone());
     let mut chat = lock(&shared);
     refresh(app, &mut chat, now, ui.ctx());
-    // just opened (or its tab came forward): the cursor goes to the input
-    if now - chat.last_shown > 0.4 {
-        chat.focus_input = true;
-    }
+    // Opening the panel (or bringing its tab forward) must not take the keyboard: the person may be typing elsewhere,
+    // such as renaming a clip in the Project panel. The input is focused only by what they do in this panel.
     chat.last_shown = now;
 
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(rect.min + vec2(10.0, 8.0), rect.max - vec2(10.0, 4.0))));

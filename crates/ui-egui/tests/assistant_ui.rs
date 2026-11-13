@@ -224,6 +224,28 @@ fn the_panel_opens_from_the_window_menu_and_points_to_connections_when_there_is_
     assert!(d.has("panel.tab.Connections"), "Open Connections opens the Connections panel");
 }
 
+/// Opening the panel (or bringing its tab forward) never takes the keyboard: it took focus from a clip being renamed
+/// in the Project panel (v1 bugs).
+#[test]
+fn opening_the_panel_does_not_take_the_keyboard() {
+    let _g = guard();
+    let mut d = Driver::new();
+    d.app().session.assistant.use_model(scripted(vec![text_reply("ok")]));
+    d.open_assistant();
+    d.frames(10);
+    let input = egui::Id::new("assistant-input-field");
+    assert!(d.has("assistant.input"), "the input is there and usable");
+    assert!(!d.harness.ctx.memory(|m| m.has_focus(input)), "but it is not focused until the person clicks it");
+    // clicking it focuses it, so typing still works
+    d.click("assistant.input");
+    d.frames(2);
+    assert!(d.harness.ctx.memory(|m| m.has_focus(input)));
+    // the panel going behind another tab and coming back does not take focus either
+    d.harness.ctx.memory_mut(|m| m.surrender_focus(input));
+    d.frames(60);
+    assert!(!d.harness.ctx.memory(|m| m.has_focus(input)));
+}
+
 #[test]
 fn a_question_streams_in_with_a_tool_card_an_answer_and_a_cost() {
     let _g = guard();
